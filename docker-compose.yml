@@ -1,0 +1,40 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: myra-backend
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      - JWT_SECRET=${JWT_SECRET:?set in .env}
+      - JWT_ALG=HS256
+      - ACCESS_TOKEN_EXPIRE_MINUTES=10080
+      - DATABASE_URL=sqlite+aiosqlite:////app/data/myra.db
+      - ADMIN_EMAIL_ALLOWLIST=${ADMIN_EMAIL_ALLOWLIST:-}
+    volumes:
+      - ./backend/data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/api/config').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    image: node:20-alpine
+    container_name: myra-frontend
+    restart: unless-stopped
+    working_dir: /app
+    command: sh -c "yarn install && yarn start --web"
+    environment:
+      - EXPO_PUBLIC_BACKEND_URL=${EXPO_PUBLIC_BACKEND_URL:-http://localhost:8001}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend

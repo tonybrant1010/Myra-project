@@ -1,0 +1,10 @@
+{
+  "cleanUrls": true,
+  "trailingSlash": false,
+  "rewrites": [
+    {
+      "source": "/reset-password",
+      "destination": "/reset-password.html"
+    }
+  ]
+}

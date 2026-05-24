@@ -1,0 +1,1 @@
+{"dependencies":[],"output":[{"data":{"code":"__d(function(global, require, _importDefaultUnused, _importAllUnused, module, exports, _dependencyMapUnused) {\n  module.exports = { \"min\": \"0.5.0\", \"max\": \"0.8\" }\n;\n});","lineCount":4,"map":[[4,3]],"functionMap":null},"type":"js/module"}]}
