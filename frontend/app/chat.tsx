@@ -10,6 +10,7 @@ import {
   Platform,
   Image,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams } from "expo-router";
 import { useAuth, authedFetch } from "@/src/auth/AuthContext";
@@ -155,11 +156,14 @@ export default function ChatScreen() {
             </View>
           ) : messages.length === 0 ? (
             <View style={styles.emptyWrap} testID="chat-empty-state">
-              <Image source={MYRA_AVATAR} style={styles.emptyAvatar} />
-              <T variant="h1" align="center" style={{ marginTop: 16 }}>
+              <View style={styles.emptyAvatarRing}>
+                <Image source={MYRA_AVATAR} style={styles.emptyAvatar} />
+              </View>
+              <T variant="display" align="center" style={{ marginTop: 24 }}>
                 Itt vagyok.
               </T>
-              <T variant="body" align="center" color={theme.textSecondary} style={{ marginTop: 8 }}>
+              <View style={styles.emptyRule} />
+              <T variant="body" align="center" color={theme.textSecondary} style={{ marginTop: 0, maxWidth: 280 }}>
                 Írj amikor készen állsz — egy "szia" is elég a kezdéshez.
               </T>
             </View>
@@ -225,9 +229,7 @@ export default function ChatScreen() {
                 testID="chat-send-button"
                 activeOpacity={0.8}
               >
-                <T variant="title" color={theme.white} style={{ fontWeight: "bold" }}>
-                  Küldés
-                </T>
+                <Ionicons name="arrow-up" size={20} color={theme.white} />
               </TouchableOpacity>
             </View>
           )}
@@ -272,13 +274,31 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 32,
+    paddingHorizontal: 36,
+  },
+  emptyAvatarRing: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    borderWidth: 1.5,
+    borderColor: theme.accent,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: theme.surface,
   },
   emptyAvatar: {
-    width: 92,
-    height: 92,
-    borderRadius: 46,
+    width: 104,
+    height: 104,
+    borderRadius: 52,
     backgroundColor: theme.surface,
+  },
+  emptyRule: {
+    width: 28,
+    height: 2,
+    backgroundColor: theme.accent,
+    borderRadius: 1,
+    marginTop: 14,
+    marginBottom: 14,
   },
   listContent: { padding: 20, paddingBottom: 24, gap: 12 },
   bubbleRow: { flexDirection: "row", alignItems: "flex-end", gap: 8 },
@@ -312,27 +332,27 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-end",
     paddingHorizontal: 14,
-    paddingVertical: 10,
-    gap: 8,
-    backgroundColor: theme.bg,
+    paddingVertical: 12,
+    gap: 10,
+    backgroundColor: theme.surface,
     borderTopWidth: 1,
     borderColor: theme.borderSoft,
   },
   input: {
     flex: 1,
-    backgroundColor: theme.surface,
+    backgroundColor: theme.bg,
     borderWidth: 1,
     borderColor: theme.border,
-    borderRadius: 24,
+    borderRadius: 22,
     paddingHorizontal: 18,
-    paddingVertical: Platform.OS === "ios" ? 14 : 10,
-    fontSize: 16,
+    paddingVertical: Platform.OS === "ios" ? 13 : 10,
+    fontSize: 15,
     color: theme.textPrimary,
     maxHeight: 120,
   },
   sendBtn: {
+    width: 44,
     height: 44,
-    paddingHorizontal: 20,
     borderRadius: 22,
     backgroundColor: theme.primary,
     alignItems: "center",
@@ -340,3 +360,4 @@ const styles = StyleSheet.create({
   },
   sendBtnDisabled: { backgroundColor: theme.border },
 });
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                
