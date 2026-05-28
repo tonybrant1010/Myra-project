@@ -3,7 +3,6 @@ configurable LLM provider (OpenAI / Anthropic / Google Gemini) chosen by the adm
 import asyncio
 import csv
 import io
-import json
 import os
 import re
 import time
@@ -11,11 +10,13 @@ import uuid
 import logging
 import smtplib
 import random
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, List, Literal, Optional
+from typing import List, Literal, Optional
 from email.mime.text import MIMEText
 
+import httpx
 import jwt
 from dotenv import load_dotenv
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Header, Request, UploadFile, File, BackgroundTasks, Query
@@ -23,11 +24,12 @@ from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr, Field
+from pypdf import PdfReader
 from sqlalchemy import (
     Boolean, Column, DateTime, ForeignKey, Integer, String, Text, JSON, func, select, delete,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase, relationship
+from sqlalchemy.orm import DeclarativeBase
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -322,12 +324,9 @@ async def set_setting(db: AsyncSession, key: str, value: str) -> None:
 
 
 # ---------- App ----------
-app = FastAPI(title="Myra API")
-api = APIRouter(prefix="/api")
-
-
-@app.on_event("startup")
-async def on_startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     # Séma migráció: hiányzó oszlopok hozzáadása meglévő táblákhoz
@@ -347,7 +346,7 @@ async def on_startup():
         _conn.close()
     except Exception as _e:
         print(f"[startup] migráció figyelmeztetés: {_e}")
-    # Initialise default settings if missing
+    # Alapértelmezett beállítások inicializálása
     async with SessionLocal() as db:
         for k, v in [
             ("llm_provider", "gemini"),
@@ -360,8 +359,7 @@ async def on_startup():
             if res.scalar_one_or_none() is None:
                 db.add(AppSetting(key=k, value=v))
         await db.commit()
-
-    # Ha a kb_text üres, megpróbáljuk betölteni a default_kb.pdf-ből
+    # Ha a kb_text üres, betöltjük a default_kb.pdf-ből
     async with SessionLocal() as db:
         kb_res = await db.execute(select(AppSetting).where(AppSetting.key == "kb_text"))
         kb_setting = kb_res.scalar_one_or_none()
@@ -369,14 +367,9 @@ async def on_startup():
             default_kb_path = ROOT_DIR / "default_kb.pdf"
             if default_kb_path.exists():
                 try:
-                    from pypdf import PdfReader
                     reader = PdfReader(str(default_kb_path))
-                    kb_text = ""
-                    for page in reader.pages:
-                        t = page.extract_text()
-                        if t:
-                            kb_text += t + "\n"
-                    if kb_text.strip():
+                    kb_text = "\n".join(p.extract_text() or "" for p in reader.pages).strip()
+                    if kb_text:
                         if kb_setting:
                             kb_setting.value = kb_text
                         else:
@@ -385,11 +378,13 @@ async def on_startup():
                         print(f"[startup] default_kb.pdf betöltve: {len(kb_text)} karakter")
                 except Exception as e:
                     print(f"[startup] Figyelmeztetés: default_kb.pdf nem tölthető be: {e}")
-
-
-@app.on_event("shutdown")
-async def on_shutdown():
+    yield
+    # Shutdown
     await engine.dispose()
+
+
+app = FastAPI(title="Myra API", lifespan=lifespan)
+api = APIRouter(prefix="/api")
 
 
 # ---------- Schemas ----------
@@ -411,14 +406,6 @@ class ForgotPasswordBody(BaseModel):
 class ResetPasswordBody(BaseModel):
     token: str
     new_password: str = Field(min_length=8, max_length=128)
-
-
-class UserOut(BaseModel):
-    id: int
-    email: str
-    name: str
-    is_admin: bool
-    state_code: Optional[str] = None
 
 
 class CodeVerifyBody(BaseModel):
@@ -808,7 +795,6 @@ def _sync_call_gemini_cached(api_key: str, cache_name: str, contents: list) -> s
 async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str, history: List[dict], user_message: str) -> str:
     if not api_key:
         raise HTTPException(status_code=400, detail="Nincs API kulcs beállítva. Az admin a Beállítások menüben megadhatja.")
-    import httpx
 
     if provider in ("openai", "groq", "cerebras", "mistral"):
         base_url = (
@@ -1108,8 +1094,6 @@ async def admin_upload_kb(file: UploadFile = File(...), _: User = Depends(requir
     text = ""
     if name.lower().endswith(".pdf"):
         try:
-            from pypdf import PdfReader
-            import io
             r = PdfReader(io.BytesIO(raw))
             text = "\n".join((p.extract_text() or "") for p in r.pages).strip()
         except Exception as e:
@@ -1130,8 +1114,6 @@ async def admin_upload_kb(file: UploadFile = File(...), _: User = Depends(requir
 # ---------- Admin: extract KB from server PDFs ----------
 @api.post("/admin/extract-kb")
 async def admin_extract_kb(_: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    from pypdf import PdfReader
-    import io
     pdf_dir = ROOT_DIR / "data"
     pdf_files = sorted(pdf_dir.glob("*.pdf"))
     if not pdf_files:
@@ -1282,12 +1264,10 @@ async def admin_delete_user(user_id: int, _: User = Depends(require_admin), db: 
 
 @api.get("/admin/backup")
 async def admin_backup_db(_: User = Depends(require_admin)):
-    import os as _os
     db_path = str(DATABASE_URL).replace("sqlite+aiosqlite:///", "")
-    if not _os.path.exists(db_path):
+    if not os.path.exists(db_path):
         raise HTTPException(status_code=404, detail="Az adatbázis fájl nem található.")
-    from datetime import datetime as _dt
-    filename = f"myra_backup_{_dt.now().strftime('%Y%m%d_%H%M%S')}.db"
+    filename = f"myra_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
     return FileResponse(
         path=db_path,
         media_type="application/octet-stream",

@@ -30,32 +30,16 @@ type Msg = {
 
 type ListItem =
   | { kind: "msg"; msg: Msg }
-  | { kind: "sep"; id: string; code: string; date: string }
   | { kind: "hint"; id: string; code: string };
 
 function buildListItems(messages: Msg[], currentCode: string | null | undefined): ListItem[] {
   const out: ListItem[] = [];
   let lastCode: string | null | undefined = undefined;
   for (const m of messages) {
-    if (m.state_code && m.state_code !== lastCode) {
-      const d = new Date(m.created_at);
-      out.push({
-        kind: "sep",
-        id: `sep-${m.id}`,
-        code: m.state_code,
-        date: d.toLocaleDateString("hu-HU", { year: "numeric", month: "short", day: "numeric" }),
-      });
-      lastCode = m.state_code;
-    }
+    if (m.state_code) lastCode = m.state_code;
     out.push({ kind: "msg", msg: m });
   }
   if (currentCode && lastCode !== currentCode) {
-    out.push({
-      kind: "sep",
-      id: `sep-current-${currentCode}`,
-      code: currentCode,
-      date: new Date().toLocaleDateString("hu-HU", { year: "numeric", month: "short", day: "numeric" }),
-    });
     out.push({ kind: "hint", id: "hint-current", code: currentCode });
   }
   return out;
@@ -186,8 +170,7 @@ export default function ChatScreen() {
               keyExtractor={(item) => (item.kind === "msg" ? item.msg.id : item.id)}
               contentContainerStyle={styles.listContent}
               renderItem={({ item }) =>
-                item.kind === "sep" ? null
-                : item.kind === "hint" ? (
+                item.kind === "hint" ? (
                   <View style={styles.hintWrap}>
                     <Image source={MYRA_AVATAR} style={styles.hintAvatar} />
                     <T variant="small" color={theme.textSecondary} align="center" style={{ marginTop: 10 }}>
@@ -316,17 +299,6 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 4,
   },
-  sep: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12 },
-  sepLine: { flex: 1, height: 1, backgroundColor: theme.border },
-  sepPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: theme.bg,
-    borderWidth: 1,
-    borderColor: theme.border,
-  },
-  sepText: { letterSpacing: 2.4, fontSize: 10 },
   hintWrap: { alignItems: "center", paddingHorizontal: 24, paddingVertical: 16 },
   hintAvatar: { width: 56, height: 56, borderRadius: 28, backgroundColor: theme.surface },
   readOnlyBar: {
