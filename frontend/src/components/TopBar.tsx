@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { View, StyleSheet, TouchableOpacity } from "react-native";
 import { useRouter } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 import { theme } from "@/src/theme";
 import { T } from "@/src/components/Typography";
 import SideMenu from "@/src/components/SideMenu";
@@ -17,39 +18,39 @@ export default function TopBar({ title, showBack, rightLabel }: Props) {
 
   return (
     <View style={styles.bar} testID="top-bar">
-      {/* BAL OLDAL: Navigáció */}
+      {/* BAL OLDAL: Navigacio */}
       <View style={styles.sideContainer}>
         {showBack ? (
           <TouchableOpacity
             onPress={() => router.replace("/welcome")}
-            style={styles.pillBtn}
+            style={styles.iconBtn}
             testID="topbar-back"
             hitSlop={10}
           >
-            <T variant="label" color={theme.textOnDark} style={{ fontWeight: "600" }}>Vissza</T>
+            <Ionicons name="chevron-back" size={22} color={theme.textOnDark} />
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
             onPress={() => setMenuOpen(true)}
-            style={styles.pillBtn}
+            style={styles.iconBtn}
             testID="topbar-menu"
             hitSlop={10}
           >
-            <T variant="label" color={theme.textOnDark} style={{ fontWeight: "600" }}>Menü</T>
+            <Ionicons name="menu" size={22} color={theme.textOnDark} />
           </TouchableOpacity>
         )}
       </View>
 
-      {/* KÖZÉP: Címsor */}
+      {/* KOZEP: Cimsor */}
       <T variant="h2" align="center" color={theme.textOnDark} style={styles.title} numberOfLines={1}>
         {title || ""}
       </T>
 
-      {/* JOBB OLDAL: Állapotkód vagy üres hely */}
+      {/* JOBB OLDAL: Allapotkod vagy ures hely */}
       <View style={[styles.sideContainer, { alignItems: "flex-end" }]}>
         {rightLabel ? (
           <View style={styles.rightPill}>
-            <T variant="caption" color={theme.accentSoft} style={{ fontSize: 10, letterSpacing: 1.5, fontWeight: "bold" }}>
+            <T variant="caption" color={theme.accentSoft} style={{ fontSize: 10, letterSpacing: 1.5 }}>
               {rightLabel}
             </T>
           </View>
@@ -73,23 +74,22 @@ const styles = StyleSheet.create({
     borderBottomColor: theme.primaryDark,
   },
   sideContainer: {
-    minWidth: 80,
+    minWidth: 52,
     justifyContent: "center",
   },
   title: {
     flex: 1,
-    fontSize: 18,
+    fontSize: 20,
   },
-  pillBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    backgroundColor: "rgba(255,255,255,0.12)",
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
+  iconBtn: {
+    width: 40,
+    height: 40,
+    backgroundColor: "rgba(255,255,255,0.10)",
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    alignSelf: "flex-start",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
   },
   rightPill: {
     backgroundColor: "rgba(255,255,255,0.12)",
