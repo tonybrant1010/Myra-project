@@ -59,7 +59,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const handleAuthResult = useCallback(async (r: Response): Promise<{ ok: boolean; error?: string }> => {
     if (!r.ok) {
       let msg = "Hiba történt.";
-      try { const d = await r.json(); msg = d?.detail || msg; } catch {}
+      try {
+        const d = await r.json();
+        if (typeof d?.detail === "string") msg = d.detail;
+        else if (Array.isArray(d?.detail) && d.detail.length > 0) {
+          // Pydantic 422 validation error — detail is an array of objects
+          msg = d.detail[0]?.msg || "Érvénytelen adat.";
+        } else if (d?.detail) {
+          msg = String(d.detail);
+        }
+      } catch {}
       return { ok: false, error: msg };
     }
     const data = await r.json();

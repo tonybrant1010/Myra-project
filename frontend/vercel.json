@@ -3,8 +3,16 @@
   "trailingSlash": false,
   "rewrites": [
     {
+      "source": "/api/:path*",
+      "destination": "http://91.214.112.96:8001/api/:path*"
+    },
+    {
       "source": "/reset-password",
       "destination": "/reset-password.html"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
     }
   ]
 }

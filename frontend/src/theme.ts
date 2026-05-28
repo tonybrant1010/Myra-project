@@ -8,7 +8,7 @@ export const theme = {
 
   // Brand
   primary: "#2B3A30", // Deep Moss
-  primaryDark: "#1E2A23",
+  primaryDark: "#1E2A23", // Darker Moss (TopBar border)
   secondary: "#6B7D70", // Sage
   accent: "#C07C66", // Terracotta
   accentSoft: "#E9D9D2",

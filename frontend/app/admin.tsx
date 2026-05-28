@@ -14,22 +14,22 @@ import {
   ScrollView,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useRouter } from "expo-router";
 import { useAuth, authedFetch } from "@/src/auth/AuthContext";
 import { theme } from "@/src/theme";
 import TopBar from "@/src/components/TopBar";
-
+import ContentBackground from "@/src/components/ContentBackground";
 // A severity hivatalosan is a típus része lett
 type Item = { code: string; title: string; profile: string; severity?: string };
-
 export default function AdminScreen() {
   const { token, user } = useAuth();
+  const router = useRouter();
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
   const [editor, setEditor] = useState<{ open: boolean; item: Item | null }>({
     open: false,
     item: null,
   });
-
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -42,11 +42,9 @@ export default function AdminScreen() {
       setLoading(false);
     }
   }, [token]);
-
   useEffect(() => {
     load();
   }, [load]);
-
   const del = (code: string) => {
     Alert.alert("Törlés", `Biztos törlöd a ${code} kódot?`, [
       { text: "Mégse", style: "cancel" },
@@ -60,80 +58,82 @@ export default function AdminScreen() {
       },
     ]);
   };
-
   if (!user?.is_admin) {
     return (
       <SafeAreaView style={styles.safe}>
         <TopBar title="Admin" showBack />
-        <View style={styles.center}>
-          <Text style={styles.empty}>Nincs jogosultságod ehhez az oldalhoz.</Text>
-        </View>
+        <ContentBackground>
+          <View style={styles.center}>
+            <Text style={styles.empty}>Nincs jogosultságod ehhez az oldalhoz.</Text>
+          </View>
+        </ContentBackground>
       </SafeAreaView>
     );
   }
-
   return (
     <SafeAreaView style={styles.safe} testID="admin-screen">
       <TopBar title="Állapotkódok" showBack />
-      <View style={styles.container}>
-        <View style={styles.headRow}>
-          <Text style={styles.count}>{items.length} kód</Text>
-          <TouchableOpacity
-            style={styles.addBtn}
-            onPress={() => setEditor({ open: true, item: null })}
-            testID="admin-add-code"
-          >
-            <Text style={styles.addBtnText}>+ Új kód</Text>
-          </TouchableOpacity>
-        </View>
-
-        {loading ? (
-          <View style={styles.center}>
-            <ActivityIndicator color={theme.primary} />
+      <ContentBackground>
+        <View style={styles.container}>
+          <View style={styles.headRow}>
+            <Text style={styles.count}>{items.length} kód</Text>
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <TouchableOpacity
+                style={styles.addBtn}
+                onPress={() => setEditor({ open: true, item: null })}
+                testID="admin-add-code"
+              >
+                <Text style={styles.addBtnText}>+ Új kód</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        ) : (
-          <FlatList
-            data={items}
-            keyExtractor={(i) => i.code}
-            contentContainerStyle={{ paddingBottom: 24, gap: 10 }}
-            ListEmptyComponent={
-              <Text style={styles.empty}>Még nincs kód. Adj hozzá egyet.</Text>
-            }
-            renderItem={({ item }) => (
-              <View style={styles.row} testID={`code-row-${item.code}`}>
-                <View style={{ flex: 1 }}>
-                  <View style={styles.rowTop}>
-                    <Text style={styles.code}>{item.code}</Text>
-                    <Text style={styles.rowTitle} numberOfLines={1}>
-                      {item.title}
+          {loading ? (
+            <View style={styles.center}>
+              <ActivityIndicator color={theme.primary} />
+            </View>
+          ) : (
+            <FlatList
+              data={items}
+              keyExtractor={(i) => i.code}
+              contentContainerStyle={{ paddingBottom: 24, gap: 10 }}
+              ListEmptyComponent={
+                <Text style={styles.empty}>Még nincs kód. Adj hozzá egyet.</Text>
+              }
+              renderItem={({ item }) => (
+                <View style={styles.row} testID={`code-row-${item.code}`}>
+                  <View style={{ flex: 1 }}>
+                    <View style={styles.rowTop}>
+                      <Text style={styles.code}>{item.code}</Text>
+                      <Text style={styles.rowTitle} numberOfLines={1}>
+                        {item.title}
+                      </Text>
+                    </View>
+                    <Text style={styles.rowProfile} numberOfLines={2}>
+                      {item.profile}
                     </Text>
                   </View>
-                  <Text style={styles.rowProfile} numberOfLines={2}>
-                    {item.profile}
-                  </Text>
+                  <View style={styles.rowActions}>
+                    <TouchableOpacity
+                      onPress={() => setEditor({ open: true, item })}
+                      testID={`edit-${item.code}`}
+                      style={styles.textBtn}
+                    >
+                      <Text style={styles.editBtnText}>Szerkeszt</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => del(item.code)}
+                      testID={`delete-${item.code}`}
+                      style={styles.textBtn}
+                    >
+                      <Text style={styles.deleteBtnText}>Töröl</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
-                <View style={styles.rowActions}>
-                  <TouchableOpacity
-                    onPress={() => setEditor({ open: true, item })}
-                    testID={`edit-${item.code}`}
-                    style={styles.textBtn}
-                  >
-                    <Text style={styles.editBtnText}>Szerkeszt</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => del(item.code)}
-                    testID={`delete-${item.code}`}
-                    style={styles.textBtn}
-                  >
-                    <Text style={styles.deleteBtnText}>Töröl</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            )}
-          />
-        )}
-      </View>
-
+              )}
+            />
+          )}
+        </View>
+      </ContentBackground>
       <EditorModal
         visible={editor.open}
         item={editor.item}
@@ -147,7 +147,6 @@ export default function AdminScreen() {
     </SafeAreaView>
   );
 }
-
 function EditorModal({
   visible,
   item,
@@ -167,7 +166,6 @@ function EditorModal({
   const [severity, setSeverity] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   useEffect(() => {
     setCode(item?.code || "");
     setTitle(item?.title || "");
@@ -175,7 +173,6 @@ function EditorModal({
     setSeverity(item?.severity);
     setError(null);
   }, [item, visible]);
-
   const save = async () => {
     setError(null);
     if (!/^\d{4}$/.test(code)) {
@@ -187,21 +184,16 @@ function EditorModal({
       return;
     }
     setBusy(true);
-
     const url = item ? `/api/admin/codes/${code}` : "/api/admin/codes";
     const method = item ? "PUT" : "POST";
-
     const aVal = parseInt(code[0], 10);
     const pVal = parseInt(code[1], 10);
     const hVal = parseInt(code[2], 10);
     const cVal = parseInt(code[3], 10);
-
     try {
       const r = await authedFetch(token, url, {
         method: method,
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           code,
           title: title.trim(),
@@ -213,7 +205,6 @@ function EditorModal({
           c: cVal,
         }),
       });
-
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
         setError(d?.detail || "Mentési hiba");
@@ -227,7 +218,6 @@ function EditorModal({
       setBusy(false);
     }
   };
-
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={modalStyles.backdrop}>
@@ -245,7 +235,6 @@ function EditorModal({
             <Text style={modalStyles.title}>
               {item ? "Kód szerkesztése" : "Új állapotkód"}
             </Text>
-
             <Text style={modalStyles.label}>Kód (4 számjegy)</Text>
             <TextInput
               style={modalStyles.input}
@@ -258,7 +247,6 @@ function EditorModal({
               editable={!item}
               testID="editor-code"
             />
-
             <Text style={modalStyles.label}>Cím</Text>
             <TextInput
               style={modalStyles.input}
@@ -268,7 +256,6 @@ function EditorModal({
               placeholderTextColor={theme.textSecondary}
               testID="editor-title"
             />
-
             <Text style={modalStyles.label}>Profil leírás (kontextus az AI-nak)</Text>
             <TextInput
               style={[modalStyles.input, modalStyles.textarea]}
@@ -279,9 +266,7 @@ function EditorModal({
               placeholderTextColor={theme.textSecondary}
               testID="editor-profile"
             />
-
             {error ? <Text style={modalStyles.error}>{error}</Text> : null}
-
             <View style={modalStyles.actions}>
               <TouchableOpacity
                 onPress={onClose}
@@ -309,9 +294,8 @@ function EditorModal({
     </Modal>
   );
 }
-
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: theme.bg },
+  safe: { flex: 1, backgroundColor: theme.primary },
   container: { flex: 1, paddingHorizontal: 20, paddingBottom: 16 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
   empty: { color: theme.textSecondary, textAlign: "center", padding: 24 },
@@ -322,6 +306,14 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   count: { color: theme.textSecondary, fontSize: 13 },
+  usersBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: theme.primary,
+  },
+  usersBtnText: { color: theme.primary, fontWeight: "500", fontSize: 14 },
   addBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -343,12 +335,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.surface,
   },
   rowTop: { flexDirection: "row", alignItems: "center", gap: 10 },
-  code: {
-    fontSize: 20,
-    fontWeight: "300",
-    color: theme.primary,
-    width: 56,
-  },
+  code: { fontSize: 20, fontWeight: "300", color: theme.primary, width: 56 },
   rowTitle: { fontSize: 14, fontWeight: "600", color: theme.textPrimary, flex: 1 },
   rowProfile: { fontSize: 12, color: theme.textSecondary, marginTop: 4, marginLeft: 66 },
   rowActions: { flexDirection: "row", gap: 8, alignItems: "center" },
@@ -356,48 +343,20 @@ const styles = StyleSheet.create({
   editBtnText: { color: theme.primary, fontSize: 13, fontWeight: "500" },
   deleteBtnText: { color: theme.danger, fontSize: 13, fontWeight: "500" },
 });
-
 const modalStyles = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end" },
-  sheet: {
-    backgroundColor: theme.bg,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    maxHeight: "92%",
-  },
+  sheet: { backgroundColor: theme.bg, borderTopLeftRadius: 28, borderTopRightRadius: 28, maxHeight: "92%" },
   sheetContent: { padding: 24, paddingBottom: 36 },
   handleWrap: { alignItems: "center", marginBottom: 8 },
   handle: { width: 44, height: 4, borderRadius: 2, backgroundColor: theme.border },
   title: { fontSize: 22, fontWeight: "500", color: theme.textPrimary, marginBottom: 18 },
   label: { fontSize: 12, color: theme.textSecondary, marginTop: 12, marginBottom: 6, letterSpacing: 1 },
-  input: {
-    backgroundColor: theme.surface,
-    borderWidth: 1,
-    borderColor: theme.border,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    fontSize: 15,
-    color: theme.textPrimary,
-  },
+  input: { backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 14, fontSize: 15, color: theme.textPrimary },
   textarea: { minHeight: 100, textAlignVertical: "top" },
   error: { color: theme.danger, marginTop: 12 },
   actions: { flexDirection: "row", gap: 10, marginTop: 24 },
-  cancelBtn: {
-    flex: 1,
-    paddingVertical: 16,
-    borderRadius: 999,
-    borderWidth: 2,
-    borderColor: theme.primary,
-    alignItems: "center",
-  },
+  cancelBtn: { flex: 1, paddingVertical: 16, borderRadius: 999, borderWidth: 2, borderColor: theme.primary, alignItems: "center" },
   cancelBtnText: { color: theme.primary, fontWeight: "500" },
-  saveBtn: {
-    flex: 1,
-    paddingVertical: 16,
-    borderRadius: 999,
-    backgroundColor: theme.primary,
-    alignItems: "center",
-  },
+  saveBtn: { flex: 1, paddingVertical: 16, borderRadius: 999, backgroundColor: theme.primary, alignItems: "center" },
   saveBtnText: { color: theme.white, fontWeight: "500" },
 });

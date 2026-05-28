@@ -1,13 +1,21 @@
-export const kisokosText = `MYRA KISOKOS – ÚTMUTATÓ AZ ESV MODELLHEZ
+export const kisokosText = `MYRA KISOKOS – Amit tudnod kell
 
-Üdvözlünk a Myra-projectben! Ez a kisokos segít megérteni az alkalmazás működését és a mögötte álló elméleti hátteret.
+MI EZ AZ APP?
+A Myra egy önismereti alkalmazás, amellyel jobban megismerheted a saját jelenlegi érzelmi és stressz állapotodat. Nem egy hagyományos chatbot — nem ad tanácsot, nem diagnosztizál, és nem helyettesíti a szakembert. Inkább olyan, mint egy tükör: visszamutat arra, ami benned van.
 
-Mi az a Myra és az ESV modell?
-A Myra egy olyan intelligens asszisztens, amelyet az ESV (Érzelem-Stressz-Viselkedés) modell alapján fejlesztettünk ki. A modell célja az emberi érzelmi állapotok, stresszreakciók és viselkedési minták finomhangolt elemzése specifikus változók (A-P-H-C) mentén.
+MI AZ AZ ÁLLAPOTKÓD?
+Amikor először nyitod meg az appot, egy rövid kérdőívet töltesz ki. Ennek alapján kapsz egy 4 jegyű állapotkódot (pl. 3421). Ez a kód tükrözi az aktuális érzelmi-stressz állapotodat négy területen: érzelmek, érzelemszabályozás, stressz és testi tünetek. Nem jó vagy rossz szám — csak egy pillanatnyi állapottérkép.
 
-Hogyan használd az alkalmazást?
-- Beszélgetés: Nyugodtan beszélgess a Myra-val a mindennapi megéléseidről, stresszhelyzeteidről vagy gondolataidról.
-- Mentés: A regisztráció után a rendszer biztonságosan megjegyzi a beszélgetéseidet, így bármikor onnan folytathatod, ahol abbahagytad.
-- Cél: Az alkalmazás segít abban, hogy jobban ráláss a saját belső működésedre, miközben hozzájárulsz az ESV modell gyakorlati kutatásához és tudományos validációjához.
+MIT CSINÁL MYRA A CHATBEN?
+Myra ismeri az állapotkódodat, és ennek alapján veled együtt gondolkodik. Nem kérdezi meg, hogy vagy — már tudja. Nem kell mindent elmagyarázni, egyszerűen csak írj neki, ahogy egy ismerősnek írnál. Egy "szia" is elég a kezdéshez.
 
-Ha bármilyen kérdésed vagy észrevételed van a működéssel kapcsolatban, fordulj hozzánk bizalommal a myra-project@research.hu hivatalos support elérhetőségen keresztül.`;
+MIKOR ÉRDEMES ÚJ MÉRÉST CSINÁLNI?
+Az állapotkód egy adott pillanatot tükröz. Ha úgy érzed, hogy sokat változott az állapotod — jobb vagy rosszabb lett —, érdemes új mérést végezni. Ezt a Menüből tudod elindítani az "Új mérés" gombbal. A korábbi mérések és a hozzájuk tartozó beszélgetések megmaradnak, visszanézheted őket.
+
+LÁTHATJA MÁS AZ ADATAIMAT?
+Nem. A chat üzeneteid és a mérési eredményeid csak te látod. Az adminisztrátor (az app fejlesztője) technikai okokból hozzáférhet az adatokhoz, de azokat harmadik féllel nem osztja meg. Ha törölni szeretnéd az összes adatodat, a Menüből a "Regisztráció törlése" gombbal ezt bármikor megteheted.
+
+FONTOS TUDNIVALÓ
+A Myra nem orvos, nem pszichológus, és nem kezelőorvos. Ha úgy érzed, hogy szakemberre van szükséged, kérlek, keress fel egyet. Az app ezt nem tudja és nem is akarja helyettesíteni.
+
+Kérdés esetén: odor-antal@research.hu`;

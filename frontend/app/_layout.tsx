@@ -1,4 +1,5 @@
 import React from "react";
+import { View } from "react-native";
 import { Stack } from "expo-router";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -8,20 +9,20 @@ import { AuthProvider } from "@/src/auth/AuthContext";
 import { theme } from "@/src/theme";
 
 export default function RootLayout() {
-  return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider>
-        <AuthProvider>
-          <StatusBar style="dark" />
-          <Stack
-            screenOptions={{
-              headerShown: false,
-              contentStyle: { backgroundColor: theme.bg },
-              animation: "fade",
-            }}
-          />
-        </AuthProvider>
-      </SafeAreaProvider>
-    </GestureHandlerRootView>
-  );
+  return (
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: theme.bg }}>
+      <SafeAreaProvider>
+        <AuthProvider>
+          <StatusBar style="light" />
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: theme.bg },
+              animation: "fade",
+            }}
+          />
+        </AuthProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
+  );
 }
