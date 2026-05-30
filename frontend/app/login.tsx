@@ -132,7 +132,7 @@ export default function LoginScreen() {
             <View style={styles.shell}>
               <View style={styles.hero}>
                 <View style={[styles.logoRing, shadow.glow]}>
-                  <Image source={MYRA_MARK} style={styles.logo} resizeMode="cover" />
+                  <Image source={MYRA_MARK} style={styles.logo} resizeMode="contain" />
                 </View>
                 <T variant="caption" color={theme.accentSoft} style={styles.heroCaption}>ESV-MODELL</T>
                 <T variant="display" color={theme.textOnDark} style={styles.heroTitle}>Myra Project</T>
@@ -150,7 +150,7 @@ export default function LoginScreen() {
                       style={styles.input}
                       value={email}
                       onChangeText={setEmail}
-                      placeholder="name@name.hu"
+                      placeholder="email@example.com"
                       placeholderTextColor={styles.placeholderColor.color}
                       keyboardType="email-address"
                       autoCapitalize="none"
@@ -161,7 +161,7 @@ export default function LoginScreen() {
                     <PasswordInput
                       value={password}
                       onChangeText={setPassword}
-                      placeholder="••••••••"
+                      placeholder="Jelszó"
                       placeholderTextColor={styles.placeholderColor.color}
                       containerStyle={styles.passwordBox}
                       style={styles.passwordInput}
@@ -190,7 +190,7 @@ export default function LoginScreen() {
                       style={styles.input}
                       value={email}
                       onChangeText={setEmail}
-                      placeholder="name@name.hu"
+                      placeholder="email@example.com"
                       placeholderTextColor={styles.placeholderColor.color}
                       keyboardType="email-address"
                       autoCapitalize="none"
@@ -208,7 +208,7 @@ export default function LoginScreen() {
                       style={[styles.input, styles.codeInput]}
                       value={resetCode}
                       onChangeText={setResetCode}
-                      placeholder="123456"
+                      placeholder="000000"
                       placeholderTextColor={styles.placeholderColor.color}
                       keyboardType="number-pad"
                       maxLength={6}
@@ -292,8 +292,10 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     marginBottom: 18,
     backgroundColor: "rgba(255,255,255,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
   },
-  logo: { width: 94, height: 94 },
+  logo: { width: 86, height: 86, borderRadius: 43 },
   heroCaption: { fontSize: 10, letterSpacing: 1.4 },
   heroTitle: { fontSize: 40, lineHeight: 46, textAlign: "center", marginTop: 14 },
   heroSubtitle: { maxWidth: 310, marginTop: 10 },
@@ -313,20 +315,21 @@ const styles = StyleSheet.create({
   },
   lbl: { marginTop: 12, marginBottom: 7, letterSpacing: 1.1, fontSize: 10 },
   input: {
-    backgroundColor: "rgba(255,255,255,0.10)",
-    borderRadius: 12,
+    backgroundColor: "rgba(247,251,255,0.12)",
+    borderRadius: 10,
     paddingHorizontal: 16,
     paddingVertical: 15,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.22)",
+    borderColor: "rgba(247,251,255,0.24)",
     fontSize: 16,
     color: theme.textOnDark,
     fontFamily: "Manrope_400Regular",
   },
-  placeholderColor: { color: "rgba(247,251,255,0.48)" },
+  placeholderColor: { color: "rgba(247,251,255,0.56)" },
   passwordBox: {
-    backgroundColor: "rgba(255,255,255,0.10)",
-    borderColor: "rgba(255,255,255,0.22)",
+    backgroundColor: "rgba(247,251,255,0.12)",
+    borderColor: "rgba(247,251,255,0.24)",
+    borderRadius: 10,
   },
   passwordInput: {
     color: theme.textOnDark,
