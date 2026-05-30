@@ -51,11 +51,16 @@ export default function ChatScreen() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
+  const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [didInitialScroll, setDidInitialScroll] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [viewSessionId, setViewSessionId] = useState<string | null>(null);
   const listRef = useRef<FlatList>(null);
   const scrollTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const recognitionRef = useRef<any>(null);
+  const dictationBaseRef = useRef("");
 
   const scrollToBottom = useCallback((animated = false) => {
     scrollTimers.current.forEach(clearTimeout);
@@ -69,6 +74,10 @@ export default function ChatScreen() {
   useEffect(() => {
     return () => {
       scrollTimers.current.forEach(clearTimeout);
+      recognitionRef.current?.stop?.();
+      if (Platform.OS === "web") {
+        (globalThis as any).speechSynthesis?.cancel?.();
+      }
     };
   }, []);
 
@@ -103,6 +112,94 @@ export default function ChatScreen() {
   }, [viewSessionId, loadHistory]);
 
   const isReadOnly = viewSessionId !== null && viewSessionId !== activeSessionId;
+
+  const stopDictation = useCallback(() => {
+    recognitionRef.current?.stop?.();
+    recognitionRef.current = null;
+    setListening(false);
+  }, []);
+
+  const toggleDictation = useCallback(() => {
+    if (Platform.OS !== "web") {
+      setVoiceStatus("A diktálás ebben a környezetben nem elérhető.");
+      return;
+    }
+    if (listening) {
+      stopDictation();
+      return;
+    }
+    const SpeechRecognition = (globalThis as any).SpeechRecognition || (globalThis as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setVoiceStatus("A böngésző nem támogatja a beépített diktálást.");
+      return;
+    }
+    const recognition = new SpeechRecognition();
+    recognitionRef.current = recognition;
+    dictationBaseRef.current = input.trimEnd();
+    recognition.lang = "hu-HU";
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 1;
+    recognition.onstart = () => {
+      setVoiceStatus("Hallgatlak...");
+      setListening(true);
+    };
+    recognition.onresult = (event: any) => {
+      let finalText = "";
+      let interimText = "";
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const transcript = event.results[i]?.[0]?.transcript || "";
+        if (event.results[i]?.isFinal) finalText += transcript;
+        else interimText += transcript;
+      }
+      const spoken = (finalText || interimText).trim();
+      const base = dictationBaseRef.current;
+      setInput([base, spoken].filter(Boolean).join(base && spoken ? " " : ""));
+      if (finalText.trim()) {
+        dictationBaseRef.current = [base, finalText.trim()].filter(Boolean).join(base && finalText.trim() ? " " : "");
+      }
+    };
+    recognition.onerror = () => {
+      setVoiceStatus("Nem sikerült rögzíteni a diktálást.");
+      setListening(false);
+    };
+    recognition.onend = () => {
+      setListening(false);
+      setVoiceStatus(null);
+      recognitionRef.current = null;
+    };
+    recognition.start();
+  }, [input, listening, stopDictation]);
+
+  const speakMessage = useCallback((msg: Msg) => {
+    if (Platform.OS !== "web") {
+      setVoiceStatus("A felolvasás ebben a környezetben nem elérhető.");
+      return;
+    }
+    const synth = (globalThis as any).speechSynthesis;
+    const Utterance = (globalThis as any).SpeechSynthesisUtterance;
+    if (!synth || !Utterance) {
+      setVoiceStatus("A böngésző nem támogatja a beépített felolvasást.");
+      return;
+    }
+    if (speakingId === msg.id) {
+      synth.cancel();
+      setSpeakingId(null);
+      return;
+    }
+    synth.cancel();
+    const utterance = new Utterance(msg.text);
+    utterance.lang = "hu-HU";
+    utterance.rate = 0.95;
+    utterance.pitch = 1;
+    const voices = synth.getVoices?.() || [];
+    const huVoice = voices.find((v: any) => String(v.lang || "").toLowerCase().startsWith("hu"));
+    if (huVoice) utterance.voice = huVoice;
+    utterance.onend = () => setSpeakingId(null);
+    utterance.onerror = () => setSpeakingId(null);
+    setSpeakingId(msg.id);
+    synth.speak(utterance);
+  }, [speakingId]);
 
   const send = async () => {
     const text = input.trim();
@@ -181,7 +278,7 @@ export default function ChatScreen() {
                       Új mérés a {item.code} kóddal. Myra ehhez a szálhoz igazodva folytatja.
                     </T>
                   </View>
-                ) : <Bubble msg={item.msg} />
+                ) : <Bubble msg={item.msg} onSpeak={speakMessage} speaking={speakingId === item.msg.id} />
               }
               onContentSizeChange={() => {
                 if (!didInitialScroll) {
@@ -207,9 +304,18 @@ export default function ChatScreen() {
             </View>
           ) : (
             <View style={styles.inputBar}>
+              <TouchableOpacity
+                onPress={toggleDictation}
+                style={[styles.voiceBtn, listening && styles.voiceBtnActive]}
+                disabled={sending}
+                testID="chat-dictation-button"
+                activeOpacity={0.82}
+              >
+                <Ionicons name={listening ? "mic" : "mic-outline"} size={21} color={listening ? theme.primaryDark : "rgba(247,251,255,0.82)"} />
+              </TouchableOpacity>
               <TextInput
                 style={styles.input}
-                placeholder="Írj egy üzenetet Myrának..."
+                placeholder={listening ? "Hallgatlak..." : "Írj vagy diktálj Myrának..."}
                 placeholderTextColor="rgba(247,251,255,0.48)"
                 value={input}
                 onChangeText={setInput}
@@ -222,6 +328,9 @@ export default function ChatScreen() {
                   <Ionicons name="arrow-up" size={20} color={theme.white} />
                 </LinearGradient>
               </TouchableOpacity>
+              {voiceStatus ? (
+                <T variant="small" color="rgba(247,251,255,0.54)" style={styles.voiceStatus}>{voiceStatus}</T>
+              ) : null}
             </View>
           )}
         </KeyboardAvoidingView>
@@ -230,7 +339,7 @@ export default function ChatScreen() {
   );
 }
 
-function Bubble({ msg }: { msg: Msg }) {
+function Bubble({ msg, onSpeak, speaking }: { msg: Msg; onSpeak: (msg: Msg) => void; speaking: boolean }) {
   const isUser = msg.role === "user";
   const time = formatMessageTime(msg.created_at);
   return (
@@ -239,6 +348,11 @@ function Bubble({ msg }: { msg: Msg }) {
         {!isUser ? <Image source={MYRA_AVATAR} style={styles.aiAvatar} /> : null}
         <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAi, isUser ? null : shadow.card]}>
           <T variant="bodyLg" color={theme.textOnDark}>{msg.text}</T>
+          {!isUser ? (
+            <TouchableOpacity onPress={() => onSpeak(msg)} style={styles.speakBtn} activeOpacity={0.75} testID="message-speak-button">
+              <Ionicons name={speaking ? "stop" : "volume-medium-outline"} size={16} color="rgba(247,251,255,0.72)" />
+            </TouchableOpacity>
+          ) : null}
         </View>
       </View>
       {time ? (
@@ -277,6 +391,18 @@ const styles = StyleSheet.create({
   bubble: { maxWidth: "82%", paddingVertical: 14, paddingHorizontal: 16, borderRadius: 16 },
   bubbleUser: { backgroundColor: "rgba(29,142,216,0.78)", borderBottomRightRadius: 4, borderWidth: 1, borderColor: "rgba(255,255,255,0.16)" },
   bubbleAi: { backgroundColor: "rgba(6,19,32,0.62)", borderBottomLeftRadius: 4, borderWidth: 1, borderColor: "rgba(255,255,255,0.18)", backdropFilter: "blur(18px)" },
+  speakBtn: {
+    alignSelf: "flex-end",
+    marginTop: 8,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(247,251,255,0.10)",
+    borderWidth: 1,
+    borderColor: "rgba(247,251,255,0.14)",
+  },
   timestamp: { fontSize: 10, lineHeight: 14 },
   timestampUser: { marginRight: 4 },
   timestampAi: { marginLeft: 42 },
@@ -295,6 +421,25 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderColor: "rgba(255,255,255,0.14)",
     backdropFilter: "blur(18px)",
+  },
+  voiceBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(247,251,255,0.10)",
+    borderWidth: 1,
+    borderColor: "rgba(247,251,255,0.18)",
+  },
+  voiceBtnActive: {
+    backgroundColor: theme.accentSoft,
+    borderColor: theme.accent,
+  },
+  voiceStatus: {
+    position: "absolute",
+    left: 18,
+    top: -22,
   },
   input: {
     flex: 1,
