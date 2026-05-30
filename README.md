@@ -11,6 +11,7 @@ Fontos: a Myra nem hivatalos diagnosztikai vagy terápiás eszköz, és nem hely
 - 256 állapotkód kezelése;
 - mérési eredményoldal;
 - méréshez kötött Myra chat;
+- PDF-alapú tudásvisszakeresés: Myra az aktuális üzenethez releváns tudásrészleteket kapja meg, nem a teljes tudásanyagot;
 - chat- és mérési előzmények;
 - admin felület felhasználókhoz, mérésekhez, tudásbázishoz és LLM-beállításokhoz;
 - modern Aurora Blue / glassmorphism arculat;
@@ -26,6 +27,7 @@ Fontos: a Myra nem hivatalos diagnosztikai vagy terápiás eszköz, és nem hely
 - FastAPI
 - SQLAlchemy async
 - SQLite / `aiosqlite`
+- SQLite FTS5 tudásindex PDF-részletekhez
 - JWT auth
 - Docker / Docker Compose
 - LLM provider: admin felületen konfigurálható, jelenleg főként Gemini használatra optimalizálva
@@ -47,6 +49,8 @@ backend/
   Dockerfile
   data/
     myra.db
+    kb_pdfs/
+      *.pdf
     knowledge_base.txt
     kb_*.pdf
     esv_calc.ods
@@ -78,7 +82,7 @@ Ez azt jelenti, hogy a felhasználói adatok nem a konténer belsejében élnek,
 backend/data/myra.db
 ```
 
-Backend frissítéskor a konténer újraépíthető, az adatbázis ettől nem törlődik, amíg a `backend/data` mappa nincs felülírva vagy törölve.
+Backend frissítéskor a konténer újraépíthető, az adatbázis ettől nem törlődik, amíg a `backend/data` mappa nincs felülírva vagy törölve. A PDF tudásindex ugyanebben az SQLite adatbázisban külön táblákban él (`knowledge_chunks`, FTS index), ezért újraépíthető a PDF-ekből anélkül, hogy a felhasználói adatok sérülnének.
 
 ## Lokális Fejlesztés
 
@@ -109,6 +113,51 @@ Várt válasz:
 ```json
 {"app_name":"Myra-project"}
 ```
+
+## PDF Tudásanyag
+
+Myra tudásanyaga PDF-ekből épített lokális keresőindexet használ. A cél az, hogy a chat ne kapja meg minden üzenetnél a teljes kutatási anyagot, hanem csak az adott beszélgetési pillanathoz illő, rövid PDF-részleteket. Ez csökkenti a tokenhasználatot és pontosabb kontextust ad az LLM-nek.
+
+A PDF-ek helye szerveren:
+
+```text
+backend/data/kb_pdfs/
+```
+
+Google VM-en:
+
+```text
+/home/antalodor/myra/backend/data/kb_pdfs/
+```
+
+Rackhoston:
+
+```text
+/root/backend/data/kb_pdfs/
+```
+
+Új vagy módosított PDF-ek után az indexet újra kell építeni:
+
+```bash
+docker compose exec -T backend sh -c 'cd /app && python - <<'"'"'PY'"'"'
+import asyncio
+from server import SessionLocal, rebuild_pdf_knowledge_index
+
+async def main():
+    async with SessionLocal() as db:
+        print(await rebuild_pdf_knowledge_index(db, "/app/data/kb_pdfs"))
+
+asyncio.run(main())
+PY'
+```
+
+Sikeres eredmény például:
+
+```text
+{'ok': True, 'source_dir': '/app/data/kb_pdfs', 'pdf_count': 25, 'indexed_files': 25, 'chunk_count': 229, 'skipped': []}
+```
+
+Az indexelés a tudásindexet építi újra, nem törli a felhasználókat, méréseket vagy chatelőzményeket.
 
 ### Frontend
 
@@ -158,8 +207,8 @@ Linux VM
     myra-backend
   backend/data
     myra.db
-    PDF-ek
-    tudásbázis
+    kb_pdfs/*.pdf
+    PDF tudásindex
 ```
 
 A rendszer Rackhost VPS-en futott, majd felépült egy párhuzamos Google Compute Engine VM környezet is. A Google VM célja a VPS-költség kiváltása úgy, hogy a működés továbbra is egyben kezelhető maradjon:
@@ -193,11 +242,13 @@ docker ps
 curl http://localhost:8001/api/config
 ```
 
+Ha a frissítés új PDF tudásanyagot is tartalmaz, a `backend/data/kb_pdfs` mappa frissítése után futtasd újra a PDF-indexelést a "PDF Tudásanyag" szakasz szerint.
+
 Nem szabad vakon felülírni:
 
 ```text
 backend/data/myra.db
-backend/data/
+backend/data/ teljes tartalma
 ```
 
 ## Automatikus Backup
