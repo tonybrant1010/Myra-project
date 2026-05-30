@@ -2,6 +2,7 @@
 configurable LLM provider (OpenAI / Anthropic / Google Gemini) chosen by the admin."""
 import asyncio
 import csv
+import hashlib
 import io
 import os
 import re
@@ -27,6 +28,7 @@ from pydantic import BaseModel, EmailStr, Field
 from pypdf import PdfReader
 from sqlalchemy import (
     Boolean, Column, DateTime, ForeignKey, Integer, String, Text, JSON, func, select, delete,
+    text as sql_text,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -137,6 +139,18 @@ class AppSetting(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
+class KnowledgeChunk(Base):
+    __tablename__ = "knowledge_chunks"
+    id = Column(Integer, primary_key=True, index=True)
+    source_name = Column(String(260), nullable=False, index=True)
+    source_path = Column(Text, nullable=False)
+    source_hash = Column(String(64), nullable=False, index=True)
+    chunk_index = Column(Integer, nullable=False)
+    title = Column(String(260), nullable=False, default="")
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 # ---------- Security ----------
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -231,6 +245,258 @@ def _record_reg(request: Request) -> None:
     else:
         s["count"] = s.get("count", 0) + 1
     _reg_attempts[ip] = s
+
+
+def _ensure_knowledge_fts(conn) -> None:
+    conn.execute("""
+    CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_chunks_fts USING fts5(
+        title,
+        content,
+        source_name,
+        content='knowledge_chunks',
+        content_rowid='id',
+        tokenize='unicode61 remove_diacritics 2'
+    )
+    """)
+    conn.execute("""
+    CREATE TRIGGER IF NOT EXISTS knowledge_chunks_ai AFTER INSERT ON knowledge_chunks BEGIN
+        INSERT INTO knowledge_chunks_fts(rowid, title, content, source_name)
+        VALUES (new.id, new.title, new.content, new.source_name);
+    END
+    """)
+    conn.execute("""
+    CREATE TRIGGER IF NOT EXISTS knowledge_chunks_ad AFTER DELETE ON knowledge_chunks BEGIN
+        INSERT INTO knowledge_chunks_fts(knowledge_chunks_fts, rowid, title, content, source_name)
+        VALUES ('delete', old.id, old.title, old.content, old.source_name);
+    END
+    """)
+    conn.execute("""
+    CREATE TRIGGER IF NOT EXISTS knowledge_chunks_au AFTER UPDATE ON knowledge_chunks BEGIN
+        INSERT INTO knowledge_chunks_fts(knowledge_chunks_fts, rowid, title, content, source_name)
+        VALUES ('delete', old.id, old.title, old.content, old.source_name);
+        INSERT INTO knowledge_chunks_fts(rowid, title, content, source_name)
+        VALUES (new.id, new.title, new.content, new.source_name);
+    END
+    """)
+
+
+def _resolve_pdf_source_dir(source_dir: Optional[str] = None) -> Path:
+    configured = source_dir or os.environ.get("MYRA_KB_SOURCE_DIR") or str(ROOT_DIR / "data")
+    path = Path(configured).expanduser().resolve()
+    allowed_roots = [(ROOT_DIR / "data").resolve()]
+    env_root = os.environ.get("MYRA_KB_SOURCE_DIR")
+    if env_root:
+        allowed_roots.append(Path(env_root).expanduser().resolve())
+    if not any(path == root or root in path.parents for root in allowed_roots):
+        raise HTTPException(status_code=400, detail="A PDF mappa nincs engedélyezve. Add meg MYRA_KB_SOURCE_DIR-ként.")
+    if not path.exists() or not path.is_dir():
+        raise HTTPException(status_code=400, detail=f"A PDF mappa nem található: {path}")
+    return path
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _clean_pdf_text(text: str) -> str:
+    text = text.replace("\x00", " ")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _extract_pdf_text(path: Path) -> str:
+    reader = PdfReader(str(path))
+    pages = []
+    for i, page in enumerate(reader.pages, start=1):
+        extracted = _clean_pdf_text(page.extract_text() or "")
+        if extracted:
+            pages.append(f"[{path.name} / {i}. oldal]\n{extracted}")
+    return "\n\n".join(pages).strip()
+
+
+def _chunk_text(text: str, max_chars: int = 2600, overlap: int = 350) -> list[str]:
+    text = _clean_pdf_text(text)
+    if not text:
+        return []
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    chunks: list[str] = []
+    current = ""
+    for paragraph in paragraphs:
+        if len(paragraph) > max_chars:
+            if current:
+                chunks.append(current.strip())
+                current = ""
+            start = 0
+            while start < len(paragraph):
+                chunks.append(paragraph[start:start + max_chars].strip())
+                start += max_chars - overlap
+            continue
+        candidate = (current + "\n\n" + paragraph).strip() if current else paragraph
+        if len(candidate) > max_chars and current:
+            chunks.append(current.strip())
+            tail = current[-overlap:].strip()
+            current = (tail + "\n\n" + paragraph).strip() if tail else paragraph
+        else:
+            current = candidate
+    if current.strip():
+        chunks.append(current.strip())
+    return chunks
+
+
+def _knowledge_title_from_file(path: Path) -> str:
+    title = re.sub(r"[_-]+", " ", path.stem)
+    return re.sub(r"\s+", " ", title).strip()
+
+
+def _fts_query(query: str) -> str:
+    terms = re.findall(r"[\w\u00c0-\u017f]{3,}", query.lower())
+    stop = {"hogy", "vagy", "mint", "mert", "amit", "ahol", "amikor", "egyik", "másik", "van", "lesz", "nem"}
+    unique: list[str] = []
+    for term in terms:
+        if term in stop or term in unique:
+            continue
+        unique.append(term)
+        if len(unique) >= 16:
+            break
+    return " OR ".join(f'"{term}"' for term in unique)
+
+
+def _expand_knowledge_query(query: str) -> str:
+    q = query.lower()
+    expansions: list[str] = []
+    concept_map = [
+        (("ugyanoda", "kör", "ragad", "beragad", "pörög", "agyal", "ismétlődik", "visszajut"), "pszichés kényszerhurok kenyszerhurok ismétlődő mintázat lezárás"),
+        (("kettős", "egyszerre", "dönteni", "döntés", "ellentmond", "húz"), "ambivalencia belső konfliktus döntési feszültség"),
+        (("szétes", "sokfelé", "túl sok", "elapróz", "kapkod", "fárad"), "elaprózódás mentális energia figyelmi szétterhelés"),
+        (("test", "feszül", "alvás", "alsz", "felébredek", "nyugtalan", "kimerült"), "szomatikus lezárás stressz idegrendszeri terhelés regeneráció"),
+        (("függ", "sóvárg", "visszaes", "kontroll", "szokás"), "függőség mechanizmusa kontrollvesztés stressz viselkedés"),
+        (("írás", "napló", "leír", "feladat", "gyakorlat"), "ötlépéses írásterápia strukturált feldolgozás"),
+        (("öngyilkos", "szuicid", "nem akarok élni", "bántanám"), "szuicid krízis biztonság segítség"),
+    ]
+    for triggers, addition in concept_map:
+        if any(trigger in q for trigger in triggers):
+            expansions.append(addition)
+    return " ".join([*expansions, query]).strip()
+
+
+async def rebuild_pdf_knowledge_index(db: AsyncSession, source_dir: Optional[str] = None) -> dict:
+    pdf_dir = _resolve_pdf_source_dir(source_dir)
+    pdf_files = sorted(pdf_dir.glob("*.pdf"))
+    if not pdf_files:
+        raise HTTPException(status_code=400, detail=f"Nincs PDF ebben a mappában: {pdf_dir}")
+
+    await db.execute(delete(KnowledgeChunk))
+    await db.flush()
+
+    indexed_files = 0
+    chunk_count = 0
+    skipped: list[str] = []
+    for pdf_path in pdf_files:
+        try:
+            text = _extract_pdf_text(pdf_path)
+            chunks = _chunk_text(text)
+            if not chunks:
+                skipped.append(pdf_path.name)
+                continue
+            file_hash = _file_sha256(pdf_path)
+            title = _knowledge_title_from_file(pdf_path)
+            for idx, chunk in enumerate(chunks):
+                db.add(KnowledgeChunk(
+                    source_name=pdf_path.name,
+                    source_path=str(pdf_path),
+                    source_hash=file_hash,
+                    chunk_index=idx,
+                    title=title,
+                    content=chunk,
+                ))
+            indexed_files += 1
+            chunk_count += len(chunks)
+        except Exception as e:
+            logger.warning(f"PDF indexelési hiba ({pdf_path}): {e}")
+            skipped.append(pdf_path.name)
+
+    await db.commit()
+    await db.execute(sql_text("INSERT INTO knowledge_chunks_fts(knowledge_chunks_fts) VALUES ('rebuild')"))
+    await db.commit()
+    return {
+        "ok": True,
+        "source_dir": str(pdf_dir),
+        "pdf_count": len(pdf_files),
+        "indexed_files": indexed_files,
+        "chunk_count": chunk_count,
+        "skipped": skipped,
+    }
+
+
+async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> list[KnowledgeChunk]:
+    fts = _fts_query(_expand_knowledge_query(query))
+    if not fts:
+        return []
+    limit = max(1, min(limit, 10))
+    stmt = sql_text("""
+        SELECT kc.*
+        FROM knowledge_chunks_fts fts
+        JOIN knowledge_chunks kc ON kc.id = fts.rowid
+        WHERE knowledge_chunks_fts MATCH :query
+        ORDER BY bm25(knowledge_chunks_fts)
+        LIMIT :limit
+    """)
+    res = await db.execute(stmt, {"query": fts, "limit": limit})
+    rows = res.mappings().all()
+    return [
+        KnowledgeChunk(
+            id=row["id"],
+            source_name=row["source_name"],
+            source_path=row["source_path"],
+            source_hash=row["source_hash"],
+            chunk_index=row["chunk_index"],
+            title=row["title"],
+            content=row["content"],
+        )
+        for row in rows
+    ]
+
+
+def _build_retrieved_kb_context(chunks: list[KnowledgeChunk]) -> str:
+    if not chunks:
+        return ""
+    parts = ["PDF TUDÁSRÉSZLETEK (csak belső felismeréshez, soha ne idézd szó szerint):"]
+    for i, chunk in enumerate(chunks, start=1):
+        parts.append(f"\n[{i}] Forrás: {chunk.source_name}\n{chunk.content}")
+    return "\n".join(parts).strip()
+
+
+def _is_crisis_message(text: str) -> bool:
+    normalized = text.lower()
+    compact = re.sub(r"\s+", "", normalized)
+    crisis_terms = [
+        "öngyilkos", "ongyilkos", "szuicid", "megölöm magam", "meg akarok halni",
+        "nem akarok élni", "nem akarok elni", "véget akarok vetni", "veget akarok vetni",
+        "bántani akarom magam", "bantani akarom magam", "kárt tenni magamban",
+        "nem bírom tovább", "nem birom tovabb", "nem bírom ezt már elviselni",
+        "nem tudom mit csináljak", "nem tudom, hogy mit csináljak",
+    ]
+    compact_terms = [
+        "nembíromtovább", "nembiromtovabb", "nembíromeztmárelviselni",
+        "nembiromeztmarelviselni", "nemakarokélni", "nemakarokelni",
+    ]
+    return any(term in normalized for term in crisis_terms) or any(term in compact for term in compact_terms)
+
+
+def _build_crisis_safety_context() -> str:
+    return """KRÍZISBIZTONSÁGI KERET (felülírja a normál beszélgetési ritmust):
+Ha a felhasználó szuicid gondolatokat, önsértési kockázatot, elviselhetetlenséget vagy közvetlen krízist jelez, ne maradj kizárólag beszélgetőpartneri szerepben.
+Tartsd meg a kapcsolatot: maradj meleg, rövid, nyugodt és nem ítélkező.
+Ugyanakkor legyél határozott: mondd ki, hogy ilyen helyzetben fontos élő emberhez vagy sürgősségi segítséghez kapcsolódni.
+Ha a felhasználó azt mondja, hogy csak veled akar beszélni és nem másokkal, validáld ezt, de ne fogadd el biztonságos megoldásként. Mondd: "Itt maradok veled, de ezt nem szabad teljesen egyedül cipelned."
+Magyarországi felhasználónál említsd röviden: 112 sürgős veszély esetén, 116-123 lelki elsősegély. Ne adj hosszú listát.
+Kérdezz rá röviden a közvetlen biztonságra: egyedül van-e, van-e közvetlen veszély vagy eszköz a közelében, tud-e most valakit odahívni.
+Ne adj módszert, ne részletezz önsértési módokat, ne vitatkozz, ne moralizálj, ne ígérj titoktartást."""
 
 
 # ---------- DB session ----------
@@ -342,6 +608,7 @@ async def lifespan(app: FastAPI):
         if "session_id" not in _cols2:
             _conn.execute("ALTER TABLE chat_messages ADD COLUMN session_id VARCHAR(40)")
             print("[startup] migráció: chat_messages.session_id hozzáadva")
+        _ensure_knowledge_fts(_conn)
         _conn.commit()
         _conn.close()
     except Exception as _e:
@@ -438,6 +705,10 @@ class SettingsIn(BaseModel):
     llm_api_key: Optional[str] = None
     system_prompt: Optional[str] = None
     kb_text: Optional[str] = None
+
+
+class ReindexPdfKnowledgeBody(BaseModel):
+    source_dir: Optional[str] = None
 
 
 # ---------- Email Helper ----------
@@ -956,6 +1227,9 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
     api_key = await get_setting(db, "llm_api_key", "")
     sys_prompt_base = await get_setting(db, "system_prompt", DEFAULT_SYSTEM_PROMPT)
     kb_text = await get_setting(db, "kb_text", "")
+    kb_query = f"{text}\n{sc.title}\n{sc.profile}\n{sc.severity or ''}"
+    retrieved_chunks = await search_pdf_knowledge(db, kb_query, limit=5)
+    retrieved_kb_context = _build_retrieved_kb_context(retrieved_chunks)
 
     res = await db.execute(
         select(ChatMessage)
@@ -963,6 +1237,8 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
         .order_by(ChatMessage.created_at)
     )
     history = [{"role": m.role, "text": m.text} for m in res.scalars().all()][-20:]
+    recent_user_text = "\n".join(m["text"] for m in history[-6:] if m["role"] == "user")
+    crisis_context = _build_crisis_safety_context() if _is_crisis_message(f"{recent_user_text}\n{text}") else ""
 
     user_msg = ChatMessage(id=str(uuid.uuid4()), user_id=user.id, state_code=user.state_code,
                            session_id=active_session_id, role="user", text=text)
@@ -984,6 +1260,16 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
                     {"role": "user", "parts": [{"text": f"[BELSŐ KONTEXTUS – soha ne idézd a felhasználónak]\n{state_block}"}]},
                     {"role": "model", "parts": [{"text": "Megértettem."}]},
                 ]
+                if crisis_context:
+                    cached_contents.extend([
+                        {"role": "user", "parts": [{"text": f"[BIZTONSÁGI KONTEXTUS]\n{crisis_context}"}]},
+                        {"role": "model", "parts": [{"text": "Megértettem, a biztonsági keretet elsőbbségben tartom."}]},
+                    ])
+                if retrieved_kb_context:
+                    cached_contents.extend([
+                        {"role": "user", "parts": [{"text": f"[AKTUÁLISAN RELEVÁNS PDF-TUDÁS]\n{retrieved_kb_context}"}]},
+                        {"role": "model", "parts": [{"text": "Megértettem."}]},
+                    ])
                 for m in history:
                     cached_contents.append({
                         "role": "user" if m["role"] == "user" else "model",
@@ -1001,7 +1287,8 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
 
     # --- Hagyományos útvonal (fallback) ---
     if reply is None:
-        sys_prompt = _build_system_prompt(sys_prompt_base, kb_text, sc)
+        effective_kb = "\n\n".join(part for part in [kb_text.strip(), crisis_context, retrieved_kb_context] if part)
+        sys_prompt = _build_system_prompt(sys_prompt_base, effective_kb, sc)
         try:
             reply = await _call_llm(provider, model, api_key, sys_prompt, history, text)
         except HTTPException:
@@ -1120,6 +1407,39 @@ async def admin_update_settings(body: SettingsIn, _: User = Depends(require_admi
     if body.kb_text is not None:
         await set_setting(db, "kb_text", body.kb_text)
     return {"ok": True}
+
+
+@api.post("/admin/kb/reindex-pdfs")
+async def admin_reindex_pdf_knowledge(
+    body: ReindexPdfKnowledgeBody,
+    _: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    return await rebuild_pdf_knowledge_index(db, body.source_dir)
+
+
+@api.get("/admin/kb/search")
+async def admin_search_pdf_knowledge(
+    q: str = Query(..., min_length=2),
+    limit: int = Query(5, ge=1, le=10),
+    _: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    chunks = await search_pdf_knowledge(db, q, limit=limit)
+    return {
+        "query": q,
+        "count": len(chunks),
+        "items": [
+            {
+                "id": c.id,
+                "source_name": c.source_name,
+                "chunk_index": c.chunk_index,
+                "title": c.title,
+                "preview": c.content[:900],
+            }
+            for c in chunks
+        ],
+    }
 
 
 @api.post("/admin/kb/upload")
