@@ -92,7 +92,7 @@ export default function RegisterScreen() {
                 style={styles.input}
                 value={email}
                 onChangeText={setEmail}
-                placeholder="name@name.hu"
+                placeholder="email@example.com"
                 placeholderTextColor={styles.placeholderColor.color}
                 keyboardType="email-address"
                 autoCapitalize="none"
