@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from "react";
-import { View, StyleSheet, TouchableOpacity, ActivityIndicator, useWindowDimensions } from "react-native";
+import { ActivityIndicator, StyleSheet, TouchableOpacity, useWindowDimensions, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter, useLocalSearchParams } from "expo-router";
-import { useAuth, authedFetch } from "@/src/auth/AuthContext";
-import { theme, shadow } from "@/src/theme";
-import TopBar from "@/src/components/TopBar";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { authedFetch, useAuth } from "@/src/auth/AuthContext";
+import { shadow, theme } from "@/src/theme";
 import ContentBackground from "@/src/components/ContentBackground";
+import TopBar from "@/src/components/TopBar";
 import { T } from "@/src/components/Typography";
 
 export default function QuizResultScreen() {
@@ -13,11 +15,7 @@ export default function QuizResultScreen() {
   const { token } = useAuth();
   const { code } = useLocalSearchParams<{ code: string }>();
   const { width } = useWindowDimensions();
-  const [profile, setProfile] = useState<{
-    code?: string;
-    title?: string;
-    severity?: string;
-  } | null>(null);
+  const [profile, setProfile] = useState<{ code?: string; title?: string; severity?: string } | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -35,24 +33,26 @@ export default function QuizResultScreen() {
   }, [token]);
 
   const displayCode = code || profile?.code || "----";
-  const codeFontSize = width < 480 ? 64 : width < 900 ? 72 : 64;
-  const codeLineHeight = codeFontSize + 10;
+  const codeFontSize = width < 480 ? 52 : 64;
+  const codeLineHeight = codeFontSize + 8;
 
   return (
     <SafeAreaView style={styles.safe} testID="quiz-result-screen">
-      <TopBar title="Eredmény" />
+      <TopBar title="Mérési eredmény" />
       <ContentBackground>
         <View style={styles.container}>
-
-          <View style={styles.heroBlock}>
-            <T variant="caption" color={theme.accent}>A TE ALLAPOTKODOD</T>
+          <LinearGradient colors={["rgba(255,255,255,0.16)", "rgba(255,255,255,0.07)"]} style={[styles.resultPanel, shadow.card]}>
+            <View pointerEvents="none" style={styles.resultSheen} />
+            <T variant="caption" color={theme.accentSoft} style={styles.caption}>
+              A te állapotkódod
+            </T>
 
             <View style={styles.codeWrap} testID="result-code">
               {String(displayCode).split("").map((d, i) => (
                 <View key={i} style={styles.digitBox}>
                   <T
                     variant="hero"
-                    color={theme.primary}
+                    color={theme.textOnDark}
                     style={{ fontSize: codeFontSize, lineHeight: codeLineHeight, letterSpacing: 0 }}
                   >
                     {d}
@@ -62,46 +62,38 @@ export default function QuizResultScreen() {
             </View>
 
             {loading ? (
-              <ActivityIndicator color={theme.primary} style={{ marginTop: 8 }} />
+              <ActivityIndicator color={theme.primary} style={{ marginTop: 16 }} />
             ) : profile ? (
-              <View style={[styles.profileCard, shadow.card]}>
+              <View style={styles.profileBlock}>
                 {profile.severity ? (
                   <View style={styles.sevTag}>
-                    <T variant="caption" color={theme.accent} style={{ fontSize: 10, letterSpacing: 2 }}>
+                    <T variant="caption" color={theme.accentSoft} style={{ fontSize: 10, letterSpacing: 1.6 }}>
                       {profile.severity}
                     </T>
                   </View>
                 ) : null}
-                <T variant="h1" align="center" style={{ marginTop: 10 }}>
+                <T variant="h1" align="center" color={theme.textOnDark} style={{ marginTop: 12 }}>
                   {profile.title}
                 </T>
               </View>
             ) : null}
 
-            <T variant="body" color={theme.textSecondary} align="center" style={styles.note}>
-              A meres sikeresen lezarult. Myra mar felkeszult a fogadasodra — szemelyre szabott beszelgetessel var.
+            <T variant="body" color="rgba(247,251,255,0.72)" align="center" style={styles.note}>
+              A mérés sikeresen lezárult. Myra már felkészült a fogadásodra - személyre szabott beszélgetéssel vár.
             </T>
-          </View>
+          </LinearGradient>
 
           <View style={styles.ctaBlock}>
-            <TouchableOpacity
-              style={styles.primaryBtn}
-              onPress={() => router.replace("/chat")}
-              testID="result-start-chat"
-              activeOpacity={0.85}
-            >
-              <T variant="title" color={theme.white}>Beszelgetes Myraval</T>
+            <TouchableOpacity style={styles.primaryBtn} onPress={() => router.replace("/chat")} testID="result-start-chat" activeOpacity={0.88}>
+              <LinearGradient colors={[theme.accentDeep, theme.primarySoft]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.primaryGradient}>
+                <Ionicons name="chatbubble-ellipses" size={18} color={theme.white} />
+                <T variant="title" color={theme.white}>Beszélgetés Myrával</T>
+              </LinearGradient>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.secondaryBtn}
-              onPress={() => router.replace("/welcome")}
-              testID="result-goto-welcome"
-              activeOpacity={0.85}
-            >
-              <T variant="title" color={theme.primary}>Vissza a foodalra</T>
+            <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.replace("/welcome")} testID="result-goto-welcome" activeOpacity={0.88}>
+              <T variant="title" color={theme.textOnDark}>Vissza a főoldalra</T>
             </TouchableOpacity>
           </View>
-
         </View>
       </ContentBackground>
     </SafeAreaView>
@@ -109,59 +101,56 @@ export default function QuizResultScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: theme.primary },
-  container: { flex: 1, paddingHorizontal: 24, paddingBottom: 32, justifyContent: "space-between" },
-  heroBlock: { flex: 1, alignItems: "center", justifyContent: "center", gap: 20 },
-  codeWrap: { flexDirection: "row", gap: 8, alignItems: "center", justifyContent: "center" },
+  safe: { flex: 1, backgroundColor: theme.primaryDark },
+  container: { flex: 1, padding: 18, justifyContent: "space-between" },
+  resultPanel: {
+    flex: 1,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.18)",
+    paddingHorizontal: 20,
+    paddingVertical: 28,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+  resultSheen: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundImage: "radial-gradient(ellipse at 78% 10%, rgba(87,199,255,0.18), transparent 38%), linear-gradient(135deg, rgba(139,143,232,0.10), transparent 46%)",
+  } as any,
+  caption: { fontSize: 10, letterSpacing: 2 },
+  codeWrap: { flexDirection: "row", gap: 8, alignItems: "center", justifyContent: "center", marginTop: 26 },
   digitBox: {
-    width: 64,
-    height: 72,
-    backgroundColor: "rgba(43,58,48,0.06)",
-    borderRadius: 16,
+    width: 66,
+    height: 78,
+    backgroundColor: "rgba(255,255,255,0.10)",
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: theme.borderSoft,
+    borderColor: "rgba(255,255,255,0.22)",
     alignItems: "center",
     justifyContent: "center",
   },
-  profileCard: {
-    backgroundColor: theme.surface,
-    borderRadius: 24,
-    paddingVertical: 20,
-    paddingHorizontal: 24,
-    borderWidth: 1,
-    borderColor: theme.borderSoft,
-    alignItems: "center",
-    alignSelf: "center",
-    width: "100%",
-    maxWidth: 420,
-  },
-  sevTag: {
-    backgroundColor: theme.accentSoft,
-    paddingHorizontal: 14,
-    paddingVertical: 5,
-    borderRadius: 999,
-  },
-  note: {
-    maxWidth: 380,
-    alignSelf: "center",
-    paddingHorizontal: 4,
-    lineHeight: 23,
-  },
-  ctaBlock: { gap: 10 },
+  profileBlock: { alignItems: "center", width: "100%", maxWidth: 440, marginTop: 24 },
+  sevTag: { backgroundColor: "rgba(87,199,255,0.16)", borderWidth: 1, borderColor: "rgba(255,255,255,0.16)", paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999 },
+  note: { maxWidth: 430, alignSelf: "center", marginTop: 22, lineHeight: 23 },
+  ctaBlock: { gap: 10, marginTop: 12 },
   primaryBtn: {
-    backgroundColor: theme.primary,
-    paddingVertical: 18,
-    borderRadius: 999,
+    minHeight: 52,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+    overflow: "hidden",
   },
+  primaryGradient: { width: "100%", minHeight: 52, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 },
   secondaryBtn: {
-    paddingVertical: 16,
-    borderRadius: 999,
+    minHeight: 50,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1.5,
-    borderColor: theme.primary,
-    backgroundColor: theme.surface,
+    borderColor: "rgba(255,255,255,0.28)",
+    backgroundColor: "rgba(255,255,255,0.08)",
   },
 });

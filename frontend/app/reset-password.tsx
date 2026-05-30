@@ -4,6 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { theme } from "@/src/theme";
 import { T } from "@/src/components/Typography";
+import PasswordInput from "@/src/components/PasswordInput";
 
 const HERO_BG = "https://static.prod-images.emergentagent.com/jobs/0ff43180-0fdd-4eb7-a3a2-f49a414159e8/images/8177347f2d5512a27dc0af04ed126ce500bb6cdacb283eeee78621e67e0b7dd8.png";
 
@@ -88,10 +89,10 @@ export default function ResetPasswordScreen() {
 
           <View style={styles.form}>
             <T variant="label" color={theme.textSecondary} style={styles.lbl}>Új jelszó (min. 8 karakter)</T>
-            <TextInput style={styles.input} value={password} onChangeText={setPassword} placeholder="Új jelszó" placeholderTextColor={theme.textSecondary} secureTextEntry />
+            <PasswordInput value={password} onChangeText={setPassword} placeholder="Új jelszó" />
 
             <T variant="label" color={theme.textSecondary} style={styles.lbl}>Új jelszó megerősítése</T>
-            <TextInput style={styles.input} value={passwordConfirm} onChangeText={setPasswordConfirm} placeholder="Megerősítés" placeholderTextColor={theme.textSecondary} secureTextEntry />
+            <PasswordInput value={passwordConfirm} onChangeText={setPasswordConfirm} placeholder="Megerősítés" />
 
             {error ? <T variant="small" color={theme.danger} style={{ marginTop: 12 }}>{error}</T> : null}
 

@@ -1,13 +1,25 @@
 import React, { useState } from "react";
 import {
-  View, StyleSheet, TouchableOpacity, Pressable, ActivityIndicator, TextInput,
-  KeyboardAvoidingView, Platform, ScrollView, Modal,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Link, useRouter } from "expo-router";
 import { useAuth } from "@/src/auth/AuthContext";
-import { theme } from "@/src/theme";
+import { shadow, theme } from "@/src/theme";
 import { T } from "@/src/components/Typography";
+import PasswordInput from "@/src/components/PasswordInput";
+import ContentBackground from "@/src/components/ContentBackground";
 
 import { gdprText } from "@/src/constants/docs/gdpr";
 import { termsText } from "@/src/constants/docs/terms";
@@ -27,151 +39,128 @@ export default function RegisterScreen() {
   const submit = async () => {
     setError(null);
     if (!email.trim() || !name.trim() || !password) {
-      setError("Kérlek tölts ki minden mezőt."); return;
+      setError("Kérlek, tölts ki minden mezőt.");
+      return;
     }
     if (password.length < 8) {
-      setError("A jelszó legalább 8 karakter legyen."); return;
+      setError("A jelszó legalább 8 karakter legyen.");
+      return;
     }
     if (!acceptedTerms) {
-      setError("A regisztrációhoz el kell fogadnod a felhasználási feltételeket és a GDPR nyilatkozatot.");
+      setError("A regisztrációhoz el kell fogadnod a felhasználási feltételeket és az adatkezelési tájékoztatót.");
       return;
     }
     setBusy(true);
     try {
       const r = await register(email.trim(), name.trim(), password);
-      if (!r.ok) setError(r.error || "Regisztrációs hiba");
+      if (!r.ok) setError(r.error || "Nem sikerült regisztrálni.");
       else router.replace("/");
     } catch (e: any) {
-      setError(e?.message || "Regisztrációs hiba");
+      setError(e?.message || "Nem sikerült regisztrálni.");
     } finally {
       setBusy(false);
     }
   };
 
-  const openDocModal = (title: string, text: string) => {
-    setDocModal({ title, text });
-  };
-
   return (
     <SafeAreaView style={styles.safe} testID="register-screen">
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        <ContentBackground>
+          <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            <View style={styles.hero}>
+              <T variant="caption" color={theme.accentSoft} style={styles.heroCaption}>ESV-MODELL</T>
+              <T variant="display" color={theme.textOnDark} style={styles.heroTitle}>Fiók létrehozása</T>
+              <T variant="body" color="rgba(245,249,255,0.72)" align="center" style={styles.heroSubtitle}>
+                Pár adat után elindíthatod az első önismereti mérést.
+              </T>
+            </View>
 
-          {/* Dark hero */}
-          <View style={styles.hero}>
-            <T variant="caption" color={theme.accentSoft} style={styles.heroCaption}>ESV-MODELL</T>
-            <T variant="display" color={theme.textOnDark} style={styles.heroTitle}>Fiók létrehozása</T>
-            <View style={styles.heroRule} />
-            <T variant="body" color="rgba(240,237,229,0.6)" align="center" style={{ maxWidth: 280 }}>
-              Pár adat megadásával máris elindulhat a folyamat.
-            </T>
-          </View>
-
-          {/* Light form sheet */}
-          <View style={styles.formSheet}>
-            <View style={styles.fieldGroup}>
-              <T variant="caption" color={theme.accent} style={styles.lbl}>Név</T>
+            <View style={styles.formSheet}>
+            <View style={[styles.formCard, shadow.card]}>
+              <FieldLabel text="Név" />
               <TextInput
                 style={styles.input}
                 value={name}
                 onChangeText={setName}
                 placeholder="Teljes név"
-                placeholderTextColor={theme.textSecondary}
+                placeholderTextColor={styles.placeholderColor.color}
                 testID="reg-name"
               />
-            </View>
 
-            <View style={styles.fieldGroup}>
-              <T variant="caption" color={theme.accent} style={styles.lbl}>Email</T>
+              <FieldLabel text="Email" />
               <TextInput
                 style={styles.input}
                 value={email}
                 onChangeText={setEmail}
                 placeholder="name@name.hu"
-                placeholderTextColor={theme.textSecondary}
+                placeholderTextColor={styles.placeholderColor.color}
                 keyboardType="email-address"
                 autoCapitalize="none"
                 autoCorrect={false}
                 testID="reg-email"
               />
-            </View>
 
-            <View style={styles.fieldGroup}>
-              <T variant="caption" color={theme.accent} style={styles.lbl}>Jelszó (min. 8 karakter)</T>
-              <TextInput
-                style={styles.input}
+              <FieldLabel text="Jelszó" />
+              <PasswordInput
                 value={password}
                 onChangeText={setPassword}
-                placeholder=" "
-                placeholderTextColor={theme.textSecondary}
-                secureTextEntry
+                placeholder="Legalább 8 karakter"
+                placeholderTextColor={styles.placeholderColor.color}
+                containerStyle={styles.passwordBox}
+                style={styles.passwordInput}
                 testID="reg-password"
               />
-            </View>
 
-            <View style={styles.checkboxContainer}>
-              <TouchableOpacity
-                style={[styles.checkbox, acceptedTerms && styles.checkboxChecked]}
-                onPress={() => setAcceptedTerms(!acceptedTerms)}
-                activeOpacity={0.8}
-              >
-                {acceptedTerms && <View style={styles.checkboxInner} />}
+              <TouchableOpacity style={styles.checkboxContainer} onPress={() => setAcceptedTerms(!acceptedTerms)} activeOpacity={0.85}>
+                <View style={[styles.checkbox, acceptedTerms && styles.checkboxChecked]}>
+                  {acceptedTerms ? <Ionicons name="checkmark" size={15} color={theme.white} /> : null}
+                </View>
+                <View style={styles.checkboxTextContainer}>
+                  <T variant="small" color="rgba(247,251,255,0.70)">
+                    Elfogadom a{" "}
+                    <T color={theme.accentDeep} style={styles.linkText} onPress={() => setDocModal({ title: "Felhasználási feltételek", text: termsText })}>Felhasználási feltételeket</T>
+                    , az{" "}
+                    <T color={theme.accentDeep} style={styles.linkText} onPress={() => setDocModal({ title: "Adatkezelési tájékoztató", text: gdprText })}>Adatkezelési tájékoztatót</T>
+                    , és elolvastam a{" "}
+                    <T color={theme.accentDeep} style={styles.linkText} onPress={() => setDocModal({ title: "Myra Kisokos", text: kisokosText })}>Myra Kisokost</T>
+                    .
+                  </T>
+                </View>
               </TouchableOpacity>
-              <View style={styles.checkboxTextContainer}>
-                <T variant="small" color={theme.textSecondary}>
-                  Elfogadom a{" "}
-                  <T color={theme.accent} style={styles.linkText} onPress={() => openDocModal("Felhasználási feltételek", termsText)}>Felhasználási feltételeket</T>
-                  , a{" "}
-                  <T color={theme.accent} style={styles.linkText} onPress={() => openDocModal("GDPR Adatkezelés", gdprText)}>GDPR nyilatkozatot</T>
-                  , és elolvastam a{" "}
-                  <T color={theme.accent} style={styles.linkText} onPress={() => openDocModal("Myra Kisokos", kisokosText)}>Myra Kisokost</T>
-                  .
-                </T>
+
+              {error ? <T variant="small" color={theme.danger} style={styles.error} testID="reg-error">{error}</T> : null}
+
+              <TouchableOpacity style={styles.primaryBtn} onPress={submit} disabled={busy} testID="reg-submit" activeOpacity={0.88}>
+                <LinearGradient colors={[theme.accentDeep, theme.primarySoft]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.primaryGradient}>
+                  {busy ? <ActivityIndicator color={theme.white} /> : <T variant="title" color={theme.white}>Regisztráció</T>}
+                </LinearGradient>
+              </TouchableOpacity>
+
+              <View style={styles.foot}>
+                <T variant="small" color="rgba(247,251,255,0.70)">Már van fiókod? </T>
+                <Link href="/login" asChild>
+                  <Pressable testID="link-login">
+                    <T variant="small" color={theme.accentDeep} style={styles.link}>Jelentkezz be</T>
+                  </Pressable>
+                </Link>
               </View>
             </View>
-
-            {error ? <T variant="small" color={theme.danger} style={{ marginTop: 8 }} testID="reg-error">{error}</T> : null}
-
-            <TouchableOpacity style={styles.primaryBtn} onPress={submit} disabled={busy} testID="reg-submit">
-              {busy ? <ActivityIndicator color={theme.white} /> : <T variant="title" color={theme.white}>Regisztráció</T>}
-            </TouchableOpacity>
-
-            <View style={styles.foot}>
-              <T variant="small" color={theme.textSecondary}>Már van fiókod? </T>
-              <Link href="/login" asChild>
-                <Pressable testID="link-login">
-                  <T variant="small" color={theme.accent} style={{ fontWeight: "bold" }}>Jelentkezz be</T>
-                </Pressable>
-              </Link>
             </View>
-
-            <View style={styles.supportRow}>
-              <T variant="small" color={theme.textSecondary}>Segítség: </T>
-              <T variant="small" color={theme.accent}>myra-project@research.hu</T>
-            </View>
-          </View>
-
-        </ScrollView>
+          </ScrollView>
+        </ContentBackground>
       </KeyboardAvoidingView>
 
-      <Modal
-        visible={!!docModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setDocModal(null)}
-      >
+      <Modal visible={!!docModal} transparent animationType="slide" onRequestClose={() => setDocModal(null)}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
               <T variant="h2">{docModal?.title}</T>
-              <TouchableOpacity onPress={() => setDocModal(null)}>
+              <TouchableOpacity onPress={() => setDocModal(null)} style={styles.closeBtn}>
                 <T variant="label" color={theme.primary}>Bezár</T>
               </TouchableOpacity>
             </View>
-            <ScrollView showsVerticalScrollIndicator={true} style={{ flex: 1 }}>
-              <T variant="small" color={theme.textSecondary} style={{ lineHeight: 20 }}>
-                {docModal?.text}
-              </T>
+            <ScrollView showsVerticalScrollIndicator style={{ flex: 1 }}>
+              <T variant="small" color={theme.textSecondary} style={{ lineHeight: 20 }}>{docModal?.text}</T>
             </ScrollView>
           </View>
         </View>
@@ -180,112 +169,81 @@ export default function RegisterScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: theme.primary },
-  scroll: { flexGrow: 1 },
+function FieldLabel({ text }: { text: string }) {
+  return <T variant="caption" color={theme.accentSoft} style={styles.lbl}>{text}</T>;
+}
 
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: theme.primaryDark },
+  scroll: { flexGrow: 1 },
   hero: {
-    backgroundColor: theme.primary,
     alignItems: "center",
-    paddingTop: 44,
-    paddingBottom: 48,
+    paddingTop: 50,
+    paddingBottom: 30,
     paddingHorizontal: 28,
   },
-  heroCaption: { letterSpacing: 2.4, fontSize: 10, marginBottom: 8 },
-  heroTitle: {
-    fontSize: 34,
-    color: theme.textOnDark,
-    textAlign: "center",
-    marginBottom: 16,
-  },
-  heroRule: {
-    width: 32,
-    height: 2,
-    backgroundColor: theme.accent,
-    borderRadius: 1,
-    marginBottom: 14,
-  },
-
+  heroCaption: { fontSize: 10, letterSpacing: 1.4 },
+  heroTitle: { fontSize: 38, lineHeight: 44, textAlign: "center", marginTop: 16 },
+  heroSubtitle: { maxWidth: 300, marginTop: 10 },
   formSheet: {
     flex: 1,
-    backgroundColor: theme.bg,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingHorizontal: 28,
-    paddingTop: 32,
-    paddingBottom: 40,
-    marginTop: -1,
-  },
-
-  fieldGroup: { marginBottom: 16 },
-  lbl: { marginBottom: 7, letterSpacing: 1.8, fontSize: 10 },
-  input: {
-    backgroundColor: theme.surface,
-    borderRadius: 14,
     paddingHorizontal: 18,
-    paddingVertical: 16,
+    paddingTop: 0,
+    paddingBottom: 38,
+  },
+  formCard: {
+    backgroundColor: "rgba(6,19,32,0.58)",
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: "rgba(255,255,255,0.18)",
+    padding: 20,
+    backdropFilter: "blur(18px)",
+  },
+  lbl: { marginTop: 12, marginBottom: 7, letterSpacing: 1.1, fontSize: 10 },
+  input: {
+    backgroundColor: "rgba(255,255,255,0.10)",
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 15,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.22)",
     fontSize: 16,
-    color: theme.textPrimary,
+    color: theme.textOnDark,
     fontFamily: "Manrope_400Regular",
   },
-
-  checkboxContainer: {
-    flexDirection: "row",
-    marginTop: 4,
-    marginBottom: 4,
-    alignItems: "flex-start",
-    gap: 12,
+  placeholderColor: { color: "rgba(247,251,255,0.48)" },
+  passwordBox: {
+    backgroundColor: "rgba(255,255,255,0.10)",
+    borderColor: "rgba(255,255,255,0.22)",
   },
+  passwordInput: {
+    color: theme.textOnDark,
+  },
+  checkboxContainer: { flexDirection: "row", marginTop: 20, alignItems: "flex-start", gap: 12 },
   checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 6,
-    borderWidth: 2,
-    borderColor: theme.border,
-    backgroundColor: theme.surface,
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.24)",
+    backgroundColor: "rgba(255,255,255,0.10)",
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 2,
+    marginTop: 1,
   },
-  checkboxChecked: { borderColor: theme.accent },
-  checkboxInner: {
-    width: 10,
-    height: 10,
-    borderRadius: 2,
-    backgroundColor: theme.accent,
-  },
+  checkboxChecked: { borderColor: theme.accentDeep, backgroundColor: theme.accentDeep },
   checkboxTextContainer: { flex: 1 },
-  linkText: { fontWeight: "bold", textDecorationLine: "underline" },
-
-  primaryBtn: {
-    backgroundColor: theme.primary,
-    paddingVertical: 18,
-    borderRadius: 999,
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: 16,
-  },
+  linkText: { fontFamily: "Manrope_700Bold", textDecorationLine: "underline" },
+  primaryBtn: { minHeight: 52, borderRadius: 12, alignItems: "center", justifyContent: "center", marginTop: 18, overflow: "hidden" },
+  primaryGradient: { width: "100%", minHeight: 52, alignItems: "center", justifyContent: "center" },
+  error: { marginTop: 12 },
   foot: { flexDirection: "row", justifyContent: "center", marginTop: 20, alignItems: "center" },
-  supportRow: {
-    flexDirection: "row",
-    justifyContent: "center",
-    marginTop: 32,
-    paddingTop: 20,
-    borderTopWidth: 1,
-    borderTopColor: theme.borderSoft,
-  },
-
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: "rgba(20,28,24,0.55)",
-    justifyContent: "flex-end",
-  },
+  link: { fontFamily: "Manrope_700Bold" },
+  modalBackdrop: { flex: 1, backgroundColor: "rgba(3,12,22,0.64)", justifyContent: "flex-end" },
   modalCard: {
-    backgroundColor: theme.surface,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    backgroundColor: theme.surfaceStrong,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
     padding: 24,
     height: "85%",
   },
@@ -293,9 +251,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    gap: 16,
     marginBottom: 16,
     paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: theme.borderSoft,
   },
+  closeBtn: { paddingHorizontal: 12, paddingVertical: 8 },
 });

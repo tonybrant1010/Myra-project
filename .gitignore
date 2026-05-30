@@ -26,6 +26,12 @@ next-env.d.ts
 /build
 dist/
 
+# Expo / Metro
+.expo/
+.metro-cache/
+frontend/.expo/
+frontend/.metro-cache/
+
 # Environment files
 .env
 .env.*
@@ -38,6 +44,7 @@ credentials.json
 .credentials
 
 # Logs
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

@@ -4,14 +4,26 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "http://91.214.112.96:8001/api/:path*"
+      "destination": "http://91.214.112.96:8001/:path*"
+    },
+    {
+      "source": "/assets/:path*",
+      "destination": "/assets/:path*"
+    },
+    {
+      "source": "/vendor-assets/:path*",
+      "destination": "/vendor-assets/:path*"
+    },
+    {
+      "source": "/_expo/:path*",
+      "destination": "/_expo/:path*"
     },
     {
       "source": "/reset-password",
       "destination": "/reset-password.html"
     },
     {
-      "source": "/((?!api/).*)",
+      "source": "/((?!api/|assets/|vendor-assets/|_expo/|favicon.ico|site.webmanifest|apple-touch-icon.png|android-chrome-192x192.png|android-chrome-512x512.png).*)",
       "destination": "/index.html"
     }
   ]

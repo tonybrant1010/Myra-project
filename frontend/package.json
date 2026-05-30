@@ -10,7 +10,9 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "patch-dist": "node scripts/patch-dist.js",
-    "deploy": "npx expo export && npm run patch-dist && npx vercel --prod"
+    "export": "npx expo export --platform web",
+    "deploy": "npm run export && npm run patch-dist && npx vercel --prod --yes",
+    "deploy:upload": "npx vercel --prod --yes"
   },
   "dependencies": {
     "@babel/runtime": "^7.20.6",
@@ -27,6 +29,7 @@
     "expo": "~54.0.34",
     "expo-blur": "~15.0.8",
     "expo-constants": "~18.0.13",
+    "expo-document-picker": "~14.0.8",
     "expo-font": "~14.0.11",
     "expo-haptics": "~15.0.8",
     "expo-image": "~3.0.11",

@@ -1,39 +1,52 @@
 import { Platform } from "react-native";
 
 export const theme = {
-  // Paper & Surface
-  bg: "#F7F5F0", // Paper-Cream
-  surface: "#FFFFFF",
-  surfaceAlt: "#FDFCF8",
+  // Aurora Blue system
+  bg: "#061320",
+  background: "#061320",
+  surface: "rgba(255,255,255,0.94)",
+  surfaceStrong: "#FFFFFF",
+  surfaceAlt: "rgba(241,248,255,0.82)",
+  surfaceGlass: "rgba(255,255,255,0.14)",
+  surfaceGlassStrong: "rgba(255,255,255,0.22)",
 
   // Brand
-  primary: "#2B3A30", // Deep Moss
-  primaryDark: "#1E2A23", // Darker Moss (TopBar border)
-  secondary: "#6B7D70", // Sage
-  accent: "#C07C66", // Terracotta
-  accentSoft: "#E9D9D2",
+  primary: "#0A2340",
+  primaryDark: "#05111F",
+  primarySoft: "#123A62",
+  secondary: "#8BA8FF",
+  accent: "#57C7FF",
+  accentDeep: "#1D8ED8",
+  accentSoft: "#DDF5FF",
+  info: "#65B7F2",
+  warm: "#D2AA6C",
+  calm: "#55B7B0",
+  violet: "#8B8FE8",
 
   // Text
-  textPrimary: "#1E2420", // Graphite
-  textSecondary: "#5C6B61", // Muted Moss
-  textOnDark: "#F0EDE5", // Used on Deep Moss surfaces (drawer)
+  textPrimary: "#10243A",
+  textSecondary: "#60758A",
+  textMuted: "#8A9BAA",
+  textOnDark: "#F7FBFF",
 
   // Borders & dividers
-  border: "#D9D5C8",
-  borderSoft: "#EDEAE0",
+  border: "rgba(87,199,255,0.28)",
+  borderSoft: "rgba(87,199,255,0.16)",
+  borderOnDark: "rgba(255,255,255,0.18)",
 
   // Status
-  danger: "#A65442",
+  danger: "#D95F72",
+  success: "#56D68D",
   white: "#FFFFFF",
 };
 
 export const fonts = {
   display: Platform.select({
-    ios: "CormorantGaramond_500Medium",
-    android: "CormorantGaramond_500Medium",
-    default: "CormorantGaramond_500Medium",
+    ios: "Manrope_700Bold",
+    android: "Manrope_700Bold",
+    default: "Manrope_700Bold",
   })!,
-  displayBook: "CormorantGaramond_400Regular",
+  displayBook: "Manrope_600SemiBold",
   body: Platform.select({
     ios: "Manrope_400Regular",
     android: "Manrope_400Regular",
@@ -44,10 +57,10 @@ export const fonts = {
 };
 
 export const radii = {
-  sm: 12,
-  md: 18,
-  lg: 24,
-  xl: 28,
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 22,
   pill: 999,
 };
 
@@ -61,19 +74,33 @@ export const spacing = {
 };
 
 export const shadow = {
-  // Soft elevation for premium cards
   card: Platform.select({
     ios: {
-      shadowColor: "#000",
-      shadowOpacity: 0.06,
-      shadowRadius: 18,
+      shadowColor: "#03111F",
+      shadowOpacity: 0.18,
+      shadowRadius: 28,
+      shadowOffset: { width: 0, height: 14 },
+    },
+    android: { elevation: 3 },
+    default: {
+      shadowColor: "#03111F",
+      shadowOpacity: 0.18,
+      shadowRadius: 28,
+      shadowOffset: { width: 0, height: 14 },
+    },
+  })!,
+  glow: Platform.select({
+    ios: {
+      shadowColor: "#57C7FF",
+      shadowOpacity: 0.28,
+      shadowRadius: 22,
       shadowOffset: { width: 0, height: 8 },
     },
-    android: { elevation: 2 },
+    android: { elevation: 4 },
     default: {
-      shadowColor: "#000",
-      shadowOpacity: 0.06,
-      shadowRadius: 18,
+      shadowColor: "#57C7FF",
+      shadowOpacity: 0.28,
+      shadowRadius: 22,
       shadowOffset: { width: 0, height: 8 },
     },
   })!,

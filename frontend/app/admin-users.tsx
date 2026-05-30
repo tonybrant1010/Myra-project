@@ -9,6 +9,7 @@ import {
   ScrollView,
   Platform,
   Alert,
+  type LayoutChangeEvent,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth, authedFetch } from "@/src/auth/AuthContext";
@@ -34,6 +35,117 @@ type SessionItem = {
   answers: number[];
   created_at: string;
 };
+
+const chartDimensions = [
+  { key: "a" as const, label: "A", color: "#1F7FB8" },
+  { key: "p" as const, label: "P", color: "#F28E2B" },
+  { key: "h" as const, label: "H", color: "#2CA24D" },
+  { key: "c" as const, label: "C", color: "#D93645" },
+];
+
+function shortDate(value: string): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}.`;
+}
+
+function AdminTrendChart({ sessions }: { sessions: SessionItem[] }) {
+  const [chartSize, setChartSize] = useState({ width: 0, height: 0 });
+  const chartSessions = sessions.slice(0, 8).reverse();
+  const plotWidth = Math.max(chartSize.width - 40, 0);
+  const plotHeight = Math.max(chartSize.height - 18, 0);
+
+  const onChartLayout = (event: LayoutChangeEvent) => {
+    const { width, height } = event.nativeEvent.layout;
+    setChartSize({ width, height });
+  };
+
+  const pointFor = (session: SessionItem, sessionIndex: number, key: "a" | "p" | "h" | "c") => {
+    const x = chartSessions.length === 1 ? plotWidth / 2 + 28 : 28 + (sessionIndex / (chartSessions.length - 1)) * plotWidth;
+    const value = Math.max(0, Math.min(1, session.norms?.[key] ?? 0));
+    const y = (1 - value) * plotHeight + 6;
+    return { x, y };
+  };
+
+  if (chartSessions.length === 0) return null;
+
+  return (
+    <View style={styles.trendCard}>
+      <View style={styles.trendHeader}>
+        <T variant="caption" color={theme.accent}>A-P-H-C trend</T>
+        <T variant="small" color="rgba(247,251,255,0.66)">{chartSessions.length} mérés</T>
+      </View>
+      <View style={styles.chartArea} onLayout={onChartLayout}>
+        <View style={[styles.gridLine, { top: "0%" }]} />
+        <View style={[styles.gridLine, { top: "25%" }]} />
+        <View style={[styles.gridLine, { top: "50%" }]} />
+        <View style={[styles.gridLine, { top: "75%" }]} />
+        <View style={[styles.gridLine, { top: "100%" }]} />
+        <View style={styles.axisLine} />
+        <T variant="small" color="rgba(247,251,255,0.54)" style={[styles.axisLabel, { top: 0 }]}>1.0</T>
+        <T variant="small" color="rgba(247,251,255,0.54)" style={[styles.axisLabel, { bottom: 0 }]}>0</T>
+
+        {plotWidth > 0 && (
+          <>
+            {/* Előbb az összes vonal minden dimenzióra */}
+            {chartDimensions.map((dimension) => (
+              <React.Fragment key={`lines-${dimension.key}`}>
+                {chartSessions.map((session, idx) => {
+                  if (idx === 0) return null;
+                  const from = pointFor(chartSessions[idx - 1], idx - 1, dimension.key);
+                  const to = pointFor(session, idx, dimension.key);
+                  const length = Math.hypot(to.x - from.x, to.y - from.y);
+                  const angle = Math.atan2(to.y - from.y, to.x - from.x) * (180 / Math.PI);
+                  return (
+                    <View
+                      key={`${dimension.key}-${session.id}-line`}
+                      style={[
+                        styles.lineSegment,
+                        {
+                          left: from.x,
+                          top: from.y,
+                          width: length,
+                          backgroundColor: dimension.color,
+                          transform: [{ rotate: `${angle}deg` }],
+                        },
+                      ]}
+                    />
+                  );
+                })}
+              </React.Fragment>
+            ))}
+            {/* Majd az összes pont minden dimenzióra – ezek mindig a vonalak felett */}
+            {chartDimensions.map((dimension) => (
+              <React.Fragment key={`points-${dimension.key}`}>
+                {chartSessions.map((session, idx) => {
+                  const point = pointFor(session, idx, dimension.key);
+                  return (
+                    <View
+                      key={`${dimension.key}-${session.id}-point`}
+                      style={[styles.chartPoint, { left: point.x - 6, top: point.y - 6, borderColor: dimension.color }]}
+                    />
+                  );
+                })}
+              </React.Fragment>
+            ))}
+          </>
+        )}
+      </View>
+      <View style={styles.chartFooter}>
+        <T variant="small" color="rgba(247,251,255,0.58)">{shortDate(chartSessions[0]?.created_at ?? "")}</T>
+        <T variant="small" color="rgba(247,251,255,0.58)">{shortDate(chartSessions[chartSessions.length - 1]?.created_at ?? "")}</T>
+      </View>
+      <View style={styles.legend}>
+        {chartDimensions.map((dimension) => (
+          <View key={dimension.key} style={styles.legendItem}>
+            <View style={[styles.legendMark, { backgroundColor: dimension.color }]} />
+            <T variant="small" color="rgba(247,251,255,0.66)">{dimension.label}</T>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
 
 export default function AdminUsersScreen() {
   const { token, user } = useAuth();
@@ -141,7 +253,7 @@ export default function AdminUsersScreen() {
         <TopBar title="Felhasználók" showBack />
         <ContentBackground>
           <View style={styles.center}>
-            <T variant="body" color={theme.textSecondary}>Nincs jogosultságod ehhez az oldalhoz.</T>
+            <T variant="body" color="rgba(247,251,255,0.72)">Nincs jogosultságod ehhez az oldalhoz.</T>
           </View>
         </ContentBackground>
       </SafeAreaView>
@@ -154,9 +266,9 @@ export default function AdminUsersScreen() {
       <ContentBackground>
         <View style={styles.container}>
           <View style={styles.headRow}>
-            <T variant="small" color={theme.textSecondary}>{users.length} felhasználó</T>
+            <T variant="small" color="rgba(247,251,255,0.66)">{users.length} felhasználó</T>
             <TouchableOpacity onPress={load} style={styles.refreshBtn}>
-              <T variant="small" color={theme.primary}>Frissítés</T>
+              <T variant="small" color={theme.accent}>Frissítés</T>
             </TouchableOpacity>
           </View>
 
@@ -183,7 +295,7 @@ export default function AdminUsersScreen() {
                   </View>
                   <View style={{ flex: 1 }}>
                     <View style={styles.nameRow}>
-                      <T variant="label" color={theme.textPrimary} style={{ fontWeight: "600" }}>
+                      <T variant="label" color={theme.textOnDark} style={{ fontWeight: "600" }}>
                         {item.name}
                       </T>
                       {item.is_admin && (
@@ -197,7 +309,7 @@ export default function AdminUsersScreen() {
                         </View>
                       )}
                     </View>
-                    <T variant="small" color={theme.textSecondary}>{item.email}</T>
+                    <T variant="small" color="rgba(247,251,255,0.62)">{item.email}</T>
                     {item.state_code ? (
                       <T variant="small" color={theme.secondary} style={{ marginTop: 2 }}>
                         Kód: {item.state_code}
@@ -209,50 +321,52 @@ export default function AdminUsersScreen() {
                     )}
 
                     {/* Akció gombok */}
-                    {!item.is_admin && (
-                      <View style={styles.actionRow}>
-                        <TouchableOpacity
-                          style={styles.actionBtn}
-                          onPress={() => openSessions(item)}
-                        >
-                          <T variant="small" color={theme.primary}>Mérések</T>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.actionBtn}
-                          onPress={() => handleDownload(item)}
-                          disabled={downloadBusy}
-                        >
-                          <T variant="small" color={theme.primary}>CSV ↓</T>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={[styles.actionBtn, item.is_suspended && styles.actionBtnActive]}
-                          onPress={() => handleSuspend(item)}
-                          disabled={suspendBusy === item.id}
-                        >
-                          {suspendBusy === item.id ? (
-                            <ActivityIndicator size="small" color={theme.danger} />
-                          ) : (
-                            <T variant="small" color={item.is_suspended ? theme.white : theme.danger}>
-                              {item.is_suspended ? "Felold" : "Felfüggeszt"}
-                            </T>
-                          )}
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={[styles.actionBtn, styles.actionBtnDelete]}
-                          onPress={() => handleDelete(item)}
-                          disabled={deleteBusy === item.id}
-                        >
-                          {deleteBusy === item.id ? (
-                            <ActivityIndicator size="small" color={theme.white} />
-                          ) : (
-                            <T variant="small" color={theme.white}>Törlés</T>
-                          )}
-                        </TouchableOpacity>
-                      </View>
-                    )}
+                    <View style={styles.actionRow}>
+                      <TouchableOpacity
+                        style={styles.actionBtn}
+                        onPress={() => openSessions(item)}
+                      >
+                        <T variant="small" color={theme.accent}>Mérések</T>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.actionBtn}
+                        onPress={() => handleDownload(item)}
+                        disabled={downloadBusy}
+                      >
+                        <T variant="small" color={theme.accent}>CSV ↓</T>
+                      </TouchableOpacity>
+                      {!item.is_admin && (
+                        <>
+                          <TouchableOpacity
+                            style={[styles.actionBtn, item.is_suspended && styles.actionBtnActive]}
+                            onPress={() => handleSuspend(item)}
+                            disabled={suspendBusy === item.id}
+                          >
+                            {suspendBusy === item.id ? (
+                              <ActivityIndicator size="small" color={theme.danger} />
+                            ) : (
+                              <T variant="small" color={item.is_suspended ? theme.white : theme.danger}>
+                                {item.is_suspended ? "Felold" : "Felfüggeszt"}
+                              </T>
+                            )}
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[styles.actionBtn, styles.actionBtnDelete]}
+                            onPress={() => handleDelete(item)}
+                            disabled={deleteBusy === item.id}
+                          >
+                            {deleteBusy === item.id ? (
+                              <ActivityIndicator size="small" color={theme.white} />
+                            ) : (
+                              <T variant="small" color={theme.white}>Törlés</T>
+                            )}
+                          </TouchableOpacity>
+                        </>
+                      )}
+                    </View>
                   </View>
                   {item.created_at ? (
-                    <T variant="small" color={theme.textSecondary} style={{ fontSize: 11, alignSelf: "flex-start" }}>
+                    <T variant="small" color="rgba(247,251,255,0.52)" style={{ fontSize: 11, alignSelf: "flex-start" }}>
                       {new Date(item.created_at).toLocaleDateString("hu-HU")}
                     </T>
                   ) : null}
@@ -273,9 +387,9 @@ export default function AdminUsersScreen() {
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <T variant="h2">{selectedUser?.name} – Mérések</T>
+              <T variant="h2" color={theme.textOnDark}>{selectedUser?.name} – Mérések</T>
               <TouchableOpacity onPress={() => setSelectedUser(null)}>
-                <T variant="label" color={theme.primary}>Bezár</T>
+                <T variant="label" color={theme.accent}>Bezár</T>
               </TouchableOpacity>
             </View>
             {sessionsLoading ? (
@@ -283,16 +397,17 @@ export default function AdminUsersScreen() {
                 <ActivityIndicator color={theme.primary} />
               </View>
             ) : sessions.length === 0 ? (
-              <T variant="body" color={theme.textSecondary} align="center" style={{ padding: 24 }}>
+              <T variant="body" color="rgba(247,251,255,0.72)" align="center" style={{ padding: 24 }}>
                 Nincs még mérési adat.
               </T>
             ) : (
               <ScrollView showsVerticalScrollIndicator={false}>
+                <AdminTrendChart sessions={sessions} />
                 {sessions.map((s, idx) => (
                   <View key={s.id} style={styles.sessionRow}>
                     <View style={styles.sessionHead}>
-                      <T variant="label" style={{ fontWeight: "700" }}>{s.code}</T>
-                      <T variant="small" color={theme.textSecondary}>
+                      <T variant="label" color={theme.textOnDark} style={{ fontWeight: "700" }}>{s.code}</T>
+                      <T variant="small" color="rgba(247,251,255,0.62)">
                         {new Date(s.created_at).toLocaleDateString("hu-HU", {
                           year: "numeric", month: "short", day: "numeric",
                           hour: "2-digit", minute: "2-digit",
@@ -302,17 +417,17 @@ export default function AdminUsersScreen() {
                     <View style={styles.normsRow}>
                       {(["a", "p", "h", "c"] as const).map((k) => (
                         <View key={k} style={styles.normChip}>
-                          <T variant="caption" color={theme.textSecondary} style={{ letterSpacing: 1 }}>
+                          <T variant="caption" color="rgba(247,251,255,0.54)" style={{ letterSpacing: 1 }}>
                             {k.toUpperCase()}
                           </T>
-                          <T variant="label" color={theme.primary}>
+                          <T variant="label" color={theme.textOnDark}>
                             {((s.norms[k] || 0) * 100).toFixed(0)}%
                           </T>
                         </View>
                       ))}
                     </View>
                     {s.answers && s.answers.length > 0 && (
-                      <T variant="small" color={theme.textSecondary} style={{ marginTop: 6 }}>
+                      <T variant="small" color="rgba(247,251,255,0.62)" style={{ marginTop: 6 }}>
                         Válaszok: {s.answers.join(", ")}
                       </T>
                     )}
@@ -328,7 +443,7 @@ export default function AdminUsersScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: theme.primary },
+  safe: { flex: 1, backgroundColor: theme.primaryDark },
   container: { flex: 1, paddingHorizontal: 20, paddingBottom: 16 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   headRow: {
@@ -345,8 +460,9 @@ const styles = StyleSheet.create({
     padding: 14,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: theme.borderSoft,
-    backgroundColor: theme.surface,
+    borderColor: "rgba(255,255,255,0.18)",
+    backgroundColor: "rgba(6,19,32,0.58)",
+    backdropFilter: "blur(18px)",
   },
   rowSuspended: {
     borderColor: theme.danger,
@@ -356,7 +472,9 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: theme.primary,
+    backgroundColor: "rgba(87,199,255,0.18)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.16)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -367,7 +485,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   adminBadge: {
-    backgroundColor: theme.accentSoft,
+    backgroundColor: "rgba(87,199,255,0.16)",
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 999,
@@ -391,8 +509,8 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: theme.borderSoft,
-    backgroundColor: theme.background,
+    borderColor: "rgba(255,255,255,0.22)",
+    backgroundColor: "transparent",
     alignItems: "center",
     justifyContent: "center",
     minWidth: 48,
@@ -407,11 +525,13 @@ const styles = StyleSheet.create({
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(20,28,24,0.55)",
+    backgroundColor: "rgba(3,12,22,0.64)",
     justifyContent: "flex-end",
   },
   modalCard: {
-    backgroundColor: theme.surface,
+    backgroundColor: "rgba(6,19,32,0.94)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.16)",
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     padding: 24,
@@ -423,10 +543,86 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 16,
   },
+  trendCard: {
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.18)",
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+  },
+  trendHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  chartArea: {
+    height: 210,
+    marginTop: 10,
+    marginBottom: 12,
+    paddingLeft: 28,
+    position: "relative",
+    overflow: "hidden",
+  },
+  gridLine: {
+    position: "absolute",
+    left: 28,
+    right: 0,
+    height: 1,
+    backgroundColor: "rgba(255,255,255,0.12)",
+  },
+  axisLine: {
+    position: "absolute",
+    left: 28,
+    top: 0,
+    bottom: 0,
+    width: 1,
+    backgroundColor: "rgba(255,255,255,0.12)",
+  },
+  axisLabel: {
+    position: "absolute",
+    left: 0,
+  },
+  lineSegment: {
+    position: "absolute",
+    height: 3,
+    borderRadius: 2,
+    transformOrigin: "0px 1.5px",
+  },
+  chartPoint: {
+    position: "absolute",
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: "rgba(6,19,32,0.94)",
+    borderWidth: 3,
+  },
+  chartFooter: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingLeft: 28,
+  },
+  legend: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 18,
+    marginTop: 14,
+  },
+  legendItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  legendMark: {
+    width: 18,
+    height: 3,
+    borderRadius: 2,
+  },
   sessionRow: {
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: theme.borderSoft,
+    borderBottomColor: "rgba(255,255,255,0.12)",
   },
   sessionHead: {
     flexDirection: "row",
@@ -440,11 +636,11 @@ const styles = StyleSheet.create({
   },
   normChip: {
     alignItems: "center",
-    backgroundColor: theme.background,
+    backgroundColor: "rgba(255,255,255,0.08)",
     borderRadius: 10,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderWidth: 1,
-    borderColor: theme.borderSoft,
+    borderColor: "rgba(255,255,255,0.16)",
   },
 });

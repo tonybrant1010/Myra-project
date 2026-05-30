@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { View, StyleSheet, TouchableOpacity } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { theme } from "@/src/theme";
@@ -17,8 +18,15 @@ export default function TopBar({ title, showBack, rightLabel }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
-    <View style={styles.bar} testID="top-bar">
-      {/* BAL OLDAL: Navigacio */}
+    <LinearGradient
+      colors={["#04101D", "#08223B", "#123E66"]}
+      locations={[0, 0.58, 1]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={styles.bar}
+      testID="top-bar"
+    >
+      <View pointerEvents="none" style={styles.topMist} />
       <View style={styles.sideContainer}>
         {showBack ? (
           <TouchableOpacity
@@ -41,12 +49,10 @@ export default function TopBar({ title, showBack, rightLabel }: Props) {
         )}
       </View>
 
-      {/* KOZEP: Cimsor */}
       <T variant="h2" align="center" color={theme.textOnDark} style={styles.title} numberOfLines={1}>
         {title || ""}
       </T>
 
-      {/* JOBB OLDAL: Allapotkod vagy ures hely */}
       <View style={[styles.sideContainer, { alignItems: "flex-end" }]}>
         {rightLabel ? (
           <View style={styles.rightPill}>
@@ -58,7 +64,7 @@ export default function TopBar({ title, showBack, rightLabel }: Props) {
       </View>
 
       <SideMenu visible={menuOpen} onClose={() => setMenuOpen(false)} />
-    </View>
+    </LinearGradient>
   );
 }
 
@@ -68,35 +74,41 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 16,
     paddingVertical: 12,
-    minHeight: 64,
-    backgroundColor: theme.primary,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.primaryDark,
+    minHeight: 66,
+    backgroundColor: theme.bg,
+    borderBottomWidth: 0,
+    overflow: "hidden",
   },
+  topMist: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundImage:
+      "radial-gradient(ellipse at 78% 0%, rgba(87,199,255,0.26), transparent 36%), linear-gradient(118deg, rgba(255,255,255,0.06), transparent 42%, rgba(101,183,242,0.12))",
+  } as any,
   sideContainer: {
     minWidth: 52,
     justifyContent: "center",
   },
   title: {
     flex: 1,
-    fontSize: 20,
+    fontSize: 18,
+    lineHeight: 24,
   },
   iconBtn: {
     width: 40,
     height: 40,
-    backgroundColor: "rgba(255,255,255,0.10)",
-    borderRadius: 12,
+    backgroundColor: theme.surfaceGlass,
+    borderRadius: 8,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.14)",
+    borderColor: theme.borderOnDark,
   },
   rightPill: {
-    backgroundColor: "rgba(255,255,255,0.12)",
+    backgroundColor: theme.surfaceGlass,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 999,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
+    borderColor: theme.borderOnDark,
   },
 });

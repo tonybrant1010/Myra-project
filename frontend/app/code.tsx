@@ -137,11 +137,11 @@ export default function CodeScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: theme.primary },
+  safe: { flex: 1, backgroundColor: theme.primaryDark },
   container: { flex: 1, paddingHorizontal: 24, paddingBottom: 24, justifyContent: "space-between" },
   overline: { fontSize: 12, fontWeight: "600", letterSpacing: 3, color: theme.accent, marginBottom: 8, marginTop: 16 },
-  title: { fontSize: 32, fontWeight: "300", color: theme.textPrimary, marginBottom: 12 },
-  subtitle: { fontSize: 15, color: theme.textSecondary, lineHeight: 22, marginBottom: 16 },
+  title: { fontSize: 32, fontWeight: "300", color: theme.textOnDark, marginBottom: 12 },
+  subtitle: { fontSize: 15, color: "rgba(247,251,255,0.72)", lineHeight: 22, marginBottom: 16 },
   otpRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -155,17 +155,17 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontSize: 36,
     fontWeight: "300",
-    color: theme.textPrimary,
+    color: theme.textOnDark,
     borderBottomWidth: 2,
     borderColor: theme.border,
     backgroundColor: "transparent",
   },
   otpInputFilled: { borderColor: theme.primary },
   hintBox: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 },
-  hint: { color: theme.textSecondary, fontSize: 13, flex: 1 },
+  hint: { color: "rgba(247,251,255,0.66)", fontSize: 13, flex: 1 },
   error: { color: theme.danger, fontSize: 14, textAlign: "center", marginTop: 4 },
   primaryBtn: {
-    backgroundColor: theme.primary,
+    backgroundColor: theme.accentDeep,
     paddingVertical: 18,
     borderRadius: 999,
     flexDirection: "row",

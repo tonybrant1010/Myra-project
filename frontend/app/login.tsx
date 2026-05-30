@@ -1,28 +1,32 @@
 import React, { useState } from "react";
 import {
-  View,
-  StyleSheet,
-  TouchableOpacity,
-  Pressable,
   ActivityIndicator,
-  TextInput,
+  Alert,
+  Image,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
-  Image,
-  Alert,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Link, useRouter } from "expo-router";
-import { useAuth, authedFetch } from "@/src/auth/AuthContext";
-import { theme } from "@/src/theme";
+import { apiUrl, useAuth } from "@/src/auth/AuthContext";
+import { shadow, theme } from "@/src/theme";
 import { T } from "@/src/components/Typography";
+import PasswordInput from "@/src/components/PasswordInput";
+import ContentBackground from "@/src/components/ContentBackground";
 
-const MYRA_MARK = require("@/assets/images/AI_and_Psychology.png");
+const MYRA_MARK = require("@/assets/images/uj_logo1_kor.png");
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { login, token: authContextToken } = useAuth();
+  const { login } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -36,13 +40,13 @@ export default function LoginScreen() {
   const submit = async () => {
     setError(null);
     if (!email.trim() || !password) {
-      setError("Add meg az email cimedet es a jelszavad.");
+      setError("Add meg az email címedet és a jelszavad.");
       return;
     }
     setBusy(true);
     const r = await login(email.trim(), password);
     setBusy(false);
-    if (!r.ok) setError(r.error || "Bejelentkezesi hiba");
+    if (!r.ok) setError(r.error || "Nem sikerült bejelentkezni.");
     else router.replace("/");
   };
 
@@ -50,25 +54,25 @@ export default function LoginScreen() {
     setError(null);
     const trimmedEmail = email.trim();
     if (!trimmedEmail) {
-      setError("Az elfelejtett jelszo kereshez add meg az email cimedet.");
+      setError("A biztonsági kód kéréséhez add meg az email címedet.");
       return;
     }
     setBusy(true);
     try {
-      const r = await authedFetch(authContextToken, "/api/auth/forgot-password", {
+      const r = await fetch(apiUrl("/api/auth/forgot-password"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: trimmedEmail }),
       });
       if (r.ok) {
-        Alert.alert("Kod elkuldve", "Ha az email cim letezik a rendszerben, elkuld̈tuk ra a 6 jegyu biztonsagi kodot.");
+        Alert.alert("Kód elküldve", "Ha az email cím létezik a rendszerben, elküldtük rá a 6 jegyű biztonsági kódot.");
         setMode("reset");
       } else {
         const d = await r.json().catch(() => ({}));
-        setError(d?.detail || "Nem sikerult elindıtani a visszaallıtasi folyamatot.");
+        setError(d?.detail || "Nem sikerült elindítani a visszaállítási folyamatot.");
       }
     } catch {
-      setError("Halozati hiba a keres feldolgozasa kozben.");
+      setError("Hálózati hiba történt a kérés feldolgozása közben.");
     } finally {
       setBusy(false);
     }
@@ -77,256 +81,279 @@ export default function LoginScreen() {
   const handleResetSubmit = async () => {
     setError(null);
     if (!resetCode.trim() || !newPassword || !passwordConfirm) {
-      setError("Kerlek toltsd ki az osszes mezot.");
+      setError("Kérlek, töltsd ki az összes mezőt.");
       return;
     }
     if (newPassword.length < 8) {
-      setError("A jelszónak legalabb 8 karakterbol kell allnia.");
+      setError("A jelszónak legalább 8 karakterből kell állnia.");
       return;
     }
     if (newPassword !== passwordConfirm) {
-      setError("A ket jelszo nem egyezik meg.");
+      setError("A két jelszó nem egyezik meg.");
       return;
     }
     setBusy(true);
     try {
-      const response = await fetch("https://myra-project.cfd/api/auth/reset-password", {
+      const response = await fetch(apiUrl("/api/auth/reset-password"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: resetCode.trim(), new_password: newPassword }),
       });
-      const data = await response.json();
-      setBusy(false);
+      const data = await response.json().catch(() => ({}));
       if (response.ok && data.ok) {
-        Alert.alert("Sikeres jelszocsSere", "Az uj jelszavad ervénybe lepett.");
+        Alert.alert("Jelszó módosítva", "Az új jelszavad érvénybe lépett.");
         setMode("login");
-        setPassword(""); setResetCode(""); setNewPassword(""); setPasswordConfirm("");
+        setPassword("");
+        setResetCode("");
+        setNewPassword("");
+        setPasswordConfirm("");
       } else {
-        setError(data.detail || "Hibas kod vagy lejart munkamenet.");
+        setError(data.detail || "Hibás kód vagy lejárt visszaállítási folyamat.");
       }
     } catch {
+      setError("Nem sikerült elérni a szervert.");
+    } finally {
       setBusy(false);
-      setError("Nem sikerult elerni a szervert.");
     }
   };
+
+  const subtitle =
+    mode === "login"
+      ? "Mérés- és interakcióalapú mentálhigiénés alkalmazás."
+      : mode === "forgot"
+        ? "Biztonsági kódot küldünk a jelszó visszaállításához."
+        : "Írd be az emailben kapott kódot és az új jelszavad.";
 
   return (
     <SafeAreaView style={styles.safe} testID="login-screen">
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        <ContentBackground>
+          <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            <View style={styles.shell}>
+              <View style={styles.hero}>
+                <View style={[styles.logoRing, shadow.glow]}>
+                  <Image source={MYRA_MARK} style={styles.logo} resizeMode="cover" />
+                </View>
+                <T variant="caption" color={theme.accentSoft} style={styles.heroCaption}>ESV-MODELL</T>
+                <T variant="display" color={theme.textOnDark} style={styles.heroTitle}>Myra Project</T>
+                <T variant="body" color="rgba(245,249,255,0.74)" align="center" style={styles.heroSubtitle}>
+                  {subtitle}
+                </T>
+              </View>
 
-          {/* Dark hero — logo + title */}
-          <View style={styles.hero}>
-            <View style={styles.logoRing}>
-              <Image source={MYRA_MARK} style={styles.logo} resizeMode="cover" />
+              <View style={styles.formSheet}>
+              <View style={[styles.formCard, shadow.card]}>
+                {mode === "login" ? (
+                  <>
+                    <FieldLabel text="Email" />
+                    <TextInput
+                      style={styles.input}
+                      value={email}
+                      onChangeText={setEmail}
+                      placeholder="name@name.hu"
+                      placeholderTextColor={styles.placeholderColor.color}
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      testID="login-email"
+                    />
+                    <FieldLabel text="Jelszó" />
+                    <PasswordInput
+                      value={password}
+                      onChangeText={setPassword}
+                      placeholder="••••••••"
+                      placeholderTextColor={styles.placeholderColor.color}
+                      containerStyle={styles.passwordBox}
+                      style={styles.passwordInput}
+                      testID="login-password"
+                    />
+                    <TouchableOpacity onPress={() => setMode("forgot")} style={styles.forgotBtn}>
+                      <T variant="small" color={theme.accentDeep}>Elfelejtetted a jelszavad?</T>
+                    </TouchableOpacity>
+                    {error ? <T variant="small" color={theme.danger} style={styles.error} testID="login-error">{error}</T> : null}
+                    <PrimaryButton busy={busy} label="Bejelentkezés" onPress={submit} testID="login-submit" />
+                    <View style={styles.foot}>
+                      <T variant="small" color="rgba(247,251,255,0.70)">Még nincs fiókod? </T>
+                      <Link href="/register" asChild>
+                        <Pressable testID="link-register">
+                          <T variant="small" color={theme.accentDeep} style={styles.link}>Regisztrálj</T>
+                        </Pressable>
+                      </Link>
+                    </View>
+                  </>
+                ) : null}
+
+                {mode === "forgot" ? (
+                  <>
+                    <FieldLabel text="Email címed" />
+                    <TextInput
+                      style={styles.input}
+                      value={email}
+                      onChangeText={setEmail}
+                      placeholder="name@name.hu"
+                      placeholderTextColor={styles.placeholderColor.color}
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                    />
+                    {error ? <T variant="small" color={theme.danger} style={styles.error}>{error}</T> : null}
+                    <PrimaryButton busy={busy} label="Biztonsági kód kérése" onPress={handleForgotPassword} />
+                    <TextButton label="Vissza a bejelentkezéshez" onPress={() => setMode("login")} />
+                  </>
+                ) : null}
+
+                {mode === "reset" ? (
+                  <>
+                    <FieldLabel text="6 jegyű biztonsági kód" />
+                    <TextInput
+                      style={[styles.input, styles.codeInput]}
+                      value={resetCode}
+                      onChangeText={setResetCode}
+                      placeholder="123456"
+                      placeholderTextColor={styles.placeholderColor.color}
+                      keyboardType="number-pad"
+                      maxLength={6}
+                    />
+                    <FieldLabel text="Új jelszó" />
+                    <PasswordInput
+                      value={newPassword}
+                      onChangeText={setNewPassword}
+                      placeholder="Legalább 8 karakter"
+                      placeholderTextColor={styles.placeholderColor.color}
+                      containerStyle={styles.passwordBox}
+                      style={styles.passwordInput}
+                    />
+                    <FieldLabel text="Megerősítés" />
+                    <PasswordInput
+                      value={passwordConfirm}
+                      onChangeText={setPasswordConfirm}
+                      placeholder="Új jelszó még egyszer"
+                      placeholderTextColor={styles.placeholderColor.color}
+                      containerStyle={styles.passwordBox}
+                      style={styles.passwordInput}
+                    />
+                    {error ? <T variant="small" color={theme.danger} style={styles.error}>{error}</T> : null}
+                    <PrimaryButton busy={busy} label="Jelszó mentése" onPress={handleResetSubmit} />
+                    <TextButton label="Mégis inkább bejelentkezem" onPress={() => setMode("login")} />
+                  </>
+                ) : null}
+
+                <View style={styles.supportRow}>
+                  <Ionicons name="mail-outline" size={15} color="rgba(247,251,255,0.58)" />
+                  <T variant="small" color="rgba(247,251,255,0.62)">myra-project@research.hu</T>
+                </View>
+              </View>
+              </View>
             </View>
-            <T variant="caption" color={theme.accentSoft} style={styles.heroCaption}>ESV-MODELL</T>
-            <T variant="display" color={theme.textOnDark} style={styles.heroTitle}>Myra - Project</T>
-            <View style={styles.heroRule} />
-            <T variant="body" color="rgba(240,237,229,0.6)" align="center" style={{ maxWidth: 280 }}>
-              {mode === "login" && "Meres- es interakcioalapu mentalhigienés alkalmazas."}
-              {mode === "forgot" && "Biztonsagi kod igénylése jelszó-visszaallıtashoz."}
-              {mode === "reset" && "ırd be az emailben kapott 6 jegyű kodot és az uj jelszavad."}
-            </T>
-          </View>
-
-          {/* Light form area */}
-          <View style={styles.formSheet}>
-
-            {mode === "login" && (
-              <>
-                <View style={styles.fieldGroup}>
-                  <T variant="caption" color={theme.accent} style={styles.lbl}>Email</T>
-                  <TextInput
-                    style={styles.input}
-                    value={email}
-                    onChangeText={setEmail}
-                    placeholder="name@name.hu"
-                    placeholderTextColor={theme.textSecondary}
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    testID="login-email"
-                  />
-                </View>
-                <View style={styles.fieldGroup}>
-                  <T variant="caption" color={theme.accent} style={styles.lbl}>Jelszó</T>
-                  <TextInput
-                    style={styles.input}
-                    value={password}
-                    onChangeText={setPassword}
-                    placeholder=" "
-                    placeholderTextColor={theme.textSecondary}
-                    secureTextEntry
-                    testID="login-password"
-                  />
-                </View>
-                <TouchableOpacity onPress={() => setMode("forgot")} style={styles.forgotBtn}>
-                  <T variant="small" color={theme.textSecondary} style={{ textDecorationLine: "underline" }}>
-                    Elfelejttetted a jelszavad?
-                  </T>
-                </TouchableOpacity>
-                {error ? <T variant="small" color={theme.danger} style={{ marginTop: 8 }} testID="login-error">{error}</T> : null}
-                <TouchableOpacity style={styles.primaryBtn} onPress={submit} disabled={busy} testID="login-submit">
-                  {busy ? <ActivityIndicator color={theme.white} /> : <T variant="title" color={theme.white}>Bejelentkezés</T>}
-                </TouchableOpacity>
-                <View style={styles.foot}>
-                  <T variant="small" color={theme.textSecondary}>Még nincs fiókod? </T>
-                  <Link href="/register" asChild>
-                    <Pressable testID="link-register">
-                      <T variant="small" color={theme.accent} style={{ fontWeight: "bold" }}>Regisztrálj</T>
-                    </Pressable>
-                  </Link>
-                </View>
-              </>
-            )}
-
-            {mode === "forgot" && (
-              <>
-                <View style={styles.fieldGroup}>
-                  <T variant="caption" color={theme.accent} style={styles.lbl}>Email cimed</T>
-                  <TextInput
-                    style={styles.input}
-                    value={email}
-                    onChangeText={setEmail}
-                    placeholder="name@name.hu"
-                    placeholderTextColor={theme.textSecondary}
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                  />
-                </View>
-                {error ? <T variant="small" color={theme.danger} style={{ marginTop: 8 }}>{error}</T> : null}
-                <TouchableOpacity style={styles.primaryBtn} onPress={handleForgotPassword} disabled={busy}>
-                  {busy ? <ActivityIndicator color={theme.white} /> : <T variant="title" color={theme.white}>Biztonsagi kod kerese</T>}
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setMode("login")} style={{ alignSelf: "center", marginTop: 20 }}>
-                  <T variant="small" color={theme.accent}>Vissza a bejelentkezeshez</T>
-                </TouchableOpacity>
-              </>
-            )}
-
-            {mode === "reset" && (
-              <>
-                <View style={styles.fieldGroup}>
-                  <T variant="caption" color={theme.accent} style={styles.lbl}>6 jegyű biztonsagi kod</T>
-                  <TextInput
-                    style={[styles.input, { letterSpacing: 6, textAlign: "center", fontSize: 22 }]}
-                    value={resetCode}
-                    onChangeText={setResetCode}
-                    placeholder="123456"
-                    placeholderTextColor={theme.textSecondary}
-                    keyboardType="number-pad"
-                    maxLength={6}
-                  />
-                </View>
-                <View style={styles.fieldGroup}>
-                  <T variant="caption" color={theme.accent} style={styles.lbl}>Uj jelszo (min. 8 karakter)</T>
-                  <TextInput style={styles.input} value={newPassword} onChangeText={setNewPassword} placeholder="Uj jelszo" placeholderTextColor={theme.textSecondary} secureTextEntry />
-                </View>
-                <View style={styles.fieldGroup}>
-                  <T variant="caption" color={theme.accent} style={styles.lbl}>Megerosites</T>
-                  <TextInput style={styles.input} value={passwordConfirm} onChangeText={setPasswordConfirm} placeholder="Megerosites" placeholderTextColor={theme.textSecondary} secureTextEntry />
-                </View>
-                {error ? <T variant="small" color={theme.danger} style={{ marginTop: 8 }}>{error}</T> : null}
-                <TouchableOpacity style={styles.primaryBtn} onPress={handleResetSubmit} disabled={busy}>
-                  {busy ? <ActivityIndicator color={theme.white} /> : <T variant="title" color={theme.white}>Jelszo mentese</T>}
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setMode("login")} style={{ alignSelf: "center", marginTop: 20 }}>
-                  <T variant="small" color={theme.accent}>Megis inkabb bejelentkeznek</T>
-                </TouchableOpacity>
-              </>
-            )}
-
-            <View style={styles.supportRow}>
-              <T variant="small" color={theme.textSecondary}>Segitseg: </T>
-              <T variant="small" color={theme.accent}>myra-project@research.hu</T>
-            </View>
-
-          </View>
-
-        </ScrollView>
+          </ScrollView>
+        </ContentBackground>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: theme.primary },
-  scroll: { flexGrow: 1 },
+function FieldLabel({ text }: { text: string }) {
+  return <T variant="caption" color={theme.accentSoft} style={styles.lbl}>{text}</T>;
+}
 
+function PrimaryButton({ busy, label, onPress, testID }: { busy: boolean; label: string; onPress: () => void; testID?: string }) {
+  return (
+    <TouchableOpacity style={styles.primaryBtn} onPress={onPress} disabled={busy} testID={testID} activeOpacity={0.88}>
+      <LinearGradient colors={[theme.accentDeep, theme.primarySoft]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.primaryGradient}>
+        {busy ? <ActivityIndicator color={theme.white} /> : <T variant="title" color={theme.white}>{label}</T>}
+      </LinearGradient>
+    </TouchableOpacity>
+  );
+}
+
+function TextButton({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity onPress={onPress} style={styles.textButton}>
+      <T variant="small" color={theme.accentDeep}>{label}</T>
+    </TouchableOpacity>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: theme.primaryDark },
+  scroll: { flexGrow: 1 },
+  shell: { flex: 1 },
   hero: {
-    backgroundColor: theme.primary,
     alignItems: "center",
-    paddingTop: 44,
-    paddingBottom: 48,
+    paddingTop: 48,
+    paddingBottom: 30,
     paddingHorizontal: 28,
   },
   logoRing: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    borderWidth: 1.5,
-    borderColor: "rgba(255,255,255,0.15)",
+    width: 94,
+    height: 94,
+    borderRadius: 47,
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.28)",
     overflow: "hidden",
-    marginBottom: 20,
-    backgroundColor: "rgba(255,255,255,0.08)",
+    marginBottom: 18,
+    backgroundColor: "rgba(255,255,255,0.12)",
   },
-  logo: { width: 96, height: 96 },
-  heroCaption: { letterSpacing: 2.4, fontSize: 10, marginBottom: 8 },
-  heroTitle: {
-    fontSize: 38,
-    color: theme.textOnDark,
-    textAlign: "center",
-    marginBottom: 16,
-  },
-  heroRule: {
-    width: 32,
-    height: 2,
-    backgroundColor: theme.accent,
-    borderRadius: 1,
-    marginBottom: 14,
-  },
-
+  logo: { width: 94, height: 94 },
+  heroCaption: { fontSize: 10, letterSpacing: 1.4 },
+  heroTitle: { fontSize: 40, lineHeight: 46, textAlign: "center", marginTop: 14 },
+  heroSubtitle: { maxWidth: 310, marginTop: 10 },
   formSheet: {
     flex: 1,
-    backgroundColor: theme.bg,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingHorizontal: 28,
-    paddingTop: 32,
-    paddingBottom: 40,
-    marginTop: -1,
-  },
-
-  fieldGroup: { marginBottom: 16 },
-  lbl: { marginBottom: 7, letterSpacing: 1.8, fontSize: 10 },
-  input: {
-    backgroundColor: theme.surface,
-    borderRadius: 14,
     paddingHorizontal: 18,
-    paddingVertical: 16,
+    paddingTop: 0,
+    paddingBottom: 38,
+  },
+  formCard: {
+    backgroundColor: "rgba(6,19,32,0.58)",
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: theme.border,
+    borderColor: "rgba(255,255,255,0.18)",
+    padding: 20,
+    backdropFilter: "blur(18px)",
+  },
+  lbl: { marginTop: 12, marginBottom: 7, letterSpacing: 1.1, fontSize: 10 },
+  input: {
+    backgroundColor: "rgba(255,255,255,0.10)",
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 15,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.22)",
     fontSize: 16,
-    color: theme.textPrimary,
+    color: theme.textOnDark,
     fontFamily: "Manrope_400Regular",
   },
-  forgotBtn: { alignSelf: "flex-end", paddingVertical: 4, marginBottom: 4 },
+  placeholderColor: { color: "rgba(247,251,255,0.48)" },
+  passwordBox: {
+    backgroundColor: "rgba(255,255,255,0.10)",
+    borderColor: "rgba(255,255,255,0.22)",
+  },
+  passwordInput: {
+    color: theme.textOnDark,
+  },
+  codeInput: { letterSpacing: 6, textAlign: "center", fontSize: 22 },
+  forgotBtn: { alignSelf: "flex-end", paddingVertical: 10 },
   primaryBtn: {
-    backgroundColor: theme.primary,
-    paddingVertical: 18,
-    borderRadius: 999,
+    minHeight: 52,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 8,
+    marginTop: 16,
+    overflow: "hidden",
   },
+  primaryGradient: { minHeight: 52, alignItems: "center", justifyContent: "center", width: "100%" },
+  textButton: { alignSelf: "center", paddingVertical: 18 },
+  error: { marginTop: 10 },
   foot: { flexDirection: "row", justifyContent: "center", marginTop: 20, alignItems: "center" },
+  link: { fontFamily: "Manrope_700Bold" },
   supportRow: {
     flexDirection: "row",
+    gap: 6,
     justifyContent: "center",
-    marginTop: 32,
-    paddingTop: 20,
+    alignItems: "center",
+    marginTop: 30,
+    paddingTop: 18,
     borderTopWidth: 1,
-    borderTopColor: theme.borderSoft,
+    borderTopColor: "rgba(255,255,255,0.14)",
   },
 });

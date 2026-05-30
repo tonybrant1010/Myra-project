@@ -1,1 +1,0 @@
-{"dependencies":[],"output":[{"data":{"code":"'undefined'!=typeof globalThis?globalThis:'undefined'!=typeof global?global:'undefined'!=typeof window&&window;","lineCount":1,"map":[[1,111]],"functionMap":{"names":["<global>"],"mappings":"AAA"}},"type":"js/script"}]}

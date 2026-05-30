@@ -1,52 +1,44 @@
 import React, { useEffect, useState } from "react";
-import {
-  View,
-  StyleSheet,
-  TouchableOpacity,
-  Modal,
-  ActivityIndicator,
-  ScrollView,
-} from "react-native";
+import { ActivityIndicator, Modal, ScrollView, StyleSheet, TouchableOpacity, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { useAuth, authedFetch } from "@/src/auth/AuthContext";
-import { theme } from "@/src/theme";
+import { authedFetch, useAuth } from "@/src/auth/AuthContext";
+import { shadow, theme } from "@/src/theme";
 import { T } from "@/src/components/Typography";
 
-type Session = {
-  id: string;
-  code: string;
-  created_at: string;
-};
+type Session = { id: string; code: string; created_at: string };
+type Props = { visible: boolean; onClose: () => void };
 
 function formatSessionLabel(s: Session): string {
   const d = new Date(s.created_at);
   const date = `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}.`;
-  return `${s.code} – ${date}`;
+  return `${s.code} - ${date}`;
 }
-
-type Props = {
-  visible: boolean;
-  onClose: () => void;
-};
 
 export default function SideMenu({ visible, onClose }: Props) {
   const router = useRouter();
   const { user, token, logout, setUserLocal } = useAuth();
   const [busy, setBusy] = useState(false);
   const [confirmRetake, setConfirmRetake] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmDeleteAccount, setConfirmDeleteAccount] = useState(false);
+  const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
 
-  useEffect(() => {
-    if (!visible || !token) return;
+  const loadSessions = () => {
+    if (!token) return;
     setSessionsLoading(true);
     authedFetch(token, "/api/quiz/sessions")
       .then((r) => r.json())
       .then((d) => setSessions(d.sessions || []))
       .catch(() => setSessions([]))
       .finally(() => setSessionsLoading(false));
+  };
+
+  useEffect(() => {
+    if (visible) loadSessions();
   }, [visible, token]);
 
   const handleRetake = async () => {
@@ -64,6 +56,22 @@ export default function SideMenu({ visible, onClose }: Props) {
     }
   };
 
+  const handleDeleteSession = async () => {
+    if (!sessionToDelete) return;
+    setBusy(true);
+    try {
+      const r = await authedFetch(token, `/api/quiz/sessions/${sessionToDelete.id}`, { method: "DELETE" });
+      if (r.ok) {
+        const data = await r.json().catch(() => ({}));
+        setSessions((items) => items.filter((item) => item.id !== sessionToDelete.id));
+        setUserLocal((u) => (u ? { ...u, state_code: data.state_code ?? null } : u));
+        setSessionToDelete(null);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleLogout = async () => {
     await logout();
     onClose();
@@ -75,7 +83,7 @@ export default function SideMenu({ visible, onClose }: Props) {
     try {
       const r = await authedFetch(token, "/api/auth/delete-account", { method: "DELETE" });
       if (r.ok) {
-        setConfirmDelete(false);
+        setConfirmDeleteAccount(false);
         await logout();
         onClose();
         router.replace("/login");
@@ -90,326 +98,246 @@ export default function SideMenu({ visible, onClose }: Props) {
       <View style={styles.backdrop}>
         <TouchableOpacity style={styles.backdropTouch} activeOpacity={1} onPress={onClose} />
         <SafeAreaView style={styles.drawer} edges={["top", "left", "bottom"]}>
-          <View style={styles.drawerInner} testID="side-menu">
-            <View style={styles.header}>
-              <View style={styles.avatarRow}>
-                <View style={[styles.avatar, styles.avatarFallback]}>
-                  <T variant="h2" color={theme.textOnDark}>
-                    {user?.name ? user.name.charAt(0).toUpperCase() : "?"}
-                  </T>
+          <LinearGradient colors={["#061320", "#0A2340", "#11365A"]} style={styles.drawerGradient}>
+            <View pointerEvents="none" style={styles.drawerMist} />
+            <View style={styles.drawerInner} testID="side-menu">
+              <View style={styles.header}>
+                <View style={styles.avatarFallback}>
+                  <T variant="h2" color={theme.textOnDark}>{user?.name ? user.name.charAt(0).toUpperCase() : "?"}</T>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <T variant="h2" color={theme.textOnDark} testID="menu-user-name">{user?.name || "Felhasználó"}</T>
+                  <T variant="small" color="rgba(247,251,255,0.68)">{user?.email}</T>
                 </View>
               </View>
-              <T variant="h2" color={theme.textOnDark} style={{ marginTop: 16 }} testID="menu-user-name">
-                {user?.name || "Felhasználó"}
-              </T>
-              <T variant="small" color="#B5BFB8">
-                {user?.email}
-              </T>
 
               {user?.state_code ? (
                 <View style={styles.codeBadge}>
-                  <T variant="caption" color={theme.accent} style={{ fontSize: 10 }}>
-                    JELENLEGI ÁLLAPOTKÓD
-                  </T>
-                  <T
-                    variant="hero"
-                    color={theme.textOnDark}
-                    style={{ fontSize: 40, lineHeight: 46, letterSpacing: 6, marginTop: 4 }}
-                    testID="menu-current-code"
-                  >
+                  <T variant="caption" color={theme.accentSoft} style={{ fontSize: 10 }}>Jelenlegi állapotkód</T>
+                  <T variant="hero" color={theme.textOnDark} style={styles.codeText} testID="menu-current-code">
                     {user.state_code}
                   </T>
                 </View>
               ) : null}
-            </View>
 
-            {/* Session lista — állapotkód buborék alatt */}
-            {sessions.length > 0 && (
-              <View style={styles.sessionsSection}>
-                <T variant="caption" color="#7A9188" style={styles.sessionsTitle}>
-                  KORÁBBI MÉRÉSEK
-                </T>
-                {sessionsLoading ? (
-                  <ActivityIndicator color={theme.accent} size="small" style={{ marginTop: 8 }} />
-                ) : (
-                  sessions.map((s, idx) => (
-                    <TouchableOpacity
-                      key={s.id}
-                      style={[styles.sessionItem, idx === 0 && styles.sessionItemActive]}
-                      onPress={() => {
-                        onClose();
-                        router.push({ pathname: "/chat", params: { session_id: s.id } });
-                      }}
-                      testID={`session-item-${s.id}`}
-                    >
-                      <T
-                        variant="small"
-                        color={idx === 0 ? theme.accent : "#9EAAA1"}
-                      >
-                        {formatSessionLabel(s)}
-                      </T>
-                    </TouchableOpacity>
-                  ))
-                )}
-              </View>
-            )}
-
-            <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
-              <View style={styles.menu}>
-                <MenuItem
-                  label="Új mérés"
-                  onPress={() => setConfirmRetake(true)}
-                  testID="menu-retake"
-                  disabled={busy}
-                />
+              <View style={styles.actionBox}>
+                <MenuItem label="Főoldal" icon="home-outline" onPress={() => { onClose(); router.replace("/welcome"); }} testID="menu-welcome" />
+                <MenuItem label="Új mérés" icon="analytics-outline" onPress={() => setConfirmRetake(true)} testID="menu-retake" disabled={busy} />
                 {user?.is_admin ? (
                   <>
-                    <MenuItem
-                      label="Chatbot beállítások"
-                      onPress={() => {
-                        onClose();
-                        router.push("/admin-settings");
-                      }}
-                      testID="menu-admin-settings"
-                    />
-                    <MenuItem
-                      label="Admin · kódok"
-                      onPress={() => {
-                        onClose();
-                        router.push("/admin");
-                      }}
-                      testID="menu-admin"
-                    />
-                    <MenuItem
-                      label="Felhasználók"
-                      onPress={() => {
-                        onClose();
-                        router.push("/admin-users");
-                      }}
-                      testID="menu-admin-users"
-                    />
+                    <MenuItem label="Chatbot beállítások" icon="settings-outline" onPress={() => { onClose(); router.push("/admin-settings"); }} testID="menu-admin-settings" />
+                    <MenuItem label="Admin · kódok" icon="keypad-outline" onPress={() => { onClose(); router.push("/admin"); }} testID="menu-admin" />
+                    <MenuItem label="Felhasználók" icon="people-outline" onPress={() => { onClose(); router.push("/admin-users"); }} testID="menu-admin-users" />
                   </>
                 ) : null}
               </View>
-            </ScrollView>
 
-            <View style={styles.footer}>
-              <View style={styles.footerDivider} />
-              <MenuItem
-                label="Kijelentkezés"
-                onPress={handleLogout}
-                testID="menu-logout"
-                subtle
-              />
-              <MenuItem
-                label="Regisztráció törlése"
-                onPress={() => setConfirmDelete(true)}
-                testID="menu-delete-account"
-                danger
-              />
+              <View style={styles.historyBox}>
+                <View style={styles.historyHeader}>
+                  <T variant="caption" color="rgba(247,251,255,0.60)">Mérések és chatek</T>
+                  {sessionsLoading ? <ActivityIndicator color={theme.accent} size="small" /> : null}
+                </View>
+                <ScrollView style={styles.historyScroll} showsVerticalScrollIndicator>
+                  {sessions.length === 0 && !sessionsLoading ? (
+                    <T variant="small" color="rgba(247,251,255,0.58)" style={styles.emptyHistory}>Nincs korábbi mérés.</T>
+                  ) : null}
+                  {sessions.map((s, idx) => (
+                    <View key={s.id} style={styles.sessionItem}>
+                      <TouchableOpacity
+                        style={styles.sessionOpen}
+                        onPress={() => {
+                          onClose();
+                          router.push({ pathname: "/chat", params: { session_id: s.id } });
+                        }}
+                        testID={`session-item-${s.id}`}
+                        activeOpacity={0.75}
+                      >
+                        <T variant="small" color={idx === 0 ? theme.success : "#FF8A8A"} style={styles.sessionText}>
+                          {formatSessionLabel(s)}
+                        </T>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.deleteSessionBtn}
+                        onPress={() => setSessionToDelete(s)}
+                        testID={`session-delete-${s.id}`}
+                        hitSlop={8}
+                      >
+                        <Ionicons name="trash-outline" size={16} color="rgba(247,251,255,0.70)" />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </ScrollView>
+              </View>
+
+              <View style={styles.footer}>
+                <MenuItem label="Kijelentkezés" icon="log-out-outline" onPress={handleLogout} testID="menu-logout" subtle />
+                <MenuItem label="Regisztráció törlése" icon="person-remove-outline" onPress={() => setConfirmDeleteAccount(true)} testID="menu-delete-account" danger />
+              </View>
             </View>
-          </View>
+          </LinearGradient>
         </SafeAreaView>
       </View>
 
-      {/* Új mérés megerősítő modal */}
-      <Modal
+      <ConfirmModal
         visible={confirmRetake}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setConfirmRetake(false)}
-      >
-        <View style={styles.confirmBackdrop}>
-          <View style={styles.confirmCard} testID="retake-confirm-modal">
-            <T variant="h2">Új mérés indítása</T>
-            <T variant="body" color={theme.textSecondary} style={{ marginTop: 8 }}>
-              Egy új kérdőívet töltesz ki, amely új állapotkódot generál. A korábbi beszélgetéseid
-              megmaradnak — az új mérés egy különálló szállal indul.
-            </T>
-            <View style={styles.confirmActions}>
-              <TouchableOpacity
-                style={styles.confirmCancel}
-                onPress={() => setConfirmRetake(false)}
-                disabled={busy}
-                testID="retake-cancel"
-              >
-                <T variant="title" color={theme.primary}>Mégse</T>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.confirmGo}
-                onPress={handleRetake}
-                disabled={busy}
-                testID="retake-confirm"
-              >
-                {busy ? (
-                  <ActivityIndicator color={theme.white} />
-                ) : (
-                  <T variant="title" color={theme.white}>Új mérés</T>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+        title="Új mérés indítása"
+        text="Egy új kérdőívet töltesz ki, amely új állapotkódot generál. A korábbi beszélgetéseid megmaradnak, az új mérés külön szálként indul."
+        confirmLabel="Új mérés"
+        onCancel={() => setConfirmRetake(false)}
+        onConfirm={handleRetake}
+        busy={busy}
+      />
 
-      {/* Fiók törlése megerősítő modal */}
-      <Modal
-        visible={confirmDelete}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setConfirmDelete(false)}
-      >
-        <View style={styles.confirmBackdrop}>
-          <View style={styles.confirmCard} testID="delete-account-modal">
-            <T variant="h2" color={theme.danger}>Fiók törlése</T>
-            <T variant="body" color={theme.textSecondary} style={{ marginTop: 8 }}>
-              Ez a művelet véglegesen törli a fiókodat, az összes chat üzenetedet és mérési eredményedet. Ez nem visszavonható.
-            </T>
-            <View style={styles.confirmActions}>
-              <TouchableOpacity
-                style={styles.confirmCancel}
-                onPress={() => setConfirmDelete(false)}
-                disabled={busy}
-                testID="delete-account-cancel"
-              >
-                <T variant="title" color={theme.primary}>Mégse</T>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.confirmDelete}
-                onPress={handleDeleteAccount}
-                disabled={busy}
-                testID="delete-account-confirm"
-              >
-                {busy ? (
-                  <ActivityIndicator color={theme.white} />
-                ) : (
-                  <T variant="title" color={theme.white}>Törlés</T>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      <ConfirmModal
+        visible={!!sessionToDelete}
+        title="Mérési szál törlése"
+        text={sessionToDelete ? `Törlöd ezt a mérési és chat szálat: ${formatSessionLabel(sessionToDelete)}?` : ""}
+        confirmLabel="Törlés"
+        onCancel={() => setSessionToDelete(null)}
+        onConfirm={handleDeleteSession}
+        busy={busy}
+        danger
+      />
+
+      <ConfirmModal
+        visible={confirmDeleteAccount}
+        title="Fiók törlése"
+        text="Ez a művelet véglegesen törli a fiókodat, az összes chatüzenetedet és mérési eredményedet. Ez nem visszavonható."
+        confirmLabel="Törlés"
+        onCancel={() => setConfirmDeleteAccount(false)}
+        onConfirm={handleDeleteAccount}
+        busy={busy}
+        danger
+      />
     </Modal>
   );
 }
 
-function MenuItem({
-  label,
-  onPress,
-  testID,
-  disabled,
-  subtle,
-  danger,
-}: {
+function MenuItem({ label, icon, onPress, testID, disabled, subtle, danger }: {
   label: string;
+  icon: keyof typeof Ionicons.glyphMap;
   onPress: () => void;
   testID?: string;
   disabled?: boolean;
   subtle?: boolean;
   danger?: boolean;
 }) {
-  const color = danger ? theme.danger : subtle ? "#9EAAA1" : theme.textOnDark;
+  const color = danger ? "#FF9AA8" : subtle ? "rgba(247,251,255,0.66)" : theme.textOnDark;
   return (
-    <TouchableOpacity
-      style={[styles.menuItem, disabled && { opacity: 0.4 }]}
-      onPress={onPress}
-      testID={testID}
-      disabled={disabled}
-      activeOpacity={0.7}
-    >
-      <T variant="bodyLg" color={color}>
-        {label}
-      </T>
+    <TouchableOpacity style={[styles.menuItem, disabled && { opacity: 0.4 }]} onPress={onPress} testID={testID} disabled={disabled} activeOpacity={0.72}>
+      <View style={styles.menuIcon}>
+        <Ionicons name={icon} size={18} color={color} />
+      </View>
+      <T variant="bodyLg" color={color} style={styles.menuLabel}>{label}</T>
     </TouchableOpacity>
   );
 }
 
+function ConfirmModal({ visible, title, text, confirmLabel, onCancel, onConfirm, busy, danger }: {
+  visible: boolean;
+  title: string;
+  text: string;
+  confirmLabel: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+  busy: boolean;
+  danger?: boolean;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <View style={styles.confirmBackdrop}>
+        <View style={[styles.confirmCard, shadow.card]}>
+          <T variant="h2" color={danger ? theme.danger : theme.textPrimary}>{title}</T>
+          <T variant="body" color={theme.textSecondary} style={{ marginTop: 8 }}>{text}</T>
+          <View style={styles.confirmActions}>
+            <TouchableOpacity style={styles.confirmCancel} onPress={onCancel} disabled={busy}>
+              <T variant="title" color={theme.primary}>Mégse</T>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.confirmGo, danger && { backgroundColor: theme.danger }]} onPress={onConfirm} disabled={busy}>
+              {busy ? <ActivityIndicator color={theme.white} /> : <T variant="title" color={theme.white}>{confirmLabel}</T>}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, flexDirection: "row", backgroundColor: "rgba(20,28,24,0.5)" },
-  backdropTouch: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    width: "100%",
-    height: "100%",
-  },
-  drawer: {
-    width: "84%",
-    maxWidth: 340,
-    backgroundColor: theme.primary,
-    height: "100%",
-  },
-  drawerInner: { flex: 1, paddingHorizontal: 24, paddingVertical: 24, justifyContent: "space-between" },
-  header: {},
-  avatarRow: { flexDirection: "row", alignItems: "center" },
-  avatar: { width: 56, height: 56, borderRadius: 28 },
+  backdrop: { flex: 1, flexDirection: "row", backgroundColor: "rgba(3,12,22,0.60)" },
+  backdropTouch: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
+  drawer: { width: "86%", maxWidth: 370, height: "100%" },
+  drawerGradient: { flex: 1, backgroundColor: theme.primary },
+  drawerMist: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundImage: "radial-gradient(ellipse at 12% 0%, rgba(87,199,255,0.26), transparent 34%), radial-gradient(ellipse at 100% 78%, rgba(139,143,232,0.18), transparent 38%)",
+  } as any,
+  drawerInner: { flex: 1, paddingHorizontal: 18, paddingVertical: 20, gap: 12 },
+  header: { flexDirection: "row", alignItems: "center", gap: 12 },
   avatarFallback: {
-    backgroundColor: "rgba(255,255,255,0.08)",
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: theme.surfaceGlass,
+    borderWidth: 1,
+    borderColor: theme.borderOnDark,
     alignItems: "center",
     justifyContent: "center",
   },
   codeBadge: {
-    marginTop: 28,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    borderRadius: 18,
-    paddingHorizontal: 18,
-    paddingVertical: 16,
-    borderLeftWidth: 3,
-    borderLeftColor: theme.accent,
+    backgroundColor: theme.surfaceGlass,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: theme.borderOnDark,
   },
-  menu: { gap: 4, marginTop: 24 },
-  menuItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 16,
-    paddingHorizontal: 4,
+  codeText: { fontSize: 34, lineHeight: 40, letterSpacing: 3, marginTop: 4 },
+  actionBox: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.borderOnDark,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    paddingVertical: 6,
   },
-  sessionsSection: { marginTop: 8, paddingTop: 16, borderTopWidth: 1, borderTopColor: "rgba(255,255,255,0.08)" },
-  sessionsTitle: { marginBottom: 4, letterSpacing: 1 },
-  sessionItem: { paddingVertical: 12, paddingHorizontal: 4 },
-  sessionItemActive: { borderLeftWidth: 2, borderLeftColor: theme.accent, paddingLeft: 10 },
-  footer: {},
-  footerDivider: { height: 1, backgroundColor: "rgba(255,255,255,0.08)", marginBottom: 4 },
-  confirmBackdrop: {
-    flex: 1,
-    backgroundColor: "rgba(20,28,24,0.55)",
+  menuItem: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12, paddingHorizontal: 12 },
+  menuIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 24,
+    backgroundColor: "rgba(255,255,255,0.08)",
   },
-  confirmCard: {
-    backgroundColor: theme.surface,
-    borderRadius: 24,
-    padding: 24,
-    width: "100%",
-    maxWidth: 380,
+  menuLabel: { fontSize: 15, lineHeight: 20 },
+  historyBox: {
+    flex: 1,
+    minHeight: 130,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: theme.borderSoft,
+    borderColor: theme.borderOnDark,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    overflow: "hidden",
   },
+  historyHeader: {
+    minHeight: 42,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.10)",
+  },
+  historyScroll: { flex: 1 },
+  emptyHistory: { padding: 12 },
+  sessionItem: { minHeight: 44, flexDirection: "row", alignItems: "center", borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.08)" },
+  sessionOpen: { flex: 1, paddingVertical: 12, paddingLeft: 12, paddingRight: 6 },
+  sessionText: { fontFamily: "Manrope_600SemiBold" },
+  deleteSessionBtn: { width: 42, alignSelf: "stretch", alignItems: "center", justifyContent: "center" },
+  footer: { borderTopWidth: 1, borderTopColor: "rgba(255,255,255,0.12)", paddingTop: 6 },
+  confirmBackdrop: { flex: 1, backgroundColor: "rgba(3,12,22,0.64)", alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },
+  confirmCard: { backgroundColor: theme.surfaceStrong, borderRadius: 16, padding: 24, width: "100%", maxWidth: 390, borderWidth: 1, borderColor: theme.borderSoft },
   confirmActions: { flexDirection: "row", gap: 10, marginTop: 22 },
-  confirmCancel: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 999,
-    borderWidth: 1.5,
-    borderColor: theme.primary,
-    alignItems: "center",
-  },
-  confirmGo: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 999,
-    backgroundColor: theme.primary,
-    alignItems: "center",
-  },
-  confirmDelete: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 999,
-    backgroundColor: theme.danger,
-    alignItems: "center",
-  },
+  confirmCancel: { flex: 1, paddingVertical: 14, borderRadius: 10, borderWidth: 1.5, borderColor: theme.primary, alignItems: "center" },
+  confirmGo: { flex: 1, paddingVertical: 14, borderRadius: 10, backgroundColor: theme.primary, alignItems: "center" },
 });

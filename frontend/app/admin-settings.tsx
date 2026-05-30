@@ -5,7 +5,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { useAuth, authedFetch } from "@/src/auth/AuthContext";
+import { apiUrl, useAuth, authedFetch } from "@/src/auth/AuthContext";
 import { theme, shadow } from "@/src/theme";
 import { T } from "@/src/components/Typography";
 import TopBar from "@/src/components/TopBar";
@@ -145,7 +145,7 @@ export default function AdminSettingsScreen() {
                     onPress={() => setProvider(p)}
                     testID={`provider-${p}`}
                   >
-                    <T variant="label" color={provider === p ? theme.white : theme.textPrimary}>
+                    <T variant="label" color={provider === p ? theme.white : theme.textOnDark}>
                       {p === "openai" ? "OpenAI"
                         : p === "anthropic" ? "Anthropic"
                         : p === "gemini" ? "Gemini"
@@ -167,14 +167,14 @@ export default function AdminSettingsScreen() {
                     onFocus={() => setShowModelDrop(true)}
                     autoCapitalize="none"
                     placeholder="Válassz vagy írj be modellnevet…"
-                    placeholderTextColor={theme.textSecondary}
+                    placeholderTextColor="rgba(247,251,255,0.48)"
                     testID="model-input"
                   />
                   <TouchableOpacity
                     style={styles.dropArrow}
                     onPress={() => setShowModelDrop((v) => !v)}
                   >
-                    <T variant="label" color={theme.textSecondary}>{showModelDrop ? "▲" : "▼"}</T>
+                    <T variant="label" color="rgba(247,251,255,0.62)">{showModelDrop ? "▲" : "▼"}</T>
                   </TouchableOpacity>
                 </View>
                 {showModelDrop && suggested.length > 0 && (
@@ -186,7 +186,7 @@ export default function AdminSettingsScreen() {
                         onPress={() => { setModel(m); setShowModelDrop(false); }}
                         testID={`model-option-${m}`}
                       >
-                        <T variant="small" color={model === m ? theme.white : theme.textPrimary}>{m}</T>
+                        <T variant="small" color={model === m ? theme.white : theme.textOnDark}>{m}</T>
                       </TouchableOpacity>
                     ))}
                   </View>
@@ -201,7 +201,7 @@ export default function AdminSettingsScreen() {
                   value={apiKey}
                   onChangeText={setApiKey}
                   placeholder={data?.llm_api_key_set ? `Beállítva (${data.llm_api_key_preview})` : "API kulcs"}
-                  placeholderTextColor={theme.textSecondary}
+                  placeholderTextColor="rgba(247,251,255,0.48)"
                   secureTextEntry
                   autoCapitalize="none"
                   testID="api-key-input"
@@ -224,7 +224,7 @@ export default function AdminSettingsScreen() {
                 onChangeText={setPrompt}
                 multiline
                 placeholder="A Myra chatbot system promptja…"
-                placeholderTextColor={theme.textSecondary}
+                placeholderTextColor="rgba(247,251,255,0.48)"
                 testID="prompt-input"
               />
 
@@ -239,18 +239,18 @@ export default function AdminSettingsScreen() {
                 onChangeText={setKb}
                 multiline
                 placeholder="A tudásanyag teljes szövege…"
-                placeholderTextColor={theme.textSecondary}
+                placeholderTextColor="rgba(247,251,255,0.48)"
                 testID="kb-input"
               />
               <UploadKBButton token={token} onUploaded={(text) => setKb(text)} />
               <TouchableOpacity style={[uploadStyles.btn, { marginTop: 8 }]} onPress={extractKb} disabled={extracting} testID="extract-kb-button">
-                <T variant="label" color={theme.primary}>
+                <T variant="label" color={theme.accent}>
                   {extracting ? "Feldolgozás…" : "PDF-ek beolvasása a szerverről"}
                 </T>
               </TouchableOpacity>
               {extractMsg ? <T variant="small" color={theme.textSecondary} style={{ marginTop: 8 }}>{extractMsg}</T> : null}
 
-              {msg ? <T variant="small" color={theme.primary} style={{ marginTop: 12 }}>{msg}</T> : null}
+              {msg ? <T variant="small" color={theme.accent} style={{ marginTop: 12 }}>{msg}</T> : null}
               {err ? <T variant="small" color={theme.danger} style={{ marginTop: 12 }}>{err}</T> : null}
 
               <TouchableOpacity style={styles.saveBtn} onPress={save} disabled={saving} testID="save-button">
@@ -260,11 +260,7 @@ export default function AdminSettingsScreen() {
               <TouchableOpacity
                 style={styles.backupBtn}
                 onPress={() => {
-                  const url = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api/admin/backup`;
                   if (Platform.OS === "web") {
-                    const a = document.createElement("a");
-                    a.href = url;
-                    a.setAttribute("Authorization", `Bearer ${token}`);
                     // fetch-szel töltjük le, hogy az auth header átmenjen
                     authedFetch(token, "/api/admin/backup").then(async (r) => {
                       if (!r.ok) return;
@@ -283,7 +279,7 @@ export default function AdminSettingsScreen() {
                 }}
                 testID="backup-button"
               >
-                <T variant="label" color={theme.primary}>⬇ Adatbázis mentés letöltése</T>
+                <T variant="label" color={theme.accent}>⬇ Adatbázis mentés letöltése</T>
               </TouchableOpacity>
 
               {provider === "gemini" && (
@@ -294,8 +290,8 @@ export default function AdminSettingsScreen() {
                   </T>
                   <TouchableOpacity style={styles.cacheBtn} onPress={initCache} disabled={cacheBuilding} testID="init-cache-button">
                     {cacheBuilding
-                      ? <ActivityIndicator color={theme.primary} />
-                      : <T variant="label" color={theme.primary}>Cache inicializálása (PDF-ek feltöltése)</T>}
+                      ? <ActivityIndicator color={theme.accent} />
+                      : <T variant="label" color={theme.accent}>Cache inicializálása (PDF-ek feltöltése)</T>}
                   </TouchableOpacity>
                   {cacheMsg ? <T variant="small" color={theme.textSecondary} style={{ marginTop: 8 }}>{cacheMsg}</T> : null}
                 </View>
@@ -343,7 +339,7 @@ function UploadKBButton({ token, onUploaded }: { token: string | null; onUploade
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const r = await fetch(`${process.env.EXPO_PUBLIC_BACKEND_URL}/api/admin/kb/upload`, {
+      const r = await fetch(apiUrl("/api/admin/kb/upload"), {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: fd,
@@ -352,7 +348,7 @@ function UploadKBButton({ token, onUploaded }: { token: string | null; onUploade
       else {
         const d = await r.json();
         setInfo(`Hozzáadva: ${d.added_chars.toLocaleString("hu-HU")} karakter (összesen: ${d.total_chars.toLocaleString("hu-HU")}).`);
-        const s = await fetch(`${process.env.EXPO_PUBLIC_BACKEND_URL}/api/admin/settings`, { headers: { Authorization: `Bearer ${token}` } });
+        const s = await fetch(apiUrl("/api/admin/settings"), { headers: { Authorization: `Bearer ${token}` } });
         if (s.ok) { const d2 = await s.json(); onUploaded(d2.kb_text || ""); }
       }
     } catch (e: any) {
@@ -363,7 +359,7 @@ function UploadKBButton({ token, onUploaded }: { token: string | null; onUploade
   return (
     <View style={{ marginTop: 10 }}>
       <TouchableOpacity style={uploadStyles.btn} onPress={pick} disabled={busy} testID="kb-upload">
-        <T variant="label" color={theme.primary}>
+        <T variant="label" color={theme.accent}>
           {busy ? "Feldolgozás…" : "PDF / TXT feltöltése"}
         </T>
       </TouchableOpacity>
@@ -373,26 +369,26 @@ function UploadKBButton({ token, onUploaded }: { token: string | null; onUploade
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: theme.primary },
+  safe: { flex: 1, backgroundColor: theme.primaryDark },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
   scroll: { padding: 22, paddingBottom: 60 },
   section: { marginBottom: 12 },
   providerRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 16 },
-  provBtn: { flexGrow: 1, flexBasis: "22%", paddingVertical: 12, paddingHorizontal: 8, borderRadius: 999, borderWidth: 1, borderColor: theme.border, alignItems: "center", backgroundColor: theme.surface },
-  provBtnSelected: { backgroundColor: theme.primary, borderColor: theme.primary },
-  lbl: { marginTop: 14, marginBottom: 6, letterSpacing: 1.2, fontSize: 11, textTransform: "uppercase", color: theme.textSecondary },
-  input: { backgroundColor: theme.surface, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12, borderWidth: 1, borderColor: theme.border, fontSize: 15, color: theme.textPrimary },
+  provBtn: { flexGrow: 1, flexBasis: "22%", paddingVertical: 12, paddingHorizontal: 8, borderRadius: 999, borderWidth: 1, borderColor: "rgba(255,255,255,0.22)", alignItems: "center", backgroundColor: "rgba(255,255,255,0.10)" },
+  provBtnSelected: { backgroundColor: theme.accentDeep, borderColor: theme.accentDeep },
+  lbl: { marginTop: 14, marginBottom: 6, letterSpacing: 1.2, fontSize: 11, textTransform: "uppercase", color: "rgba(247,251,255,0.66)" },
+  input: { backgroundColor: "rgba(255,255,255,0.10)", borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12, borderWidth: 1, borderColor: "rgba(255,255,255,0.22)", fontSize: 15, color: theme.textOnDark },
   textarea: { minHeight: 140, textAlignVertical: "top" },
   kbRow: { flexDirection: "row", gap: 8, alignItems: "center" },
   comboRow: { flexDirection: "row", alignItems: "center", gap: 6 },
-  dropArrow: { padding: 12, borderRadius: 14, borderWidth: 1, borderColor: theme.border, backgroundColor: theme.surface },
-  dropList: { borderWidth: 1, borderColor: theme.border, borderRadius: 14, backgroundColor: theme.surface, marginTop: 4, overflow: "hidden" },
-  dropItem: { paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.borderSoft },
-  dropItemSelected: { backgroundColor: theme.primary },
-  saveBtn: { marginTop: 28, backgroundColor: theme.primary, paddingVertical: 16, borderRadius: 999, alignItems: "center" },
-  cacheBtn: { paddingVertical: 14, borderRadius: 999, borderWidth: 1.5, borderColor: theme.primary, alignItems: "center" },
-  backupBtn: { marginTop: 10, paddingVertical: 14, borderRadius: 999, borderWidth: 1.5, borderColor: theme.primary, alignItems: "center" },
+  dropArrow: { padding: 12, borderRadius: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.22)", backgroundColor: "rgba(255,255,255,0.10)" },
+  dropList: { borderWidth: 1, borderColor: "rgba(255,255,255,0.22)", borderRadius: 14, backgroundColor: "rgba(6,19,32,0.94)", marginTop: 4, overflow: "hidden" },
+  dropItem: { paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.12)" },
+  dropItemSelected: { backgroundColor: theme.accentDeep },
+  saveBtn: { marginTop: 28, backgroundColor: theme.accentDeep, paddingVertical: 16, borderRadius: 999, alignItems: "center" },
+  cacheBtn: { paddingVertical: 14, borderRadius: 999, borderWidth: 1.5, borderColor: "rgba(255,255,255,0.24)", alignItems: "center" },
+  backupBtn: { marginTop: 10, paddingVertical: 14, borderRadius: 999, borderWidth: 1.5, borderColor: "rgba(255,255,255,0.24)", alignItems: "center" },
 });
 const uploadStyles = StyleSheet.create({
-  btn: { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 12, paddingHorizontal: 16, borderRadius: 999, borderWidth: 1.5, borderColor: theme.primary },
+  btn: { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 12, paddingHorizontal: 16, borderRadius: 999, borderWidth: 1.5, borderColor: "rgba(255,255,255,0.24)" },
 });

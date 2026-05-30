@@ -1,4 +1,4 @@
-"""Myra-project backend — SQLite + custom JWT, no external dependencies except the
+﻿"""Myra-project backend — SQLite + custom JWT, no external dependencies except the
 configurable LLM provider (OpenAI / Anthropic / Google Gemini) chosen by the admin."""
 import asyncio
 import csv
@@ -657,7 +657,6 @@ QUIZ_SECTIONS = [
      "scale": [(0, "Egyáltalán nem"), (1, "Kicsit"), (2, "Nagyon")]},
 ]
 
-
 def _bucket(norm: float) -> int:
     if norm <= 0.3: return 1
     if norm <= 0.6: return 2
@@ -722,6 +721,42 @@ async def quiz_sessions(user: User = Depends(get_current_user), db: AsyncSession
         }
         for s in sessions
     ]}
+
+
+@api.delete("/quiz/sessions/{session_id}")
+async def quiz_delete_session(
+    session_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    res = await db.execute(
+        select(QuizSubmission).where(
+            QuizSubmission.id == session_id,
+            QuizSubmission.user_id == user.id,
+        )
+    )
+    session = res.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="A mérési szál nem található.")
+
+    await db.execute(
+        delete(ChatMessage).where(
+            ChatMessage.user_id == user.id,
+            ChatMessage.session_id == session_id,
+        )
+    )
+    await db.execute(delete(QuizSubmission).where(QuizSubmission.id == session_id))
+
+    latest_res = await db.execute(
+        select(QuizSubmission)
+        .where(QuizSubmission.user_id == user.id)
+        .order_by(QuizSubmission.created_at.desc())
+        .limit(1)
+    )
+    latest = latest_res.scalar_one_or_none()
+    user.state_code = latest.code if latest else None
+    user.code_verified_at = latest.created_at if latest else None
+    return {"ok": True, "deleted": session_id, "state_code": user.state_code}
 
 
 # ---------- Chat (pluggable LLM provider) ----------
