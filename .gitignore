@@ -72,6 +72,9 @@ chainlit.md
 *.pack
 *.deb
 *.dylib
+backend/data/tts/
+backend/data/tts_cache/
+backend/tts/
 
 # Build caches
 .cache/

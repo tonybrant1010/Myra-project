@@ -11,6 +11,8 @@ import uuid
 import logging
 import smtplib
 import random
+import subprocess
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -65,6 +67,22 @@ if not JWT_SECRET or len(JWT_SECRET) < 32:
 # Ensure data dir
 DB_FILE_DIR = ROOT_DIR / "data"
 DB_FILE_DIR.mkdir(parents=True, exist_ok=True)
+
+PIPER_BINARY = Path(os.environ.get("PIPER_BINARY", str(ROOT_DIR / "tts" / ("piper.exe" if os.name == "nt" else "piper"))))
+PIPER_MODEL = Path(os.environ.get("PIPER_MODEL", str(DB_FILE_DIR / "tts" / "hu_HU-anna-medium.onnx")))
+PIPER_CACHE_DIR = Path(os.environ.get("PIPER_CACHE_DIR", str(DB_FILE_DIR / "tts_cache")))
+PIPER_MAX_CHARS = int(os.environ.get("PIPER_MAX_CHARS", "1800"))
+PIPER_CACHE_MAX_AGE_DAYS = int(os.environ.get("PIPER_CACHE_MAX_AGE_DAYS", "1"))
+PIPER_NOISE_SCALE = os.environ.get("PIPER_NOISE_SCALE", "0.667")
+PIPER_NOISE_W = os.environ.get("PIPER_NOISE_W", "0.8")
+TTS_ENGINE = os.environ.get("TTS_ENGINE", "piper").strip().lower()
+SUPERTONIC_MODEL_DIR = Path(os.environ.get("SUPERTONIC_MODEL_DIR", str(DB_FILE_DIR / "tts" / "supertonic-3-hu")))
+SUPERTONIC_SID = int(os.environ.get("SUPERTONIC_SID", "0"))
+SUPERTONIC_NUM_STEPS = int(os.environ.get("SUPERTONIC_NUM_STEPS", "8"))
+SUPERTONIC_SPEED = float(os.environ.get("SUPERTONIC_SPEED", "1.0"))
+
+_supertonic_tts = None
+_supertonic_tts_lock = threading.Lock()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("myra")
@@ -711,6 +729,190 @@ class ReindexPdfKnowledgeBody(BaseModel):
     source_dir: Optional[str] = None
 
 
+class TtsSpeakBody(BaseModel):
+    text: str = Field(min_length=1, max_length=2500)
+
+
+def _normalize_tts_text(text_value: str) -> str:
+    text_value = re.sub(r"\s+", " ", text_value).strip()
+    if len(text_value) > PIPER_MAX_CHARS:
+        text_value = text_value[:PIPER_MAX_CHARS].rsplit(" ", 1)[0].strip()
+    return text_value
+
+
+def _piper_config_path() -> Path:
+    return Path(str(PIPER_MODEL) + ".json")
+
+
+def _ensure_piper_ready() -> None:
+    if not PIPER_BINARY.exists():
+        raise HTTPException(status_code=503, detail=f"Piper binaris nem talalhato: {PIPER_BINARY}")
+    if not PIPER_MODEL.exists():
+        raise HTTPException(status_code=503, detail=f"Piper magyar hangmodell nem talalhato: {PIPER_MODEL}")
+    if not _piper_config_path().exists():
+        raise HTTPException(status_code=503, detail=f"Piper hangmodell config nem talalhato: {_piper_config_path()}")
+
+
+def _supertonic_model_files() -> list[Path]:
+    return [
+        SUPERTONIC_MODEL_DIR / "duration_predictor.int8.onnx",
+        SUPERTONIC_MODEL_DIR / "text_encoder.int8.onnx",
+        SUPERTONIC_MODEL_DIR / "vector_estimator.int8.onnx",
+        SUPERTONIC_MODEL_DIR / "vocoder.int8.onnx",
+        SUPERTONIC_MODEL_DIR / "tts.json",
+        SUPERTONIC_MODEL_DIR / "unicode_indexer.bin",
+        SUPERTONIC_MODEL_DIR / "voice.bin",
+    ]
+
+
+def _ensure_supertonic_ready() -> None:
+    missing = [str(path) for path in _supertonic_model_files() if not path.exists()]
+    if missing:
+        raise HTTPException(status_code=503, detail=f"Supertonic modellfajlok hianyoznak: {', '.join(missing[:3])}")
+
+
+def _get_supertonic_tts():
+    global _supertonic_tts
+    if _supertonic_tts is not None:
+        return _supertonic_tts
+
+    with _supertonic_tts_lock:
+        if _supertonic_tts is not None:
+            return _supertonic_tts
+
+        _ensure_supertonic_ready()
+        try:
+            import sherpa_onnx
+        except ImportError:
+            raise HTTPException(status_code=503, detail="A sherpa-onnx TTS csomag nincs telepitve.")
+
+        tts_config = sherpa_onnx.OfflineTtsConfig(
+            model=sherpa_onnx.OfflineTtsModelConfig(
+                supertonic=sherpa_onnx.OfflineTtsSupertonicModelConfig(
+                    duration_predictor=str(SUPERTONIC_MODEL_DIR / "duration_predictor.int8.onnx"),
+                    text_encoder=str(SUPERTONIC_MODEL_DIR / "text_encoder.int8.onnx"),
+                    vector_estimator=str(SUPERTONIC_MODEL_DIR / "vector_estimator.int8.onnx"),
+                    vocoder=str(SUPERTONIC_MODEL_DIR / "vocoder.int8.onnx"),
+                    tts_json=str(SUPERTONIC_MODEL_DIR / "tts.json"),
+                    unicode_indexer=str(SUPERTONIC_MODEL_DIR / "unicode_indexer.bin"),
+                    voice_style=str(SUPERTONIC_MODEL_DIR / "voice.bin"),
+                ),
+                debug=False,
+                num_threads=2,
+                provider="cpu",
+            )
+        )
+        _supertonic_tts = sherpa_onnx.OfflineTts(tts_config)
+        return _supertonic_tts
+
+
+def _synthesize_supertonic_wav(text_value: str) -> Path:
+    _ensure_supertonic_ready()
+    PIPER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cutoff = time.time() - (PIPER_CACHE_MAX_AGE_DAYS * 86400)
+    for cached in PIPER_CACHE_DIR.glob("*.wav"):
+        try:
+            if cached.stat().st_mtime < cutoff:
+                cached.unlink()
+        except OSError:
+            pass
+
+    model_stamp = "|".join(f"{path.name}:{path.stat().st_mtime_ns}" for path in _supertonic_model_files())
+    cache_key = hashlib.sha256(
+        (
+            f"supertonic|{SUPERTONIC_MODEL_DIR.resolve()}|{model_stamp}|"
+            f"{SUPERTONIC_SID}|{SUPERTONIC_NUM_STEPS}|{SUPERTONIC_SPEED}|{text_value}"
+        ).encode("utf-8")
+    ).hexdigest()
+    out_path = PIPER_CACHE_DIR / f"{cache_key}.wav"
+    if out_path.exists() and out_path.stat().st_size > 44:
+        return out_path
+
+    try:
+        import sherpa_onnx
+        import soundfile as sf
+
+        tts = _get_supertonic_tts()
+        gen_config = sherpa_onnx.GenerationConfig()
+        gen_config.sid = SUPERTONIC_SID
+        gen_config.num_steps = SUPERTONIC_NUM_STEPS
+        gen_config.speed = SUPERTONIC_SPEED
+        gen_config.extra["lang"] = "hu"
+        audio = tts.generate(text_value, gen_config)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Supertonic hanggeneralasi hiba: {exc}")
+
+    tmp_path = PIPER_CACHE_DIR / f"{cache_key}.tmp.wav"
+    sf.write(tmp_path, audio.samples, samplerate=audio.sample_rate)
+    if not tmp_path.exists() or tmp_path.stat().st_size <= 44:
+        raise HTTPException(status_code=500, detail="Supertonic hanggeneralasi hiba: ures wav.")
+    tmp_path.replace(out_path)
+    return out_path
+
+
+def _synthesize_tts_wav(text_value: str) -> Path:
+    if TTS_ENGINE == "piper":
+        return _synthesize_piper_wav(text_value)
+    if TTS_ENGINE == "supertonic":
+        return _synthesize_supertonic_wav(text_value)
+    raise HTTPException(status_code=503, detail=f"Ismeretlen TTS motor: {TTS_ENGINE}")
+
+
+def _synthesize_piper_wav(text_value: str) -> Path:
+    _ensure_piper_ready()
+    PIPER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cutoff = time.time() - (PIPER_CACHE_MAX_AGE_DAYS * 86400)
+    for cached in PIPER_CACHE_DIR.glob("*.wav"):
+        try:
+            if cached.stat().st_mtime < cutoff:
+                cached.unlink()
+        except OSError:
+            pass
+    cache_key = hashlib.sha256(
+        f"{PIPER_MODEL.resolve()}|{PIPER_MODEL.stat().st_mtime_ns}|{PIPER_NOISE_SCALE}|{PIPER_NOISE_W}|{text_value}".encode("utf-8")
+    ).hexdigest()
+    out_path = PIPER_CACHE_DIR / f"{cache_key}.wav"
+    if out_path.exists() and out_path.stat().st_size > 44:
+        return out_path
+
+    tmp_path = PIPER_CACHE_DIR / f"{cache_key}.tmp.wav"
+    cmd = [
+        str(PIPER_BINARY),
+        "--model",
+        str(PIPER_MODEL),
+        "--noise_scale",
+        PIPER_NOISE_SCALE,
+        "--noise_w",
+        PIPER_NOISE_W,
+        "--output_file",
+        str(tmp_path),
+    ]
+    try:
+        completed = subprocess.run(
+            cmd,
+            input=text_value,
+            text=True,
+            encoding="utf-8",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=90,
+            cwd=str(PIPER_BINARY.parent),
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="A felolvasas tul sokaig tartott.")
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail=f"Piper inditasi hiba: {exc}")
+
+    if completed.returncode != 0 or not tmp_path.exists() or tmp_path.stat().st_size <= 44:
+        stderr = (completed.stderr or "").strip()[-500:]
+        raise HTTPException(status_code=500, detail=f"Piper hanggeneralasi hiba: {stderr or completed.returncode}")
+
+    tmp_path.replace(out_path)
+    return out_path
+
+
 # ---------- Email Helper ----------
 def _send_gmail_reset(to_email: str, token: str):
     msg = MIMEText(f"""Kedves Felhasználó!
@@ -827,6 +1029,20 @@ async def auth_me(user: User = Depends(get_current_user)):
 @api.post("/auth/logout")
 async def auth_logout(user: User = Depends(get_current_user)):
     return {"ok": True}
+
+
+@api.post("/tts/speak")
+async def tts_speak(body: TtsSpeakBody, user: User = Depends(get_current_user)):
+    text_value = _normalize_tts_text(body.text)
+    if not text_value:
+        raise HTTPException(status_code=400, detail="Ures felolvasando szoveg.")
+    wav_path = await asyncio.to_thread(_synthesize_tts_wav, text_value)
+    return FileResponse(
+        str(wav_path),
+        media_type="audio/wav",
+        filename="myra-voice.wav",
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
 
 
 @api.delete("/auth/delete-account")

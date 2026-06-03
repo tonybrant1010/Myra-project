@@ -15,8 +15,9 @@ function copyDir(src, dst) {
   return true;
 }
 
-// 0. Copy static icons back into dist because expo export clears them.
-const ICONS_SRC = path.join(__dirname, "../../../myra_project");
+// 0. Copy static icons + manifest back into dist because expo export clears them.
+//    Source of truth lives in-repo at frontend/web-icons/ (regenerate via scripts/gen-icons.js).
+const ICONS_SRC = path.join(__dirname, "../web-icons");
 const iconFiles = [
   "apple-touch-icon.png",
   "favicon.ico",
@@ -44,7 +45,7 @@ const vercelJson = {
     { source: "/assets/:path*", destination: "/assets/:path*" },
     { source: "/vendor-assets/:path*", destination: "/vendor-assets/:path*" },
     { source: "/_expo/:path*", destination: "/_expo/:path*" },
-    { source: "/((?!api/|assets/|vendor-assets/|_expo/|favicon.ico|site.webmanifest|apple-touch-icon.png|android-chrome-192x192.png|android-chrome-512x512.png).*)", destination: "/index.html" },
+    { source: "/((?!api/|assets/|vendor-assets/|_expo/|favicon.ico|favicon-32x32.png|favicon-16x16.png|site.webmanifest|apple-touch-icon.png|android-chrome-192x192.png|android-chrome-512x512.png).*)", destination: "/index.html" },
   ],
 };
 fs.writeFileSync(path.join(distDir, "vercel.json"), JSON.stringify(vercelJson, null, 2));
@@ -74,12 +75,18 @@ html = html.replace(
   '$1width=device-width, initial-scale=1, maximum-scale=1"'
 );
 
+// Tab / "Add to Home Screen" default name.
+html = html.replace(/<title>[^<]*<\/title>/, "<title>Myra Project</title>");
+
 const iosTags = [
   '<meta name="mobile-web-app-capable" content="yes">',
   '<meta name="apple-mobile-web-app-capable" content="yes">',
   '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">',
-  '<meta name="apple-mobile-web-app-title" content="Myra">',
-  '<link rel="apple-touch-icon" href="/apple-touch-icon.png">',
+  '<meta name="apple-mobile-web-app-title" content="Myra Project">',
+  '<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">',
+  '<link rel="apple-touch-icon-precomposed" sizes="180x180" href="/apple-touch-icon.png">',
+  '<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">',
+  '<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">',
   '<link rel="manifest" href="/site.webmanifest">',
 ].join("");
 

@@ -37,7 +37,7 @@ function buildListItems(messages: Msg[], currentCode: string | null | undefined)
 }
 
 function formatMessageTime(value: string): string {
-  // A backend UTC időt ad vissza, de nem mindig Z suffix-szel – explicit UTC-ként kezeljük
+  // A backend UTC időt ad vissza, de nem mindig Z suffix-szel - explicit UTC-ként kezeljük
   const normalized = value.endsWith("Z") || value.includes("+") ? value : value + "Z";
   const d = new Date(normalized);
   if (Number.isNaN(d.getTime())) return "";
@@ -54,19 +54,29 @@ export default function ChatScreen() {
   const [listening, setListening] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+  const [revealedTexts, setRevealedTexts] = useState<Record<string, string>>({});
   const [didInitialScroll, setDidInitialScroll] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [viewSessionId, setViewSessionId] = useState<string | null>(null);
   const listRef = useRef<FlatList>(null);
   const scrollTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const audioRef = useRef<any>(null);
+  const audioUrlRef = useRef<string | null>(null);
   const recognitionRef = useRef<any>(null);
   const dictationBaseRef = useRef("");
+  const revealTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const revealActiveRef = useRef<{ id: string; text: string } | null>(null);
+  const animatedMessageIdsRef = useRef<Set<string>>(new Set());
+  const initialScrollUntilRef = useRef(0);
 
-  const scrollToBottom = useCallback((animated = false) => {
+  const scrollToBottom = useCallback((animated = false, settled = false) => {
     scrollTimers.current.forEach(clearTimeout);
-    scrollTimers.current = [0, 80, 220, 520].map((delay) =>
+    const delays = settled ? [0, 80, 220, 520, 900, 1400, 2200, 3200, 4500] : [0, 80, 220, 520];
+    scrollTimers.current = delays.map((delay) =>
       setTimeout(() => {
-        listRef.current?.scrollToEnd({ animated });
+        requestAnimationFrame(() => {
+          listRef.current?.scrollToEnd({ animated });
+        });
       }, delay)
     );
   }, []);
@@ -74,12 +84,61 @@ export default function ChatScreen() {
   useEffect(() => {
     return () => {
       scrollTimers.current.forEach(clearTimeout);
+      if (revealTimerRef.current) clearInterval(revealTimerRef.current);
       recognitionRef.current?.stop?.();
-      if (Platform.OS === "web") {
-        (globalThis as any).speechSynthesis?.cancel?.();
+      audioRef.current?.pause?.();
+      if (audioUrlRef.current && Platform.OS === "web") {
+        (globalThis as any).URL?.revokeObjectURL?.(audioUrlRef.current);
       }
     };
   }, []);
+
+  const finishReveal = useCallback(() => {
+    if (revealTimerRef.current) {
+      clearInterval(revealTimerRef.current);
+      revealTimerRef.current = null;
+    }
+    const active = revealActiveRef.current;
+    if (active) {
+      setRevealedTexts((prev) => ({ ...prev, [active.id]: active.text }));
+      revealActiveRef.current = null;
+    }
+  }, []);
+
+  const animateAssistantMessage = useCallback((message: Msg) => {
+    if (message.role !== "assistant" || animatedMessageIdsRef.current.has(message.id)) return;
+    animatedMessageIdsRef.current.add(message.id);
+    finishReveal();
+
+    const chars = Array.from(message.text);
+    if (chars.length === 0) return;
+
+    const chunkSize = chars.length > 900 ? 6 : chars.length > 520 ? 4 : chars.length > 260 ? 3 : 2;
+    const intervalMs = chars.length > 900 ? 10 : 14;
+    let index = 0;
+    let tick = 0;
+
+    revealActiveRef.current = { id: message.id, text: message.text };
+    setRevealedTexts((prev) => ({ ...prev, [message.id]: "" }));
+
+    const step = () => {
+      index = Math.min(index + chunkSize, chars.length);
+      setRevealedTexts((prev) => ({ ...prev, [message.id]: chars.slice(0, index).join("") }));
+
+      tick += 1;
+      if (tick % 8 === 0) scrollToBottom(true);
+
+      if (index >= chars.length) {
+        if (revealTimerRef.current) clearInterval(revealTimerRef.current);
+        revealTimerRef.current = null;
+        revealActiveRef.current = null;
+        scrollToBottom(true);
+      }
+    };
+
+    step();
+    revealTimerRef.current = setInterval(step, intervalMs);
+  }, [finishReveal, scrollToBottom]);
 
   useEffect(() => {
     if (!token) return;
@@ -97,10 +156,14 @@ export default function ChatScreen() {
   const loadHistory = useCallback(async (sid: string | null) => {
     setLoading(true);
     setDidInitialScroll(false);
+    initialScrollUntilRef.current = Date.now() + 5000;
     try {
       const url = sid ? `/api/chat/history?session_id=${sid}` : "/api/chat/history";
       const r = await authedFetch(token, url);
       const hist = await r.json();
+      finishReveal();
+      setRevealedTexts({});
+      animatedMessageIdsRef.current.clear();
       setMessages(hist.messages || []);
     } finally {
       setLoading(false);
@@ -112,6 +175,16 @@ export default function ChatScreen() {
   }, [viewSessionId, loadHistory]);
 
   const isReadOnly = viewSessionId !== null && viewSessionId !== activeSessionId;
+
+  const stopSpeech = useCallback(() => {
+    audioRef.current?.pause?.();
+    audioRef.current = null;
+    if (audioUrlRef.current && Platform.OS === "web") {
+      (globalThis as any).URL?.revokeObjectURL?.(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+    setSpeakingId(null);
+  }, []);
 
   const stopDictation = useCallback(() => {
     recognitionRef.current?.stop?.();
@@ -171,35 +244,49 @@ export default function ChatScreen() {
     recognition.start();
   }, [input, listening, stopDictation]);
 
-  const speakMessage = useCallback((msg: Msg) => {
+  const speakMessage = useCallback(async (msg: Msg) => {
     if (Platform.OS !== "web") {
       setVoiceStatus("A felolvasás ebben a környezetben nem elérhető.");
       return;
     }
-    const synth = (globalThis as any).speechSynthesis;
-    const Utterance = (globalThis as any).SpeechSynthesisUtterance;
-    if (!synth || !Utterance) {
-      setVoiceStatus("A böngésző nem támogatja a beépített felolvasást.");
-      return;
-    }
     if (speakingId === msg.id) {
-      synth.cancel();
-      setSpeakingId(null);
+      stopSpeech();
       return;
     }
-    synth.cancel();
-    const utterance = new Utterance(msg.text);
-    utterance.lang = "hu-HU";
-    utterance.rate = 0.95;
-    utterance.pitch = 1;
-    const voices = synth.getVoices?.() || [];
-    const huVoice = voices.find((v: any) => String(v.lang || "").toLowerCase().startsWith("hu"));
-    if (huVoice) utterance.voice = huVoice;
-    utterance.onend = () => setSpeakingId(null);
-    utterance.onerror = () => setSpeakingId(null);
-    setSpeakingId(msg.id);
-    synth.speak(utterance);
-  }, [speakingId]);
+    stopSpeech();
+    setVoiceStatus("Hang készül...");
+    try {
+      const response = await authedFetch(token, "/api/tts/speak", {
+        method: "POST",
+        body: JSON.stringify({ text: msg.text }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        setVoiceStatus(data?.detail || "A felolvasás most nem indult el.");
+        return;
+      }
+      const blob = await response.blob();
+      const url = (globalThis as any).URL.createObjectURL(blob);
+      const audio = new (globalThis as any).Audio(url);
+      audio.playbackRate = 1.03;
+      audio.preservesPitch = false;
+      audio.mozPreservesPitch = false;
+      audio.webkitPreservesPitch = false;
+      audioRef.current = audio;
+      audioUrlRef.current = url;
+      audio.onended = stopSpeech;
+      audio.onerror = () => {
+        setVoiceStatus("A hang lejátszása nem sikerült.");
+        stopSpeech();
+      };
+      setSpeakingId(msg.id);
+      setVoiceStatus(null);
+      await audio.play();
+    } catch {
+      setVoiceStatus("A felolvasás most nem indult el.");
+      stopSpeech();
+    }
+  }, [speakingId, stopSpeech, token]);
 
   const send = async () => {
     const text = input.trim();
@@ -219,20 +306,24 @@ export default function ChatScreen() {
       const r = await authedFetch(token, "/api/chat/send", { method: "POST", body: JSON.stringify({ message: text, session_id: activeSessionId }) });
       if (!r.ok) {
         const data = await r.json().catch(() => ({}));
+        const errorMessage: Msg = {
+          id: `err-${Date.now()}`,
+          role: "assistant",
+          text: `Figyelem: ${data?.detail || "Nem sikerült elküldeni az üzenetet."}`,
+          created_at: new Date().toISOString(),
+          state_code: user?.state_code || null,
+        };
         setMessages((m) => [
           ...m.filter((x) => x.id !== optimistic.id),
-          {
-            id: `err-${Date.now()}`,
-            role: "assistant",
-            text: `Figyelem: ${data?.detail || "Nem sikerült elküldeni az üzenetet."}`,
-            created_at: new Date().toISOString(),
-            state_code: user?.state_code || null,
-          },
+          errorMessage,
         ]);
+        animateAssistantMessage(errorMessage);
         return;
       }
       const data = await r.json();
-      setMessages((m) => [...m.filter((x) => x.id !== optimistic.id), data.user_message, data.assistant_message]);
+      const assistantMessage = data.assistant_message as Msg;
+      setMessages((m) => [...m.filter((x) => x.id !== optimistic.id), data.user_message, assistantMessage]);
+      animateAssistantMessage(assistantMessage);
       scrollToBottom(true);
     } finally {
       setSending(false);
@@ -243,7 +334,8 @@ export default function ChatScreen() {
 
   useEffect(() => {
     if (!loading && items.length > 0 && !didInitialScroll) {
-      scrollToBottom(false);
+      initialScrollUntilRef.current = Date.now() + 5000;
+      scrollToBottom(false, true);
       setDidInitialScroll(true);
     }
   }, [didInitialScroll, items.length, loading, scrollToBottom]);
@@ -278,16 +370,23 @@ export default function ChatScreen() {
                       Új mérés a {item.code} kóddal. Myra ehhez a szálhoz igazodva folytatja.
                     </T>
                   </View>
-                ) : <Bubble msg={item.msg} onSpeak={speakMessage} speaking={speakingId === item.msg.id} />
+                ) : (
+                  <Bubble
+                    msg={item.msg}
+                    displayText={item.msg.role === "assistant" && revealedTexts[item.msg.id] !== undefined ? revealedTexts[item.msg.id] : item.msg.text}
+                    onSpeak={speakMessage}
+                    speaking={speakingId === item.msg.id}
+                  />
+                )
               }
               onContentSizeChange={() => {
-                if (!didInitialScroll) {
-                  scrollToBottom(false);
+                if (!didInitialScroll || Date.now() < initialScrollUntilRef.current) {
+                  scrollToBottom(false, true);
                   setDidInitialScroll(true);
                 }
               }}
               onLayout={() => {
-                if (!didInitialScroll) scrollToBottom(false);
+                if (!didInitialScroll || Date.now() < initialScrollUntilRef.current) scrollToBottom(false, true);
               }}
               ListFooterComponent={sending ? (
                 <View style={styles.typing} testID="typing-indicator">
@@ -339,16 +438,20 @@ export default function ChatScreen() {
   );
 }
 
-function Bubble({ msg, onSpeak, speaking }: { msg: Msg; onSpeak: (msg: Msg) => void; speaking: boolean }) {
+function Bubble({ msg, displayText, onSpeak, speaking }: { msg: Msg; displayText: string; onSpeak: (msg: Msg) => void; speaking: boolean }) {
   const isUser = msg.role === "user";
   const time = formatMessageTime(msg.created_at);
+  const isRevealing = !isUser && displayText !== msg.text;
   return (
     <View style={[styles.messageWrap, isUser ? styles.messageWrapUser : styles.messageWrapAi]}>
       <View style={[styles.bubbleRow, isUser ? styles.bubbleRowUser : styles.bubbleRowAi]} testID={`message-${msg.role}`}>
         {!isUser ? <Image source={MYRA_AVATAR} style={styles.aiAvatar} /> : null}
         <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAi, isUser ? null : shadow.card]}>
-          <T variant="bodyLg" color={theme.textOnDark}>{msg.text}</T>
-          {!isUser ? (
+          <T variant="bodyLg" color={theme.textOnDark}>
+            {displayText}
+            {isRevealing ? "|" : ""}
+          </T>
+          {!isUser && !isRevealing ? (
             <TouchableOpacity onPress={() => onSpeak(msg)} style={styles.speakBtn} activeOpacity={0.75} testID="message-speak-button">
               <Ionicons name={speaking ? "stop" : "volume-medium-outline"} size={16} color="rgba(247,251,255,0.72)" />
             </TouchableOpacity>
