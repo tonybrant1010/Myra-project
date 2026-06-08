@@ -17,7 +17,8 @@ Fontos: a Myra nem hivatalos diagnosztikai vagy terápiás eszköz, és nem hely
 - modern Aurora Blue / glassmorphism arculat;
 - Vercel webes frontend;
 - Dockerben futó FastAPI backend;
-- SQLite-alapú adatkezelés külső adatbázis-szolgáltató nélkül.
+- EU régiós Supabase/Postgres adatbázis érzékeny felhasználói adatokhoz;
+- lokális SQLite fallback fejlesztéshez.
 
 ## Stack
 
@@ -26,8 +27,9 @@ Fontos: a Myra nem hivatalos diagnosztikai vagy terápiás eszköz, és nem hely
 - Python 3.11
 - FastAPI
 - SQLAlchemy async
-- SQLite / `aiosqlite`
-- SQLite FTS5 tudásindex PDF-részletekhez
+- Supabase/Postgres / `asyncpg`
+- SQLite / `aiosqlite` lokális fejlesztési fallbackként
+- PDF-alapú tudásindex Postgres/SQLite kompatibilis kereséssel
 - JWT auth
 - Docker / Docker Compose
 - LLM provider: admin felületen konfigurálható, jelenleg főként Gemini használatra optimalizálva
@@ -48,11 +50,9 @@ backend/
   requirements.txt
   Dockerfile
   data/
-    myra.db
     kb_pdfs/
       *.pdf
     knowledge_base.txt
-    kb_*.pdf
     esv_calc.ods
 
 frontend/
@@ -69,20 +69,22 @@ README.md
 
 ## Adatkezelés
 
-A backend konténerben az adatkönyvtár bind mounttal van bekötve:
+Az éles felhasználói adatok és a chat-/mérési előzmények EU régiós Supabase/Postgres adatbázisban élnek. A backend a `DATABASE_URL`, `DATABASE_SSL` és `DATABASE_SSL_MODE` környezeti változókból olvassa a kapcsolatot.
+
+A backend konténerben az adatkönyvtár továbbra is bind mounttal van bekötve:
 
 ```yaml
 volumes:
   - ./backend/data:/app/data
 ```
 
-Ez azt jelenti, hogy a felhasználói adatok nem a konténer belsejében élnek, hanem a host gépen:
+Ez jelenleg főként a PDF tudásanyag és lokális fejlesztési fájlok helye:
 
 ```text
-backend/data/myra.db
+backend/data/kb_pdfs/
 ```
 
-Backend frissítéskor a konténer újraépíthető, az adatbázis ettől nem törlődik, amíg a `backend/data` mappa nincs felülírva vagy törölve. A PDF tudásindex ugyanebben az SQLite adatbázisban külön táblákban él (`knowledge_chunks`, FTS index), ezért újraépíthető a PDF-ekből anélkül, hogy a felhasználói adatok sérülnének.
+Backend frissítéskor a konténer újraépíthető; az éles adatbázis ettől nem sérül, mert nem a konténerben és nem a VM fájlrendszerén tárolódik. A PDF tudásindex a Postgres adatbázis `knowledge_chunks` táblájában épül újra a `backend/data/kb_pdfs` PDF-jeiből.
 
 ## Lokális Fejlesztés
 
@@ -93,6 +95,9 @@ Gyökérben hozz létre egy `.env` fájlt:
 ```env
 JWT_SECRET=legalabb-32-karakteres-titok
 ADMIN_EMAIL_ALLOWLIST=admin@email.hu
+DATABASE_URL=postgresql://...
+DATABASE_SSL=true
+DATABASE_SSL_MODE=require
 EXPO_PUBLIC_BACKEND_URL=http://localhost:8001
 ```
 
@@ -154,7 +159,7 @@ PY'
 Sikeres eredmény például:
 
 ```text
-{'ok': True, 'source_dir': '/app/data/kb_pdfs', 'pdf_count': 25, 'indexed_files': 25, 'chunk_count': 229, 'skipped': []}
+{'ok': True, 'source_dir': '/app/data/kb_pdfs', 'pdf_count': 28, 'indexed_files': 28, 'chunk_count': 247, 'skipped': []}
 ```
 
 Az indexelés a tudásindexet építi újra, nem törli a felhasználókat, méréseket vagy chatelőzményeket.
@@ -202,36 +207,50 @@ Fontos routing sajátosság:
 Jelenlegi backend modell:
 
 ```text
-Linux VM
-  Docker Compose
-    myra-backend
-  backend/data
-    myra.db
-    kb_pdfs/*.pdf
-    PDF tudásindex
+Vercel frontend
+  /api rewrite
+Linux VM backend
+  Docker Compose / FastAPI
+  backend/data/kb_pdfs/*.pdf
+Supabase EU Postgres
+  user adatok
+  mérések
+  chat előzmények
+  PDF tudásindex
 ```
 
-A rendszer Rackhost VPS-en futott, majd felépült egy párhuzamos Google Compute Engine VM környezet is. A Google VM célja a VPS-költség kiváltása úgy, hogy a működés továbbra is egyben kezelhető maradjon:
+A rendszer Rackhost VPS-en fut, és felépült egy párhuzamos Google Compute Engine VM környezet is. Mindkét backend ugyanarra a Supabase/Postgres adatbázisra csatlakozik, ezért backendváltáskor nem kell SQLite adatbázist mozgatni.
 
 ```text
 Vercel frontend
   /api rewrite
-Google VM backend
+Rackhost vagy Google VM backend
   Docker
-  SQLite
-  backend/data volume
+  DATABASE_URL -> Supabase/Postgres
 ```
 
 Átállás előtt a Google backend külön tesztelendő, az éles Vercel rewrite csak sikeres login, mérés, chat és admin teszt után módosítható.
 
 ## Backend Frissítés Adatvesztés Nélkül
 
-Frissítés előtt mindig legyen DB-mentés:
+Az éles adatbázis nem a backend mappában él. Frissítés előtt ellenőrizd, hogy a konténer valóban Postgresre csatlakozik:
 
 ```bash
-cd ~/myra
-mkdir -p backups
-sqlite3 backend/data/myra.db ".backup 'backups/myra.db.$(date +%Y%m%d-%H%M%S).sqlite'"
+docker compose exec -T backend python - <<'PY'
+import asyncio
+from sqlalchemy import text
+from server import SessionLocal, DB_DIALECT
+
+async def main():
+    async with SessionLocal() as db:
+        users = (await db.execute(text("select count(*) from users"))).scalar()
+        messages = (await db.execute(text("select count(*) from chat_messages"))).scalar()
+        print("DB_DIALECT:", DB_DIALECT)
+        print("users:", users)
+        print("chat_messages:", messages)
+
+asyncio.run(main())
+PY
 ```
 
 Ezután jöhet a backend frissítése:
@@ -247,30 +266,13 @@ Ha a frissítés új PDF tudásanyagot is tartalmaz, a `backend/data/kb_pdfs` ma
 Nem szabad vakon felülírni:
 
 ```text
-backend/data/myra.db
-backend/data/ teljes tartalma
+.env
+backend/data/kb_pdfs/ ellenőrzés nélkül
 ```
 
-## Automatikus Backup
+## Backup
 
-A Google VM-en napi helyi SQLite backup használható:
-
-```bash
-~/myra/backup-myra-db.sh
-```
-
-A script lényege:
-
-```bash
-sqlite3 "$DATA_DIR/myra.db" ".backup '$BACKUP_DIR/myra.db.$TS.sqlite'"
-find "$BACKUP_DIR" -name "myra.db.*.sqlite" -type f -mtime +14 -delete
-```
-
-Cron példa:
-
-```bash
-15 2 * * * /home/antalodor/myra/backup-myra-db.sh >> /home/antalodor/myra/backups/backup.log 2>&1
-```
+Az éles adatbázis mentését Supabase/Postgres oldalon kell kezelni. Ha szerverről készült ideiglenes SQLite vagy export mentés, az nem kerülhet GitHubra, és csak titkosított/lokális mentési helyen maradhat.
 
 ## Hasznos Ellenőrző Parancsok
 
@@ -289,7 +291,6 @@ docker stats --no-stream myra-backend
 free -h
 df -h
 du -sh ~/myra/backend/data
-ls -lh ~/myra/backend/data/myra.db
 ```
 
 Frontend build:
@@ -313,6 +314,10 @@ dist/
 .metro-cache/
 *.log
 *.tgz
+*.db
+*.sqlite
+live-db-backups/
+backend/data/myra.db
 ```
 
 A nagy mappák normálisak fejlesztés közben:
@@ -329,6 +334,6 @@ Ezek újratelepíthetők, ezért nem részei a forráskód-mentésnek.
 ## Biztonsági Megjegyzések
 
 - API kulcsot és `.env` fájlt ne commitolj.
-- Az éles `myra.db` felhasználói adatot tartalmazhat, GitHub helyett szerveroldali backupban tárolandó.
+- Éles adatbázis-exportot, SQLite mentést vagy felhasználói adatot tartalmazó fájlt ne commitolj.
 - Privát repo esetén is érdemes úgy kezelni a titkokat, mintha később auditálni kellene.
 - Felhasználói törlés esetén az app működési elve szerint a kapcsolódó felhasználói adatok is törlendők.

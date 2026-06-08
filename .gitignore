@@ -72,6 +72,14 @@ chainlit.md
 *.pack
 *.deb
 *.dylib
+*.db
+*.db.*
+*.sqlite
+*.sqlite3
+live-db-backups/
+backend/data/myra.db
+backend/data/*.db
+backend/data/*.db.*
 backend/data/tts/
 backend/data/tts_cache/
 backend/tts/

@@ -47,7 +47,7 @@ export default function RegisterScreen() {
       return;
     }
     if (!acceptedTerms) {
-      setError("A regisztrációhoz el kell fogadnod a felhasználási feltételeket és az adatkezelési tájékoztatót.");
+      setError("A regisztrációhoz el kell fogadnod a feltételeket, és kifejezetten hozzá kell járulnod az adatkezeléshez.");
       return;
     }
     setBusy(true);
@@ -123,7 +123,7 @@ export default function RegisterScreen() {
                     <T color={theme.accentDeep} style={styles.linkText} onPress={() => setDocModal({ title: "Adatkezelési tájékoztató", text: gdprText })}>Adatkezelési tájékoztatót</T>
                     , és elolvastam a{" "}
                     <T color={theme.accentDeep} style={styles.linkText} onPress={() => setDocModal({ title: "Myra Kisokos", text: kisokosText })}>Myra Kisokost</T>
-                    .
+                    . Kifejezetten hozzájárulok a mentálhigiénés jellegű adataim kezeléséhez az alkalmazás működéséhez szükséges mértékben.
                   </T>
                 </View>
               </TouchableOpacity>

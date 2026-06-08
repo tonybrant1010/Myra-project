@@ -6,6 +6,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
+  Text,
   TextInput,
   TouchableOpacity,
   View,
@@ -42,6 +43,95 @@ function formatMessageTime(value: string): string {
   const d = new Date(normalized);
   if (Number.isNaN(d.getTime())) return "";
   return d.toLocaleTimeString("hu-HU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Budapest" });
+}
+
+function renderInlineMarkdown(text: string, keyPrefix: string) {
+  const parts: React.ReactNode[] = [];
+  const pattern = /(\*\*[^*]+\*\*|\*[^*\n]+\*)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+
+    const token = match[0];
+    const isStrong = token.startsWith("**");
+    const clean = isStrong ? token.slice(2, -2) : token.slice(1, -1);
+    parts.push(
+      <Text key={`${keyPrefix}-${match.index}`} style={isStrong ? styles.markdownStrong : styles.markdownEm}>
+        {clean}
+      </Text>
+    );
+    lastIndex = match.index + token.length;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return parts;
+}
+
+function MarkdownMessage({ text }: { text: string }) {
+  const blocks = text.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+
+  return (
+    <View>
+      {blocks.map((block, blockIndex) => {
+        const lines = block.split("\n").map((line) => line.trimEnd()).filter(Boolean);
+        const isList = lines.every((line) => /^(\*|-)\s+/.test(line.trim()));
+
+        if (isList) {
+          return (
+            <View key={`block-${blockIndex}`} style={styles.markdownBlock}>
+              {lines.map((line, lineIndex) => {
+                const item = line.trim().replace(/^(\*|-)\s+/, "");
+                return (
+                  <View key={`item-${blockIndex}-${lineIndex}`} style={styles.markdownListRow}>
+                    <Text style={styles.markdownBullet}>•</Text>
+                    <Text style={styles.markdownText}>{renderInlineMarkdown(item, `li-${blockIndex}-${lineIndex}`)}</Text>
+                  </View>
+                );
+              })}
+            </View>
+          );
+        }
+
+        return (
+          <View key={`block-${blockIndex}`} style={styles.markdownBlock}>
+            {lines.map((line, lineIndex) => {
+              const heading = line.match(/^#{1,4}\s+(.+)$/);
+              if (heading) {
+                return (
+                  <Text key={`h-${blockIndex}-${lineIndex}`} style={styles.markdownHeading}>
+                    {renderInlineMarkdown(heading[1], `h-${blockIndex}-${lineIndex}`)}
+                  </Text>
+                );
+              }
+
+              const listItem = line.match(/^(\*|-)\s+(.+)$/);
+              if (listItem) {
+                return (
+                  <View key={`mixed-li-${blockIndex}-${lineIndex}`} style={styles.markdownListRow}>
+                    <Text style={styles.markdownBullet}>•</Text>
+                    <Text style={styles.markdownText}>{renderInlineMarkdown(listItem[2], `mli-${blockIndex}-${lineIndex}`)}</Text>
+                  </View>
+                );
+              }
+
+              return (
+                <Text key={`p-${blockIndex}-${lineIndex}`} style={styles.markdownText}>
+                  {renderInlineMarkdown(line, `p-${blockIndex}-${lineIndex}`)}
+                </Text>
+              );
+            })}
+          </View>
+        );
+      })}
+    </View>
+  );
 }
 
 export default function ChatScreen() {
@@ -447,10 +537,14 @@ function Bubble({ msg, displayText, onSpeak, speaking }: { msg: Msg; displayText
       <View style={[styles.bubbleRow, isUser ? styles.bubbleRowUser : styles.bubbleRowAi]} testID={`message-${msg.role}`}>
         {!isUser ? <Image source={MYRA_AVATAR} style={styles.aiAvatar} /> : null}
         <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAi, isUser ? null : shadow.card]}>
-          <T variant="bodyLg" color={theme.textOnDark}>
-            {displayText}
-            {isRevealing ? "|" : ""}
-          </T>
+          {isUser || isRevealing ? (
+            <T variant="bodyLg" color={theme.textOnDark}>
+              {displayText}
+              {isRevealing ? "|" : ""}
+            </T>
+          ) : (
+            <MarkdownMessage text={displayText} />
+          )}
           {!isUser && !isRevealing ? (
             <TouchableOpacity onPress={() => onSpeak(msg)} style={styles.speakBtn} activeOpacity={0.75} testID="message-speak-button">
               <Ionicons name={speaking ? "stop" : "volume-medium-outline"} size={16} color="rgba(247,251,255,0.72)" />
@@ -494,6 +588,42 @@ const styles = StyleSheet.create({
   bubble: { maxWidth: "82%", paddingVertical: 14, paddingHorizontal: 16, borderRadius: 16 },
   bubbleUser: { backgroundColor: "rgba(29,142,216,0.78)", borderBottomRightRadius: 4, borderWidth: 1, borderColor: "rgba(255,255,255,0.16)" },
   bubbleAi: { backgroundColor: "rgba(6,19,32,0.62)", borderBottomLeftRadius: 4, borderWidth: 1, borderColor: "rgba(255,255,255,0.18)", backdropFilter: "blur(18px)" },
+  markdownBlock: { marginBottom: 8 },
+  markdownText: {
+    color: theme.textOnDark,
+    fontFamily: "Manrope_400Regular",
+    fontSize: 16,
+    lineHeight: 25,
+  },
+  markdownHeading: {
+    color: theme.textOnDark,
+    fontFamily: "Manrope_600SemiBold",
+    fontSize: 16,
+    lineHeight: 23,
+    marginBottom: 4,
+  },
+  markdownStrong: {
+    color: theme.textOnDark,
+    fontFamily: "Manrope_600SemiBold",
+  },
+  markdownEm: {
+    color: theme.textOnDark,
+    fontFamily: "Manrope_400Regular",
+    fontStyle: "italic",
+  },
+  markdownListRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 5,
+    paddingRight: 4,
+  },
+  markdownBullet: {
+    width: 16,
+    paddingTop: 1,
+    color: "rgba(247,251,255,0.78)",
+    fontSize: 16,
+    lineHeight: 25,
+  },
   speakBtn: {
     alignSelf: "flex-end",
     marginTop: 8,

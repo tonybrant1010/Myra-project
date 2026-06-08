@@ -36,6 +36,21 @@ type SessionItem = {
   created_at: string;
 };
 
+type ChatActivity = {
+  generated_at: string;
+  today: { assistant_messages: number; user_messages: number; active_users: number };
+  last_24h: { assistant_messages: number; user_messages: number; active_users: number };
+  last_7d: { assistant_messages: number; user_messages: number; active_users: number };
+  last_message_at: string | null;
+  top_users_24h: Array<{
+    id: number;
+    name: string;
+    email: string;
+    message_count: number;
+    last_message_at: string | null;
+  }>;
+};
+
 const chartDimensions = [
   { key: "a" as const, label: "A", color: "#1F7FB8" },
   { key: "p" as const, label: "P", color: "#F28E2B" },
@@ -47,6 +62,67 @@ function shortDate(value: string): string {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return "";
   return `${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}.`;
+}
+
+function activityTime(value: string | null): string {
+  if (!value) return "nincs adat";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "nincs adat";
+  return d.toLocaleString("hu-HU", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function ActivityStat({ label, value, hint }: { label: string; value: number; hint: string }) {
+  return (
+    <View style={styles.activityStat}>
+      <T variant="caption" color="rgba(247,251,255,0.58)" style={{ letterSpacing: 1 }}>{label}</T>
+      <T variant="h2" color={theme.textOnDark}>{value}</T>
+      <T variant="small" color="rgba(247,251,255,0.58)">{hint}</T>
+    </View>
+  );
+}
+
+function ChatActivityCard({ activity }: { activity: ChatActivity | null }) {
+  if (!activity) {
+    return (
+      <View style={styles.activityCard}>
+        <View style={styles.activityHeader}>
+          <T variant="label" color={theme.textOnDark}>Chatbot aktivitás</T>
+          <T variant="small" color="rgba(247,251,255,0.58)">betöltés...</T>
+        </View>
+      </View>
+    );
+  }
+
+  const topUser = activity.top_users_24h[0];
+
+  return (
+    <View style={styles.activityCard}>
+      <View style={styles.activityHeader}>
+        <View>
+          <T variant="label" color={theme.textOnDark}>Chatbot aktivitás</T>
+          <T variant="small" color="rgba(247,251,255,0.58)">
+            Utolsó üzenet: {activityTime(activity.last_message_at)}
+          </T>
+        </View>
+        <View style={styles.liveDotWrap}>
+          <View style={styles.liveDot} />
+          <T variant="small" color={theme.accent}>élő adat</T>
+        </View>
+      </View>
+
+      <View style={styles.activityStatsRow}>
+        <ActivityStat label="MA" value={activity.today.assistant_messages} hint={`${activity.today.active_users} aktív user`} />
+        <ActivityStat label="24 ÓRA" value={activity.last_24h.assistant_messages} hint={`${activity.last_24h.user_messages} user üzenet`} />
+        <ActivityStat label="7 NAP" value={activity.last_7d.assistant_messages} hint={`${activity.last_7d.active_users} aktív user`} />
+      </View>
+
+      <View style={styles.activityFooter}>
+        <T variant="small" color="rgba(247,251,255,0.62)">
+          Top 24h: {topUser ? `${topUser.name} (${topUser.message_count})` : "nincs kiugró aktivitás"}
+        </T>
+      </View>
+    </View>
+  );
 }
 
 function AdminTrendChart({ sessions }: { sessions: SessionItem[] }) {
@@ -150,6 +226,7 @@ function AdminTrendChart({ sessions }: { sessions: SessionItem[] }) {
 export default function AdminUsersScreen() {
   const { token, user } = useAuth();
   const [users, setUsers] = useState<UserItem[]>([]);
+  const [activity, setActivity] = useState<ChatActivity | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedUser, setSelectedUser] = useState<UserItem | null>(null);
   const [sessions, setSessions] = useState<SessionItem[]>([]);
@@ -161,10 +238,17 @@ export default function AdminUsersScreen() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await authedFetch(token, "/api/admin/users");
-      if (r.ok) {
-        const data = await r.json();
+      const [usersResponse, activityResponse] = await Promise.all([
+        authedFetch(token, "/api/admin/users"),
+        authedFetch(token, "/api/admin/chat-activity"),
+      ]);
+      if (usersResponse.ok) {
+        const data = await usersResponse.json();
         setUsers(data.users || []);
+      }
+      if (activityResponse.ok) {
+        const data = await activityResponse.json();
+        setActivity(data);
       }
     } finally {
       setLoading(false);
@@ -271,6 +355,7 @@ export default function AdminUsersScreen() {
               <T variant="small" color={theme.accent}>Frissítés</T>
             </TouchableOpacity>
           </View>
+          <ChatActivityCard activity={activity} />
 
           {loading ? (
             <View style={styles.center}>
@@ -453,6 +538,54 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   refreshBtn: { paddingHorizontal: 12, paddingVertical: 6 },
+  activityCard: {
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.18)",
+    backgroundColor: "rgba(6,19,32,0.58)",
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 12,
+  },
+  activityHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+    marginBottom: 12,
+  },
+  liveDotWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingTop: 2,
+  },
+  liveDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: theme.accent,
+  },
+  activityStatsRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  activityStat: {
+    flex: 1,
+    minHeight: 74,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(255,255,255,0.07)",
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    justifyContent: "space-between",
+  },
+  activityFooter: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255,255,255,0.1)",
+  },
   row: {
     flexDirection: "row",
     alignItems: "flex-start",

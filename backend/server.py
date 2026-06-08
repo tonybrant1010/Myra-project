@@ -11,6 +11,7 @@ import uuid
 import logging
 import smtplib
 import random
+import ssl
 import subprocess
 import threading
 from contextlib import asynccontextmanager
@@ -88,7 +89,34 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logger = logging.getLogger("myra")
 
 # ---------- DB ----------
-engine = create_async_engine(DATABASE_URL, future=True, echo=False)
+def _normalize_database_url(url: str) -> str:
+    if url.startswith("postgresql+asyncpg://") or url.startswith("sqlite+aiosqlite://"):
+        return url
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+asyncpg://", 1)
+    if url.startswith("sqlite:///"):
+        return url.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
+    return url
+
+
+DATABASE_URL = _normalize_database_url(DATABASE_URL)
+DB_DIALECT = "postgresql" if DATABASE_URL.startswith("postgresql+asyncpg://") else "sqlite"
+engine_connect_args = {}
+if DB_DIALECT == "postgresql" and os.environ.get("DATABASE_SSL", "true").lower() not in {"0", "false", "no", "off"}:
+    database_ssl_mode = os.environ.get("DATABASE_SSL_MODE", "require").strip().lower()
+    if database_ssl_mode in {"require", "required"}:
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        engine_connect_args["ssl"] = ssl_context
+    elif database_ssl_mode in {"verify-full", "verify_ca", "verify-ca", "true", "1", "yes", "on"}:
+        engine_connect_args["ssl"] = True
+    else:
+        engine_connect_args["ssl"] = True
+
+engine = create_async_engine(DATABASE_URL, future=True, echo=False, connect_args=engine_connect_args)
 SessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
 
 
@@ -384,6 +412,19 @@ def _fts_query(query: str) -> str:
     return " OR ".join(f'"{term}"' for term in unique)
 
 
+def _knowledge_terms(query: str, max_terms: int = 10) -> list[str]:
+    terms = re.findall(r"[\w\u00c0-\u017f]{3,}", query.lower())
+    stop = {"hogy", "vagy", "mint", "mert", "amit", "ahol", "amikor", "egyik", "másik", "van", "lesz", "nem"}
+    unique: list[str] = []
+    for term in terms:
+        if term in stop or term in unique:
+            continue
+        unique.append(term)
+        if len(unique) >= max_terms:
+            break
+    return unique
+
+
 def _expand_knowledge_query(query: str) -> str:
     q = query.lower()
     expansions: list[str] = []
@@ -439,8 +480,9 @@ async def rebuild_pdf_knowledge_index(db: AsyncSession, source_dir: Optional[str
             skipped.append(pdf_path.name)
 
     await db.commit()
-    await db.execute(sql_text("INSERT INTO knowledge_chunks_fts(knowledge_chunks_fts) VALUES ('rebuild')"))
-    await db.commit()
+    if DB_DIALECT == "sqlite":
+        await db.execute(sql_text("INSERT INTO knowledge_chunks_fts(knowledge_chunks_fts) VALUES ('rebuild')"))
+        await db.commit()
     return {
         "ok": True,
         "source_dir": str(pdf_dir),
@@ -452,19 +494,55 @@ async def rebuild_pdf_knowledge_index(db: AsyncSession, source_dir: Optional[str
 
 
 async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> list[KnowledgeChunk]:
-    fts = _fts_query(_expand_knowledge_query(query))
-    if not fts:
-        return []
     limit = max(1, min(limit, 10))
-    stmt = sql_text("""
-        SELECT kc.*
-        FROM knowledge_chunks_fts fts
-        JOIN knowledge_chunks kc ON kc.id = fts.rowid
-        WHERE knowledge_chunks_fts MATCH :query
-        ORDER BY bm25(knowledge_chunks_fts)
+    expanded_query = _expand_knowledge_query(query)
+    if DB_DIALECT == "sqlite":
+        fts = _fts_query(expanded_query)
+        if not fts:
+            return []
+        stmt = sql_text("""
+            SELECT kc.*
+            FROM knowledge_chunks_fts fts
+            JOIN knowledge_chunks kc ON kc.id = fts.rowid
+            WHERE knowledge_chunks_fts MATCH :query
+            ORDER BY bm25(knowledge_chunks_fts)
+            LIMIT :limit
+        """)
+        res = await db.execute(stmt, {"query": fts, "limit": limit})
+        rows = res.mappings().all()
+        return [
+            KnowledgeChunk(
+                id=row["id"],
+                source_name=row["source_name"],
+                source_path=row["source_path"],
+                source_hash=row["source_hash"],
+                chunk_index=row["chunk_index"],
+                title=row["title"],
+                content=row["content"],
+            )
+            for row in rows
+        ]
+
+    terms = _knowledge_terms(expanded_query)
+    if not terms:
+        return []
+    params = {"limit": limit}
+    where_parts = []
+    score_parts = []
+    for i, term in enumerate(terms):
+        key = f"term{i}"
+        params[key] = f"%{term}%"
+        where_parts.append(f"(content ILIKE :{key} OR title ILIKE :{key} OR source_name ILIKE :{key})")
+        score_parts.append(f"CASE WHEN content ILIKE :{key} THEN 1 ELSE 0 END")
+        score_parts.append(f"CASE WHEN title ILIKE :{key} THEN 2 ELSE 0 END")
+    stmt = sql_text(f"""
+        SELECT *
+        FROM knowledge_chunks
+        WHERE {" OR ".join(where_parts)}
+        ORDER BY ({" + ".join(score_parts)}) DESC, id ASC
         LIMIT :limit
     """)
-    res = await db.execute(stmt, {"query": fts, "limit": limit})
+    res = await db.execute(stmt, params)
     rows = res.mappings().all()
     return [
         KnowledgeChunk(
@@ -515,6 +593,38 @@ Ha a felhasználó azt mondja, hogy csak veled akar beszélni és nem másokkal,
 Magyarországi felhasználónál említsd röviden: 112 sürgős veszély esetén, 116-123 lelki elsősegély. Ne adj hosszú listát.
 Kérdezz rá röviden a közvetlen biztonságra: egyedül van-e, van-e közvetlen veszély vagy eszköz a közelében, tud-e most valakit odahívni.
 Ne adj módszert, ne részletezz önsértési módokat, ne vitatkozz, ne moralizálj, ne ígérj titoktartást."""
+
+
+async def _run_startup_migrations() -> None:
+    if DB_DIALECT == "sqlite":
+        import sqlite3 as _sqlite3
+        _db_path = str(DATABASE_URL).replace("sqlite+aiosqlite:///", "")
+        try:
+            _conn = _sqlite3.connect(_db_path)
+            _cols = {row[1] for row in _conn.execute("PRAGMA table_info(users)")}
+            if "is_suspended" not in _cols:
+                _conn.execute("ALTER TABLE users ADD COLUMN is_suspended BOOLEAN NOT NULL DEFAULT 0")
+                print("[startup] migráció: users.is_suspended hozzáadva")
+            _cols2 = {row[1] for row in _conn.execute("PRAGMA table_info(chat_messages)")}
+            if "session_id" not in _cols2:
+                _conn.execute("ALTER TABLE chat_messages ADD COLUMN session_id VARCHAR(40)")
+                print("[startup] migráció: chat_messages.session_id hozzáadva")
+            _ensure_knowledge_fts(_conn)
+            _conn.commit()
+            _conn.close()
+        except Exception as _e:
+            print(f"[startup] migráció figyelmeztetés: {_e}")
+        return
+
+    async with engine.begin() as conn:
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_suspended BOOLEAN NOT NULL DEFAULT false"))
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token VARCHAR(10)"))
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMP WITH TIME ZONE"))
+        await conn.execute(sql_text("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS session_id VARCHAR(40)"))
+        await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_chat_messages_session_id ON chat_messages (session_id)"))
+        await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_chat_messages_state_code ON chat_messages (state_code)"))
+        await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_source_name ON knowledge_chunks (source_name)"))
+        await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_source_hash ON knowledge_chunks (source_hash)"))
 
 
 # ---------- DB session ----------
@@ -613,24 +723,7 @@ async def lifespan(app: FastAPI):
     # Startup
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    # Séma migráció: hiányzó oszlopok hozzáadása meglévő táblákhoz
-    import sqlite3 as _sqlite3
-    _db_path = str(DATABASE_URL).replace("sqlite+aiosqlite:///", "")
-    try:
-        _conn = _sqlite3.connect(_db_path)
-        _cols = {row[1] for row in _conn.execute("PRAGMA table_info(users)")}
-        if "is_suspended" not in _cols:
-            _conn.execute("ALTER TABLE users ADD COLUMN is_suspended BOOLEAN NOT NULL DEFAULT 0")
-            print("[startup] migráció: users.is_suspended hozzáadva")
-        _cols2 = {row[1] for row in _conn.execute("PRAGMA table_info(chat_messages)")}
-        if "session_id" not in _cols2:
-            _conn.execute("ALTER TABLE chat_messages ADD COLUMN session_id VARCHAR(40)")
-            print("[startup] migráció: chat_messages.session_id hozzáadva")
-        _ensure_knowledge_fts(_conn)
-        _conn.commit()
-        _conn.close()
-    except Exception as _e:
-        print(f"[startup] migráció figyelmeztetés: {_e}")
+    await _run_startup_migrations()
     # Alapértelmezett beállítások inicializálása
     async with SessionLocal() as db:
         for k, v in [
@@ -1247,15 +1340,30 @@ async def quiz_delete_session(
 
 
 # ---------- Chat (pluggable LLM provider) ----------
-def _build_state_block(sc: StateCode) -> str:
+def _first_name(full_name: str) -> str:
+    cleaned = " ".join((full_name or "").strip().split())
+    parts = cleaned.split()
+    if len(parts) >= 2:
+        return parts[1]
+    return parts[0] if parts else ""
+
+
+def _build_state_block(sc: StateCode, user_name: str = "") -> str:
     a_map = {1: "alacsony szorongás", 2: "enyhe szorongás", 3: "emelkedett szorongás", 4: "magas szorongás"}
     p_map = {1: "gyenge érzelemszabályozás", 2: "ingadozó érzelemszabályozás",
              3: "stabil érzelemszabályozás", 4: "erős érzelemszabályozás"}
     h_map = {1: "alacsony stressz", 2: "enyhe stressz", 3: "emelkedett stressz", 4: "magas stressz"}
     c_map = {1: "kevés testi tünet", 2: "enyhe testi tünetek",
              3: "fokozott testi tünetek", 4: "kifejezett testi tünetek"}
+    first_name = _first_name(user_name)
+    name_line = (
+        f"- Felhasználó keresztneve: {first_name}\n"
+        "- A nevet csak természetesen és ritkán használd; ne kezdd minden választ megszólítással.\n"
+        if first_name else ""
+    )
     return (
         "BELSŐ KONTEXTUS – soha ne idézd a felhasználónak.\n"
+        f"{name_line}"
         f"- Kód: {sc.code}\n"
         f"- A (érzelmi állapot): {sc.a} ({a_map.get(sc.a, '-')})\n"
         f"- P (érzelemszabályozás, fordított): {sc.p} ({p_map.get(sc.p, '-')})\n"
@@ -1265,8 +1373,8 @@ def _build_state_block(sc: StateCode) -> str:
     )
 
 
-def _build_system_prompt(system_prompt: str, kb_text: str, sc: StateCode) -> str:
-    state_block = _build_state_block(sc)
+def _build_system_prompt(system_prompt: str, kb_text: str, sc: StateCode, user_name: str = "") -> str:
+    state_block = _build_state_block(sc, user_name)
     parts = [system_prompt, "", state_block]
     if kb_text.strip():
         parts += ["", "TUDÁSANYAG (csak felismeréshez, soha ne idézd):", kb_text]
@@ -1471,7 +1579,7 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
             refreshed = await asyncio.to_thread(_sync_refresh_gemini_cache, api_key, cache_name)
             if refreshed:
                 _gemini_cache_name = cache_name
-                state_block = _build_state_block(sc)
+                state_block = _build_state_block(sc, user.name)
                 cached_contents = [
                     {"role": "user", "parts": [{"text": f"[BELSŐ KONTEXTUS – soha ne idézd a felhasználónak]\n{state_block}"}]},
                     {"role": "model", "parts": [{"text": "Megértettem."}]},
@@ -1504,7 +1612,7 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
     # --- Hagyományos útvonal (fallback) ---
     if reply is None:
         effective_kb = "\n\n".join(part for part in [kb_text.strip(), crisis_context, retrieved_kb_context] if part)
-        sys_prompt = _build_system_prompt(sys_prompt_base, effective_kb, sc)
+        sys_prompt = _build_system_prompt(sys_prompt_base, effective_kb, sc, user.name)
         try:
             reply = await _call_llm(provider, model, api_key, sys_prompt, history, text)
         except HTTPException:
@@ -1749,6 +1857,73 @@ async def admin_list_users(_: User = Depends(require_admin), db: AsyncSession = 
     ]}
 
 
+@api.get("/admin/chat-activity")
+async def admin_chat_activity(_: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    now = _now()
+    start_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    last_24h = now - timedelta(hours=24)
+    last_7d = now - timedelta(days=7)
+
+    async def message_count(since: datetime, role: Optional[str] = None) -> int:
+        q = select(func.count(ChatMessage.id)).where(ChatMessage.created_at >= since)
+        if role:
+            q = q.where(ChatMessage.role == role)
+        return int((await db.execute(q)).scalar() or 0)
+
+    async def active_users(since: datetime) -> int:
+        q = select(func.count(func.distinct(ChatMessage.user_id))).where(ChatMessage.created_at >= since)
+        return int((await db.execute(q)).scalar() or 0)
+
+    top_res = await db.execute(
+        select(
+            User.id,
+            User.name,
+            User.email,
+            func.count(ChatMessage.id).label("message_count"),
+            func.max(ChatMessage.created_at).label("last_message_at"),
+        )
+        .join(User, User.id == ChatMessage.user_id)
+        .where(ChatMessage.created_at >= last_24h, ChatMessage.role == "assistant")
+        .group_by(User.id, User.name, User.email)
+        .order_by(func.count(ChatMessage.id).desc(), func.max(ChatMessage.created_at).desc())
+        .limit(5)
+    )
+    top_users = [
+        {
+            "id": row.id,
+            "name": row.name,
+            "email": row.email,
+            "message_count": int(row.message_count or 0),
+            "last_message_at": row.last_message_at.isoformat() if row.last_message_at else None,
+        }
+        for row in top_res
+    ]
+
+    last_res = await db.execute(select(func.max(ChatMessage.created_at)))
+    last_message_at = last_res.scalar()
+
+    return {
+        "generated_at": now.isoformat(),
+        "today": {
+            "assistant_messages": await message_count(start_today, "assistant"),
+            "user_messages": await message_count(start_today, "user"),
+            "active_users": await active_users(start_today),
+        },
+        "last_24h": {
+            "assistant_messages": await message_count(last_24h, "assistant"),
+            "user_messages": await message_count(last_24h, "user"),
+            "active_users": await active_users(last_24h),
+        },
+        "last_7d": {
+            "assistant_messages": await message_count(last_7d, "assistant"),
+            "user_messages": await message_count(last_7d, "user"),
+            "active_users": await active_users(last_7d),
+        },
+        "last_message_at": last_message_at.isoformat() if last_message_at else None,
+        "top_users_24h": top_users,
+    }
+
+
 @api.get("/admin/users/{user_id}/sessions")
 async def admin_user_sessions(user_id: int, _: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     res = await db.execute(
@@ -1835,6 +2010,11 @@ async def admin_delete_user(user_id: int, _: User = Depends(require_admin), db: 
 
 @api.get("/admin/backup")
 async def admin_backup_db(_: User = Depends(require_admin)):
+    if DB_DIALECT != "sqlite":
+        raise HTTPException(
+            status_code=501,
+            detail="Postgres/Supabase adatbázisnál a backupot pg_dump vagy Supabase backup kezeli.",
+        )
     db_path = str(DATABASE_URL).replace("sqlite+aiosqlite:///", "")
     if not os.path.exists(db_path):
         raise HTTPException(status_code=404, detail="Az adatbázis fájl nem található.")
