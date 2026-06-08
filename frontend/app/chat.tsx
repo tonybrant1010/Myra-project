@@ -149,7 +149,6 @@ export default function ChatScreen() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [viewSessionId, setViewSessionId] = useState<string | null>(null);
   const listRef = useRef<FlatList>(null);
-  const scrollTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const audioRef = useRef<any>(null);
   const audioUrlRef = useRef<string | null>(null);
   const recognitionRef = useRef<any>(null);
@@ -157,23 +156,15 @@ export default function ChatScreen() {
   const revealTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const revealActiveRef = useRef<{ id: string; text: string } | null>(null);
   const animatedMessageIdsRef = useRef<Set<string>>(new Set());
-  const initialScrollUntilRef = useRef(0);
 
-  const scrollToBottom = useCallback((animated = false, settled = false) => {
-    scrollTimers.current.forEach(clearTimeout);
-    const delays = settled ? [0, 80, 220, 520, 900, 1400, 2200, 3200, 4500] : [0, 80, 220, 520];
-    scrollTimers.current = delays.map((delay) =>
-      setTimeout(() => {
-        requestAnimationFrame(() => {
-          listRef.current?.scrollToEnd({ animated });
-        });
-      }, delay)
-    );
+  const scrollToBottom = useCallback((animated = false) => {
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToOffset({ offset: 0, animated });
+    });
   }, []);
 
   useEffect(() => {
     return () => {
-      scrollTimers.current.forEach(clearTimeout);
       if (revealTimerRef.current) clearInterval(revealTimerRef.current);
       recognitionRef.current?.stop?.();
       audioRef.current?.pause?.();
@@ -216,13 +207,13 @@ export default function ChatScreen() {
       setRevealedTexts((prev) => ({ ...prev, [message.id]: chars.slice(0, index).join("") }));
 
       tick += 1;
-      if (tick % 8 === 0) scrollToBottom(true);
+      if (tick % 16 === 0) scrollToBottom(false);
 
       if (index >= chars.length) {
         if (revealTimerRef.current) clearInterval(revealTimerRef.current);
         revealTimerRef.current = null;
         revealActiveRef.current = null;
-        scrollToBottom(true);
+        scrollToBottom(false);
       }
     };
 
@@ -246,7 +237,6 @@ export default function ChatScreen() {
   const loadHistory = useCallback(async (sid: string | null) => {
     setLoading(true);
     setDidInitialScroll(false);
-    initialScrollUntilRef.current = Date.now() + 5000;
     try {
       const url = sid ? `/api/chat/history?session_id=${sid}` : "/api/chat/history";
       const r = await authedFetch(token, url);
@@ -421,11 +411,11 @@ export default function ChatScreen() {
   };
 
   const items = buildListItems(messages, user?.state_code);
+  const visibleItems = [...items].reverse();
 
   useEffect(() => {
     if (!loading && items.length > 0 && !didInitialScroll) {
-      initialScrollUntilRef.current = Date.now() + 5000;
-      scrollToBottom(false, true);
+      scrollToBottom(false);
       setDidInitialScroll(true);
     }
   }, [didInitialScroll, items.length, loading, scrollToBottom]);
@@ -449,7 +439,8 @@ export default function ChatScreen() {
           ) : (
             <FlatList
               ref={listRef}
-              data={items}
+              data={visibleItems}
+              inverted
               keyExtractor={(item) => (item.kind === "msg" ? item.msg.id : item.id)}
               contentContainerStyle={styles.listContent}
               renderItem={({ item }) =>
@@ -469,16 +460,10 @@ export default function ChatScreen() {
                   />
                 )
               }
-              onContentSizeChange={() => {
-                if (!didInitialScroll || Date.now() < initialScrollUntilRef.current) {
-                  scrollToBottom(false, true);
-                  setDidInitialScroll(true);
-                }
-              }}
               onLayout={() => {
-                if (!didInitialScroll || Date.now() < initialScrollUntilRef.current) scrollToBottom(false, true);
+                if (!didInitialScroll) scrollToBottom(false);
               }}
-              ListFooterComponent={sending ? (
+              ListHeaderComponent={sending ? (
                 <View style={styles.typing} testID="typing-indicator">
                   <ActivityIndicator color={theme.primary} size="small" />
                   <T variant="small" color="rgba(247,251,255,0.66)" style={{ marginLeft: 8 }}>Myra ír...</T>

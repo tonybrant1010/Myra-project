@@ -151,6 +151,10 @@ async def migrate(source_sqlite, target_url, wipe_target=False):
 
     source.close()
 
+    if server.DB_DIALECT == "postgresql":
+        async with server.engine.begin() as conn:
+            await server._reset_postgres_sequences(conn)
+
     async with server.SessionLocal() as db:
         counts = {}
         for name, model in [

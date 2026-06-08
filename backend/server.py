@@ -625,6 +625,20 @@ async def _run_startup_migrations() -> None:
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_chat_messages_state_code ON chat_messages (state_code)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_source_name ON knowledge_chunks (source_name)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_source_hash ON knowledge_chunks (source_hash)"))
+        await _reset_postgres_sequences(conn)
+
+
+async def _reset_postgres_sequences(conn) -> None:
+    if DB_DIALECT != "postgresql":
+        return
+    for table_name, column_name in [("users", "id"), ("knowledge_chunks", "id")]:
+        await conn.execute(sql_text(f"""
+            SELECT setval(
+                pg_get_serial_sequence('{table_name}', '{column_name}'),
+                COALESCE((SELECT MAX({column_name}) FROM {table_name}), 1),
+                (SELECT COUNT(*) > 0 FROM {table_name})
+            )
+        """))
 
 
 # ---------- DB session ----------
