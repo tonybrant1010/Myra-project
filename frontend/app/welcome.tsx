@@ -4,10 +4,10 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "@/src/auth/AuthContext";
-import { shadow, theme } from "@/src/theme";
 import ContentBackground from "@/src/components/ContentBackground";
-import { T } from "@/src/components/Typography";
 import TopBar from "@/src/components/TopBar";
+import { T } from "@/src/components/Typography";
+import { shadow, theme } from "@/src/theme";
 
 export default function WelcomeScreen() {
   const { user } = useAuth();
@@ -112,7 +112,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.18)",
     backdropFilter: "blur(18px)",
-  },
+  } as any,
   infoHead: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 12 },
   infoIcon: {
     width: 34,

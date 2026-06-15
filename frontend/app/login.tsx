@@ -14,28 +14,34 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { Link, useRouter } from "expo-router";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { apiUrl, useAuth } from "@/src/auth/AuthContext";
-import { shadow, theme } from "@/src/theme";
-import { T } from "@/src/components/Typography";
-import PasswordInput from "@/src/components/PasswordInput";
 import ContentBackground from "@/src/components/ContentBackground";
+import PasswordInput from "@/src/components/PasswordInput";
+import { T } from "@/src/components/Typography";
+import { shadow, theme } from "@/src/theme";
 
 const MYRA_MARK = require("@/assets/images/uj_logo1_kor.png");
 
+type Mode = "login" | "mfa" | "forgot" | "reset";
+
 export default function LoginScreen() {
   const router = useRouter();
-  const { login } = useAuth();
+  const { login, verifyMfa } = useAuth();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<"login" | "forgot" | "reset">("login");
+  const [mode, setMode] = useState<Mode>("login");
   const [resetCode, setResetCode] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [passwordConfirm, setPasswordConfirm] = useState("");
+  const [mfaChallengeId, setMfaChallengeId] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
+  const [rememberDevice, setRememberDevice] = useState(true);
+  const [mfaIsAdmin, setMfaIsAdmin] = useState(false);
 
   const submit = async () => {
     setError(null);
@@ -46,7 +52,28 @@ export default function LoginScreen() {
     setBusy(true);
     const r = await login(email.trim(), password);
     setBusy(false);
+    if (r.mfaRequired && r.challengeId) {
+      setMfaChallengeId(r.challengeId);
+      setMfaIsAdmin(!!r.isAdmin);
+      setRememberDevice(!r.isAdmin);
+      setMfaCode("");
+      setMode("mfa");
+      return;
+    }
     if (!r.ok) setError(r.error || "Nem sikerült bejelentkezni.");
+    else router.replace("/");
+  };
+
+  const submitMfa = async () => {
+    setError(null);
+    if (!mfaChallengeId || !mfaCode.trim()) {
+      setError("Add meg az emailben kapott biztonsági kódot.");
+      return;
+    }
+    setBusy(true);
+    const r = await verifyMfa(mfaChallengeId, mfaCode.trim(), mfaIsAdmin ? false : rememberDevice);
+    setBusy(false);
+    if (!r.ok) setError(r.error || "Nem sikerült ellenőrizni a biztonsági kódot.");
     else router.replace("/");
   };
 
@@ -120,9 +147,11 @@ export default function LoginScreen() {
   const subtitle =
     mode === "login"
       ? "Mérés- és interakcióalapú mentálhigiénés alkalmazás."
-      : mode === "forgot"
-        ? "Biztonsági kódot küldünk a jelszó visszaállításához."
-        : "Írd be az emailben kapott kódot és az új jelszavad.";
+      : mode === "mfa"
+        ? "Add meg az emailben kapott biztonsági kódot."
+        : mode === "forgot"
+          ? "Biztonsági kódot küldünk a jelszó visszaállításához."
+          : "Írd be az emailben kapott kódot és az új jelszavad.";
 
   return (
     <SafeAreaView style={styles.safe} testID="login-screen">
@@ -142,106 +171,143 @@ export default function LoginScreen() {
               </View>
 
               <View style={styles.formSheet}>
-              <View style={[styles.formCard, shadow.card]}>
-                {mode === "login" ? (
-                  <>
-                    <FieldLabel text="Email" />
-                    <TextInput
-                      style={styles.input}
-                      value={email}
-                      onChangeText={setEmail}
-                      placeholder="email@example.com"
-                      placeholderTextColor={styles.placeholderColor.color}
-                      keyboardType="email-address"
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      testID="login-email"
-                    />
-                    <FieldLabel text="Jelszó" />
-                    <PasswordInput
-                      value={password}
-                      onChangeText={setPassword}
-                      placeholder="Jelszó"
-                      placeholderTextColor={styles.placeholderColor.color}
-                      containerStyle={styles.passwordBox}
-                      style={styles.passwordInput}
-                      testID="login-password"
-                    />
-                    <TouchableOpacity onPress={() => setMode("forgot")} style={styles.forgotBtn}>
-                      <T variant="small" color={theme.accentDeep}>Elfelejtetted a jelszavad?</T>
-                    </TouchableOpacity>
-                    {error ? <T variant="small" color={theme.danger} style={styles.error} testID="login-error">{error}</T> : null}
-                    <PrimaryButton busy={busy} label="Bejelentkezés" onPress={submit} testID="login-submit" />
-                    <View style={styles.foot}>
-                      <T variant="small" color="rgba(247,251,255,0.70)">Még nincs fiókod? </T>
-                      <Link href="/register" asChild>
-                        <Pressable testID="link-register">
-                          <T variant="small" color={theme.accentDeep} style={styles.link}>Regisztrálj</T>
-                        </Pressable>
-                      </Link>
-                    </View>
-                  </>
-                ) : null}
+                <View style={[styles.formCard, shadow.card]}>
+                  {mode === "login" ? (
+                    <>
+                      <FieldLabel text="Email" />
+                      <TextInput
+                        style={styles.input}
+                        value={email}
+                        onChangeText={setEmail}
+                        placeholder="email@example.com"
+                        placeholderTextColor={styles.placeholderColor.color}
+                        keyboardType="email-address"
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        testID="login-email"
+                      />
+                      <FieldLabel text="Jelszó" />
+                      <PasswordInput
+                        value={password}
+                        onChangeText={setPassword}
+                        placeholder="Jelszó"
+                        placeholderTextColor={styles.placeholderColor.color}
+                        containerStyle={styles.passwordBox}
+                        style={styles.passwordInput}
+                        testID="login-password"
+                      />
+                      <TouchableOpacity onPress={() => setMode("forgot")} style={styles.forgotBtn}>
+                        <T variant="small" color={theme.accentDeep}>Elfelejtetted a jelszavad?</T>
+                      </TouchableOpacity>
+                      {error ? <T variant="small" color={theme.danger} style={styles.error} testID="login-error">{error}</T> : null}
+                      <PrimaryButton busy={busy} label="Bejelentkezés" onPress={submit} testID="login-submit" />
+                      <View style={styles.foot}>
+                        <T variant="small" color="rgba(247,251,255,0.70)">Még nincs fiókod? </T>
+                        <Link href="/register" asChild>
+                          <Pressable testID="link-register">
+                            <T variant="small" color={theme.accentDeep} style={styles.link}>Regisztrálj</T>
+                          </Pressable>
+                        </Link>
+                      </View>
+                    </>
+                  ) : null}
 
-                {mode === "forgot" ? (
-                  <>
-                    <FieldLabel text="Email címed" />
-                    <TextInput
-                      style={styles.input}
-                      value={email}
-                      onChangeText={setEmail}
-                      placeholder="email@example.com"
-                      placeholderTextColor={styles.placeholderColor.color}
-                      keyboardType="email-address"
-                      autoCapitalize="none"
-                    />
-                    {error ? <T variant="small" color={theme.danger} style={styles.error}>{error}</T> : null}
-                    <PrimaryButton busy={busy} label="Biztonsági kód kérése" onPress={handleForgotPassword} />
-                    <TextButton label="Vissza a bejelentkezéshez" onPress={() => setMode("login")} />
-                  </>
-                ) : null}
+                  {mode === "mfa" ? (
+                    <>
+                      <View style={styles.securityBanner}>
+                        <Ionicons name="shield-checkmark-outline" size={20} color={theme.accentSoft} />
+                        <T variant="small" color="rgba(247,251,255,0.72)" style={{ flex: 1 }}>
+                          {mfaIsAdmin
+                            ? "Admin belépéshez mindig szükséges a külön biztonsági kód."
+                            : "Ehhez a fiókhoz kétlépcsős azonosítás van bekapcsolva."}
+                        </T>
+                      </View>
+                      <FieldLabel text="6 jegyű biztonsági kód" />
+                      <TextInput
+                        style={[styles.input, styles.codeInput]}
+                        value={mfaCode}
+                        onChangeText={setMfaCode}
+                        placeholder="000000"
+                        placeholderTextColor={styles.placeholderColor.color}
+                        keyboardType="number-pad"
+                        maxLength={6}
+                        testID="mfa-code"
+                      />
+                      {!mfaIsAdmin ? (
+                        <TouchableOpacity style={styles.checkRow} onPress={() => setRememberDevice((v) => !v)} activeOpacity={0.8}>
+                          <View style={[styles.checkbox, rememberDevice && styles.checkboxOn]}>
+                            {rememberDevice ? <Ionicons name="checkmark" size={15} color={theme.white} /> : null}
+                          </View>
+                          <T variant="small" color="rgba(247,251,255,0.72)" style={{ flex: 1 }}>
+                            Megbízható eszközként megjegyzem ezt a böngészőt
+                          </T>
+                        </TouchableOpacity>
+                      ) : null}
+                      {error ? <T variant="small" color={theme.danger} style={styles.error}>{error}</T> : null}
+                      <PrimaryButton busy={busy} label="Kód ellenőrzése" onPress={submitMfa} />
+                      <TextButton label="Vissza a bejelentkezéshez" onPress={() => setMode("login")} />
+                    </>
+                  ) : null}
 
-                {mode === "reset" ? (
-                  <>
-                    <FieldLabel text="6 jegyű biztonsági kód" />
-                    <TextInput
-                      style={[styles.input, styles.codeInput]}
-                      value={resetCode}
-                      onChangeText={setResetCode}
-                      placeholder="000000"
-                      placeholderTextColor={styles.placeholderColor.color}
-                      keyboardType="number-pad"
-                      maxLength={6}
-                    />
-                    <FieldLabel text="Új jelszó" />
-                    <PasswordInput
-                      value={newPassword}
-                      onChangeText={setNewPassword}
-                      placeholder="Legalább 8 karakter"
-                      placeholderTextColor={styles.placeholderColor.color}
-                      containerStyle={styles.passwordBox}
-                      style={styles.passwordInput}
-                    />
-                    <FieldLabel text="Megerősítés" />
-                    <PasswordInput
-                      value={passwordConfirm}
-                      onChangeText={setPasswordConfirm}
-                      placeholder="Új jelszó még egyszer"
-                      placeholderTextColor={styles.placeholderColor.color}
-                      containerStyle={styles.passwordBox}
-                      style={styles.passwordInput}
-                    />
-                    {error ? <T variant="small" color={theme.danger} style={styles.error}>{error}</T> : null}
-                    <PrimaryButton busy={busy} label="Jelszó mentése" onPress={handleResetSubmit} />
-                    <TextButton label="Mégis inkább bejelentkezem" onPress={() => setMode("login")} />
-                  </>
-                ) : null}
+                  {mode === "forgot" ? (
+                    <>
+                      <FieldLabel text="Email címed" />
+                      <TextInput
+                        style={styles.input}
+                        value={email}
+                        onChangeText={setEmail}
+                        placeholder="email@example.com"
+                        placeholderTextColor={styles.placeholderColor.color}
+                        keyboardType="email-address"
+                        autoCapitalize="none"
+                      />
+                      {error ? <T variant="small" color={theme.danger} style={styles.error}>{error}</T> : null}
+                      <PrimaryButton busy={busy} label="Biztonsági kód kérése" onPress={handleForgotPassword} />
+                      <TextButton label="Vissza a bejelentkezéshez" onPress={() => setMode("login")} />
+                    </>
+                  ) : null}
 
-                <View style={styles.supportRow}>
-                  <Ionicons name="mail-outline" size={15} color="rgba(247,251,255,0.58)" />
-                  <T variant="small" color="rgba(247,251,255,0.62)">myra-project@research.hu</T>
+                  {mode === "reset" ? (
+                    <>
+                      <FieldLabel text="6 jegyű biztonsági kód" />
+                      <TextInput
+                        style={[styles.input, styles.codeInput]}
+                        value={resetCode}
+                        onChangeText={setResetCode}
+                        placeholder="000000"
+                        placeholderTextColor={styles.placeholderColor.color}
+                        keyboardType="number-pad"
+                        maxLength={6}
+                      />
+                      <FieldLabel text="Új jelszó" />
+                      <PasswordInput
+                        value={newPassword}
+                        onChangeText={setNewPassword}
+                        placeholder="Legalább 8 karakter"
+                        placeholderTextColor={styles.placeholderColor.color}
+                        containerStyle={styles.passwordBox}
+                        style={styles.passwordInput}
+                      />
+                      <FieldLabel text="Megerősítés" />
+                      <PasswordInput
+                        value={passwordConfirm}
+                        onChangeText={setPasswordConfirm}
+                        placeholder="Új jelszó még egyszer"
+                        placeholderTextColor={styles.placeholderColor.color}
+                        containerStyle={styles.passwordBox}
+                        style={styles.passwordInput}
+                      />
+                      {error ? <T variant="small" color={theme.danger} style={styles.error}>{error}</T> : null}
+                      <PrimaryButton busy={busy} label="Jelszó mentése" onPress={handleResetSubmit} />
+                      <TextButton label="Mégis inkább bejelentkezem" onPress={() => setMode("login")} />
+                    </>
+                  ) : null}
+
+                  <View style={styles.supportRow}>
+                    <Ionicons name="mail-outline" size={15} color="rgba(247,251,255,0.58)" />
+                    <T variant="small" color="rgba(247,251,255,0.62)">myra-project@research.hu</T>
+                  </View>
                 </View>
-              </View>
               </View>
             </View>
           </ScrollView>
@@ -268,95 +334,101 @@ function PrimaryButton({ busy, label, onPress, testID }: { busy: boolean; label:
 function TextButton({ label, onPress }: { label: string; onPress: () => void }) {
   return (
     <TouchableOpacity onPress={onPress} style={styles.textButton}>
-      <T variant="small" color={theme.accentDeep}>{label}</T>
+      <T variant="label" color={theme.accentDeep}>{label}</T>
     </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: theme.primaryDark },
-  scroll: { flexGrow: 1 },
-  shell: { flex: 1 },
-  hero: {
-    alignItems: "center",
-    paddingTop: 48,
-    paddingBottom: 30,
-    paddingHorizontal: 28,
-  },
+  scroll: { flexGrow: 1, paddingHorizontal: 20, paddingVertical: 26 },
+  shell: { flex: 1, width: "100%", maxWidth: 520, alignSelf: "center", justifyContent: "center" },
+  hero: { alignItems: "center", marginBottom: 24 },
   logoRing: {
-    width: 94,
-    height: 94,
-    borderRadius: 47,
-    borderWidth: 2,
-    borderColor: "rgba(255,255,255,0.28)",
-    overflow: "hidden",
-    marginBottom: 18,
-    backgroundColor: "rgba(255,255,255,0.12)",
+    width: 88,
+    height: 88,
+    borderRadius: 44,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.20)",
+    marginBottom: 16,
   },
-  logo: { width: 86, height: 86, borderRadius: 43 },
-  heroCaption: { fontSize: 10, letterSpacing: 1.4 },
-  heroTitle: { fontSize: 40, lineHeight: 46, textAlign: "center", marginTop: 14 },
-  heroSubtitle: { maxWidth: 310, marginTop: 10 },
-  formSheet: {
-    flex: 1,
-    paddingHorizontal: 18,
-    paddingTop: 0,
-    paddingBottom: 38,
-  },
+  logo: { width: 82, height: 82, borderRadius: 41 },
+  heroCaption: { marginBottom: 7 },
+  heroTitle: { textAlign: "center" },
+  heroSubtitle: { marginTop: 10, maxWidth: 400, lineHeight: 22 },
+  formSheet: { width: "100%" },
   formCard: {
-    backgroundColor: "rgba(6,19,32,0.58)",
-    borderRadius: 16,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.18)",
+    backgroundColor: "rgba(6,19,32,0.62)",
     padding: 20,
-    backdropFilter: "blur(18px)",
   },
-  lbl: { marginTop: 12, marginBottom: 7, letterSpacing: 1.1, fontSize: 10 },
+  lbl: { marginTop: 12, marginBottom: 6 },
   input: {
-    backgroundColor: "rgba(247,251,255,0.12)",
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 15,
-    borderWidth: 1,
-    borderColor: "rgba(247,251,255,0.24)",
-    fontSize: 16,
-    color: theme.textOnDark,
-    fontFamily: "Manrope_400Regular",
-  },
-  placeholderColor: { color: "rgba(247,251,255,0.56)" },
-  passwordBox: {
-    backgroundColor: "rgba(247,251,255,0.12)",
-    borderColor: "rgba(247,251,255,0.24)",
-    borderRadius: 10,
-  },
-  passwordInput: {
-    color: theme.textOnDark,
-  },
-  codeInput: { letterSpacing: 6, textAlign: "center", fontSize: 22 },
-  forgotBtn: { alignSelf: "flex-end", paddingVertical: 10 },
-  primaryBtn: {
     minHeight: 52,
     borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: 16,
-    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.16)",
+    backgroundColor: "rgba(255,255,255,0.08)",
+    color: theme.textOnDark,
+    paddingHorizontal: 14,
+    fontFamily: "Manrope_500Medium",
+    fontSize: 15,
   },
-  primaryGradient: { minHeight: 52, alignItems: "center", justifyContent: "center", width: "100%" },
-  textButton: { alignSelf: "center", paddingVertical: 18 },
-  error: { marginTop: 10 },
-  foot: { flexDirection: "row", justifyContent: "center", marginTop: 20, alignItems: "center" },
+  codeInput: {
+    textAlign: "center",
+    letterSpacing: 6,
+    fontSize: 22,
+  },
+  placeholderColor: { color: "rgba(247,251,255,0.45)" },
+  passwordBox: {
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderColor: "rgba(255,255,255,0.16)",
+    borderRadius: 12,
+  },
+  passwordInput: { color: theme.textOnDark },
+  forgotBtn: { alignSelf: "flex-end", marginTop: 10, marginBottom: 4 },
+  error: { marginTop: 12 },
+  primaryBtn: { marginTop: 18, borderRadius: 12, overflow: "hidden" },
+  primaryGradient: { minHeight: 52, alignItems: "center", justifyContent: "center", paddingHorizontal: 18 },
+  textButton: { alignItems: "center", paddingVertical: 14 },
+  foot: { flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 18, flexWrap: "wrap" },
   link: { fontFamily: "Manrope_700Bold" },
-  supportRow: {
+  supportRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 18 },
+  securityBanner: {
+    minHeight: 52,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(87,199,255,0.22)",
+    backgroundColor: "rgba(87,199,255,0.12)",
     flexDirection: "row",
-    gap: 6,
-    justifyContent: "center",
     alignItems: "center",
-    marginTop: 30,
-    paddingTop: 18,
-    borderTopWidth: 1,
-    borderTopColor: "rgba(255,255,255,0.14)",
+    gap: 10,
+    paddingHorizontal: 12,
+    marginBottom: 6,
+  },
+  checkRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 12,
+  },
+  checkbox: {
+    width: 23,
+    height: 23,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.28)",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
+  checkboxOn: {
+    backgroundColor: theme.accentDeep,
+    borderColor: theme.accentDeep,
   },
 });

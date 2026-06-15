@@ -1,4 +1,4 @@
-﻿"""Myra-project backend — SQLite + custom JWT, no external dependencies except the
+"""Myra-project backend — SQLite + custom JWT, no external dependencies except the
 configurable LLM provider (OpenAI / Anthropic / Google Gemini) chosen by the admin."""
 import asyncio
 import csv
@@ -11,6 +11,7 @@ import uuid
 import logging
 import smtplib
 import random
+import secrets
 import ssl
 import subprocess
 import threading
@@ -46,6 +47,12 @@ try:
     GENAI_SDK_AVAILABLE = True
 except ImportError:
     GENAI_SDK_AVAILABLE = False
+
+try:
+    from google import genai as google_genai
+    GOOGLE_GENAI_AVAILABLE = True
+except ImportError:
+    GOOGLE_GENAI_AVAILABLE = False
 
 _gemini_cache_name: Optional[str] = None
 
@@ -133,6 +140,8 @@ class User(Base):
     is_admin = Column(Boolean, nullable=False, default=False)
     is_active = Column(Boolean, nullable=False, default=True)
     is_suspended = Column(Boolean, nullable=False, default=False)
+    mfa_enabled = Column(Boolean, nullable=False, default=False)
+    token_version = Column(Integer, nullable=False, default=0)
     state_code = Column(String(4), nullable=True)
     code_verified_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -197,6 +206,41 @@ class KnowledgeChunk(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class MfaChallenge(Base):
+    __tablename__ = "mfa_challenges"
+    id = Column(String(64), primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    code_hash = Column(String(128), nullable=False)
+    purpose = Column(String(32), nullable=False, default="login")
+    attempts = Column(Integer, nullable=False, default=0)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    consumed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class TrustedDevice(Base):
+    __tablename__ = "trusted_devices"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    device_hash = Column(String(128), unique=True, nullable=False, index=True)
+    label = Column(String(160), nullable=False, default="Megbízható eszköz")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class AdminAuditLog(Base):
+    __tablename__ = "admin_audit_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    admin_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    action = Column(String(120), nullable=False)
+    detail = Column(Text, nullable=False, default="")
+    ip = Column(String(80), nullable=False, default="")
+    user_agent = Column(Text, nullable=False, default="")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 # ---------- Security ----------
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -216,12 +260,23 @@ def verify_password(p: str, h: str) -> bool:
         return False
 
 
-def create_access_token(user: User) -> str:
+def _hash_secret(value: str) -> str:
+    return hashlib.sha256(f"{value}:{JWT_SECRET}".encode("utf-8")).hexdigest()
+
+
+def _hash_mfa_code(challenge_id: str, code: str) -> str:
+    return _hash_secret(f"mfa:{challenge_id}:{code.strip()}")
+
+
+def create_access_token(user: User, *, mfa_verified: bool = False) -> str:
     now = _now()
     payload = {
         "sub": str(user.id),
         "email": user.email,
         "is_admin": user.is_admin,
+        "token_version": int(getattr(user, "token_version", 0) or 0),
+        "mfa": bool(mfa_verified),
+        "mfa_at": int(now.timestamp()) if mfa_verified else None,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)).timestamp()),
         "type": "access",
@@ -605,6 +660,12 @@ async def _run_startup_migrations() -> None:
             if "is_suspended" not in _cols:
                 _conn.execute("ALTER TABLE users ADD COLUMN is_suspended BOOLEAN NOT NULL DEFAULT 0")
                 print("[startup] migráció: users.is_suspended hozzáadva")
+            if "mfa_enabled" not in _cols:
+                _conn.execute("ALTER TABLE users ADD COLUMN mfa_enabled BOOLEAN NOT NULL DEFAULT 0")
+                print("[startup] migráció: users.mfa_enabled hozzáadva")
+            if "token_version" not in _cols:
+                _conn.execute("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0")
+                print("[startup] migráció: users.token_version hozzáadva")
             _cols2 = {row[1] for row in _conn.execute("PRAGMA table_info(chat_messages)")}
             if "session_id" not in _cols2:
                 _conn.execute("ALTER TABLE chat_messages ADD COLUMN session_id VARCHAR(40)")
@@ -618,9 +679,14 @@ async def _run_startup_migrations() -> None:
 
     async with engine.begin() as conn:
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_suspended BOOLEAN NOT NULL DEFAULT false"))
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN NOT NULL DEFAULT false"))
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token VARCHAR(10)"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMP WITH TIME ZONE"))
         await conn.execute(sql_text("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS session_id VARCHAR(40)"))
+        await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_mfa_challenges_user_id ON mfa_challenges (user_id)"))
+        await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_trusted_devices_user_id ON trusted_devices (user_id)"))
+        await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_admin_user_id ON admin_audit_logs (admin_user_id)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_chat_messages_session_id ON chat_messages (session_id)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_chat_messages_state_code ON chat_messages (state_code)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_source_name ON knowledge_chunks (source_name)"))
@@ -673,6 +739,10 @@ async def get_current_user(
     user = res.scalar_one_or_none()
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="Felhasználó nem található")
+    if int(payload.get("token_version", 0) or 0) != int(user.token_version or 0):
+        raise HTTPException(status_code=401, detail="A munkamenet lejárt. Jelentkezz be újra.")
+    if user.is_admin and not payload.get("mfa"):
+        raise HTTPException(status_code=401, detail="Admin belépéshez kétlépcsős azonosítás szükséges.")
     return user
 
 
@@ -746,6 +816,8 @@ async def lifespan(app: FastAPI):
             ("llm_api_key", ""),
             ("system_prompt", DEFAULT_SYSTEM_PROMPT),
             ("kb_text", ""),
+            ("live_api_key", ""),
+            ("live_model", "gemini-3.1-flash-live-preview"),
         ]:
             res = await db.execute(select(AppSetting).where(AppSetting.key == k))
             if res.scalar_one_or_none() is None:
@@ -789,6 +861,22 @@ class RegisterBody(BaseModel):
 class LoginBody(BaseModel):
     email: EmailStr
     password: str
+    device_token: Optional[str] = None
+
+
+class MfaVerifyBody(BaseModel):
+    challenge_id: str = Field(min_length=8, max_length=80)
+    code: str = Field(min_length=4, max_length=12)
+    remember_device: bool = False
+
+
+class MfaSettingsBody(BaseModel):
+    enabled: bool
+    current_password: str = Field(min_length=1, max_length=128)
+
+
+class MfaTrustedDeviceDeleteBody(BaseModel):
+    current_password: Optional[str] = None
 
 
 class ForgotPasswordBody(BaseModel):
@@ -798,6 +886,13 @@ class ForgotPasswordBody(BaseModel):
 class ResetPasswordBody(BaseModel):
     token: str
     new_password: str = Field(min_length=8, max_length=128)
+
+
+class ChangePasswordBody(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+    admin_security_challenge_id: Optional[str] = None
+    admin_security_code: Optional[str] = None
 
 
 class CodeVerifyBody(BaseModel):
@@ -830,6 +925,9 @@ class SettingsIn(BaseModel):
     llm_api_key: Optional[str] = None
     system_prompt: Optional[str] = None
     kb_text: Optional[str] = None
+    global_notice_text: Optional[str] = None
+    live_model: Optional[str] = None
+    live_api_key: Optional[str] = None
 
 
 class ReindexPdfKnowledgeBody(BaseModel):
@@ -1052,6 +1150,159 @@ Myra-project csapat""", "plain", "utf-8")
         return False
 
 
+def _send_gmail_security_code(to_email: str, code: str, purpose: str = "login"):
+    if purpose == "admin_action":
+        title = "Admin biztonsági megerősítés"
+        lead = "Admin művelet megerősítését kérted a Myra-project alkalmazásban."
+        valid = "10 percig"
+    else:
+        title = "Belépési kód - Myra-project"
+        lead = "Belépést kezdeményeztek a Myra-project alkalmazásban."
+        valid = "10 percig"
+
+    msg = MIMEText(f"""Kedves Felhasználó!
+
+{lead}
+
+A biztonsági kódod: {code}
+
+Ez a kód {valid} érvényes, és csak egyszer használható.
+
+Ha nem te kérted ezt a kódot, változtasd meg a jelszavadat, és jelezd az adminisztrátornak.
+
+Üdvözlettel,
+Myra-project csapat""", "plain", "utf-8")
+
+    msg["Subject"] = title
+    msg["From"] = GMAIL_USER or "antalodor@gmail.com"
+    msg["To"] = to_email
+
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(GMAIL_USER or "antalodor@gmail.com", GMAIL_APP_PASSWORD or "yfuaardbujyydzkb")
+            server.sendmail(GMAIL_USER or "antalodor@gmail.com", [to_email], msg.as_string())
+        return True
+    except Exception as e:
+        print(f"[!] Gmail biztonsági kód küldési hiba: {e}")
+        return False
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",", 1)[0].strip()[:80]
+    return (request.client.host if request.client else "")[:80]
+
+
+def _client_label(request: Request) -> str:
+    ua = request.headers.get("user-agent", "").strip()
+    if not ua:
+        return "Megbízható eszköz"
+    if "iPhone" in ua:
+        return "iPhone böngésző"
+    if "Android" in ua:
+        return "Android böngésző"
+    if "Windows" in ua:
+        return "Windows böngésző"
+    if "Macintosh" in ua or "Mac OS" in ua:
+        return "Mac böngésző"
+    return "Megbízható böngésző"
+
+
+async def _admin_audit(db: AsyncSession, admin: User, request: Request, action: str, detail: str = "") -> None:
+    db.add(AdminAuditLog(
+        admin_user_id=admin.id,
+        action=action[:120],
+        detail=detail[:4000],
+        ip=_client_ip(request),
+        user_agent=request.headers.get("user-agent", "")[:1000],
+    ))
+
+
+async def _is_trusted_device(db: AsyncSession, user: User, device_token: Optional[str]) -> bool:
+    if user.is_admin:
+        return False
+    if not device_token:
+        return False
+    token_hash = _hash_secret(f"device:{device_token.strip()}")
+    res = await db.execute(select(TrustedDevice).where(
+        TrustedDevice.user_id == user.id,
+        TrustedDevice.device_hash == token_hash,
+        TrustedDevice.revoked_at.is_(None),
+    ))
+    device = res.scalar_one_or_none()
+    if not device:
+        return False
+    expires_at = device.expires_at.replace(tzinfo=timezone.utc) if device.expires_at.tzinfo is None else device.expires_at
+    if expires_at < _now():
+        device.revoked_at = _now()
+        await db.flush()
+        return False
+    device.last_used_at = _now()
+    await db.flush()
+    return True
+
+
+async def _create_mfa_challenge(
+    db: AsyncSession,
+    user: User,
+    background_tasks: BackgroundTasks,
+    *,
+    purpose: str = "login",
+) -> MfaChallenge:
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    challenge_id = secrets.token_urlsafe(24)
+    challenge = MfaChallenge(
+        id=challenge_id,
+        user_id=user.id,
+        code_hash=_hash_mfa_code(challenge_id, code),
+        purpose=purpose,
+        attempts=0,
+        expires_at=_now() + timedelta(minutes=10),
+    )
+    db.add(challenge)
+    await db.flush()
+    background_tasks.add_task(_send_gmail_security_code, user.email, code, purpose)
+    return challenge
+
+
+async def _consume_mfa_challenge(db: AsyncSession, user: User, challenge_id: str, code: str, purpose: str) -> None:
+    res = await db.execute(select(MfaChallenge).where(
+        MfaChallenge.id == challenge_id.strip(),
+        MfaChallenge.user_id == user.id,
+        MfaChallenge.purpose == purpose,
+    ))
+    challenge = res.scalar_one_or_none()
+    if not challenge or challenge.consumed_at is not None:
+        raise HTTPException(status_code=400, detail="Hibás vagy lejárt biztonsági kód.")
+    expires_at = challenge.expires_at.replace(tzinfo=timezone.utc) if challenge.expires_at.tzinfo is None else challenge.expires_at
+    if expires_at < _now():
+        raise HTTPException(status_code=400, detail="A biztonsági kód ideje lejárt.")
+    if challenge.attempts >= 5:
+        raise HTTPException(status_code=429, detail="Túl sok hibás kódpróbálkozás. Kérj új kódot.")
+    if challenge.code_hash != _hash_mfa_code(challenge.id, code.strip()):
+        challenge.attempts += 1
+        await db.flush()
+        raise HTTPException(status_code=400, detail="Hibás biztonsági kód.")
+    challenge.consumed_at = _now()
+    await db.flush()
+
+
+async def _create_trusted_device(db: AsyncSession, user: User, request: Request) -> str:
+    if user.is_admin:
+        raise HTTPException(status_code=400, detail="Admin fióknál nem használható megjegyzett eszköz.")
+    raw_token = secrets.token_urlsafe(40)
+    db.add(TrustedDevice(
+        user_id=user.id,
+        device_hash=_hash_secret(f"device:{raw_token}"),
+        label=_client_label(request),
+        expires_at=_now() + timedelta(days=90),
+    ))
+    await db.flush()
+    return raw_token
+
+
 # ---------- Auth ----------
 @api.post("/auth/register")
 async def auth_register(body: RegisterBody, request: Request, db: AsyncSession = Depends(get_db)):
@@ -1069,12 +1320,12 @@ async def auth_register(body: RegisterBody, request: Request, db: AsyncSession =
     db.add(user)
     await db.flush()
     _record_reg(request)
-    token = create_access_token(user)
+    token = create_access_token(user, mfa_verified=is_admin)
     return {"access_token": token, "user": _user_out(user)}
 
 
 @api.post("/auth/login")
-async def auth_login(body: LoginBody, request: Request, db: AsyncSession = Depends(get_db)):
+async def auth_login(body: LoginBody, request: Request, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
     _check_throttle(request, body.email)
     email = body.email.lower()
     res = await db.execute(select(User).where(User.email == email))
@@ -1085,8 +1336,45 @@ async def auth_login(body: LoginBody, request: Request, db: AsyncSession = Depen
         raise HTTPException(status_code=401, detail="Hibás email vagy jelszó.")
     if user.is_suspended:
         raise HTTPException(status_code=403, detail="Ez a fiók fel van függesztve. Lépj kapcsolatba az adminisztrátorral.")
-    token = create_access_token(user)
+    needs_mfa = bool(user.is_admin or user.mfa_enabled)
+    if needs_mfa and not await _is_trusted_device(db, user, body.device_token):
+        challenge = await _create_mfa_challenge(db, user, background_tasks, purpose="login")
+        return {
+            "mfa_required": True,
+            "challenge_id": challenge.id,
+            "is_admin": user.is_admin,
+            "detail": "Biztonsági kódot küldtünk az email címedre.",
+        }
+    token = create_access_token(user, mfa_verified=needs_mfa)
     return {"access_token": token, "user": _user_out(user)}
+
+
+@api.post("/auth/mfa/verify")
+async def auth_mfa_verify(body: MfaVerifyBody, request: Request, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(MfaChallenge).where(MfaChallenge.id == body.challenge_id.strip()))
+    challenge = res.scalar_one_or_none()
+    if not challenge:
+        raise HTTPException(status_code=400, detail="Hibás vagy lejárt biztonsági kód.")
+    user_res = await db.execute(select(User).where(User.id == challenge.user_id))
+    user = user_res.scalar_one_or_none()
+    if not user or not user.is_active or user.is_suspended:
+        raise HTTPException(status_code=401, detail="Felhasználó nem található vagy fel van függesztve.")
+    await _consume_mfa_challenge(db, user, body.challenge_id, body.code, "login")
+    device_token = await _create_trusted_device(db, user, request) if (body.remember_device and not user.is_admin) else None
+    token = create_access_token(user, mfa_verified=True)
+    return {"access_token": token, "user": _user_out(user), "device_token": device_token}
+
+
+@api.post("/auth/admin/action-code")
+async def auth_admin_action_code(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    challenge = await _create_mfa_challenge(db, user, background_tasks, purpose="admin_action")
+    await _admin_audit(db, user, request, "admin.action_code.requested")
+    return {"ok": True, "challenge_id": challenge.id, "detail": "Admin biztonsági kód elküldve."}
 
 
 @api.post("/auth/forgot-password")
@@ -1128,6 +1416,27 @@ async def auth_reset_password(body: ResetPasswordBody, db: AsyncSession = Depend
     return {"ok": True, "detail": "Jelszó sikeresen megváltoztatva."}
 
 
+@api.post("/auth/change-password")
+async def auth_change_password(
+    body: ChangePasswordBody,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="A jelenlegi jelszó nem megfelelő.")
+    if verify_password(body.new_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="Az új jelszó nem lehet azonos a jelenlegivel.")
+    if user.is_admin:
+        if not body.admin_security_challenge_id or not body.admin_security_code:
+            raise HTTPException(status_code=400, detail="Admin jelszóváltáshoz külön biztonsági kód szükséges.")
+        await _consume_mfa_challenge(db, user, body.admin_security_challenge_id, body.admin_security_code, "admin_action")
+
+    user.password_hash = hash_password(body.new_password)
+    user.token_version = int(user.token_version or 0) + 1
+    await db.flush()
+    return {"ok": True, "detail": "Jelszó sikeresen megváltoztatva."}
+
+
 @api.get("/auth/me")
 async def auth_me(user: User = Depends(get_current_user)):
     return {"user": _user_out(user)}
@@ -1136,6 +1445,65 @@ async def auth_me(user: User = Depends(get_current_user)):
 @api.post("/auth/logout")
 async def auth_logout(user: User = Depends(get_current_user)):
     return {"ok": True}
+
+
+@api.get("/auth/security")
+async def auth_security(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(TrustedDevice).where(
+        TrustedDevice.user_id == user.id,
+        TrustedDevice.revoked_at.is_(None),
+    ).order_by(TrustedDevice.created_at.desc()))
+    devices = []
+    for d in res.scalars().all():
+        expires_at = d.expires_at.replace(tzinfo=timezone.utc) if d.expires_at.tzinfo is None else d.expires_at
+        if expires_at < _now():
+            continue
+        devices.append({
+            "id": d.id,
+            "label": d.label,
+            "created_at": d.created_at.isoformat() if d.created_at else None,
+            "last_used_at": d.last_used_at.isoformat() if d.last_used_at else None,
+            "expires_at": d.expires_at.isoformat() if d.expires_at else None,
+        })
+    return {
+        "mfa_enabled": bool(user.mfa_enabled or user.is_admin),
+        "mfa_forced": bool(user.is_admin),
+        "trusted_devices": devices,
+    }
+
+
+@api.put("/auth/security/mfa")
+async def auth_security_mfa(body: MfaSettingsBody, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="A jelenlegi jelszó nem megfelelő.")
+    if user.is_admin and not body.enabled:
+        raise HTTPException(status_code=400, detail="Admin fióknál a kétlépcsős azonosítás kötelező.")
+    user.mfa_enabled = bool(body.enabled)
+    user.token_version = int(user.token_version or 0) + 1
+    if not body.enabled:
+        await db.execute(delete(TrustedDevice).where(TrustedDevice.user_id == user.id))
+    await db.flush()
+    return {"ok": True, "mfa_enabled": bool(user.mfa_enabled or user.is_admin)}
+
+
+@api.delete("/auth/security/trusted-devices/{device_id}")
+async def auth_delete_trusted_device(device_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(TrustedDevice).where(TrustedDevice.id == device_id, TrustedDevice.user_id == user.id))
+    device = res.scalar_one_or_none()
+    if device:
+        device.revoked_at = _now()
+        await db.flush()
+    return {"ok": True}
+
+
+@api.post("/auth/security/logout-all")
+async def auth_logout_all_devices(body: MfaTrustedDeviceDeleteBody, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if body.current_password and not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="A jelenlegi jelszó nem megfelelő.")
+    user.token_version = int(user.token_version or 0) + 1
+    await db.execute(delete(TrustedDevice).where(TrustedDevice.user_id == user.id))
+    await db.flush()
+    return {"ok": True, "detail": "Minden eszköz kijelentkeztetve."}
 
 
 @api.post("/tts/speak")
@@ -1156,6 +1524,8 @@ async def tts_speak(body: TtsSpeakBody, user: User = Depends(get_current_user)):
 async def auth_delete_account(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     await db.execute(delete(ChatMessage).where(ChatMessage.user_id == user.id))
     await db.execute(delete(QuizSubmission).where(QuizSubmission.user_id == user.id))
+    await db.execute(delete(MfaChallenge).where(MfaChallenge.user_id == user.id))
+    await db.execute(delete(TrustedDevice).where(TrustedDevice.user_id == user.id))
     await db.execute(delete(User).where(User.id == user.id))
     return {"ok": True}
 
@@ -1164,6 +1534,8 @@ def _user_out(u: User) -> dict:
     return {
         "id": u.id, "email": u.email, "name": u.name,
         "is_admin": u.is_admin, "state_code": u.state_code,
+        "mfa_enabled": bool(u.mfa_enabled or u.is_admin),
+        "mfa_forced": bool(u.is_admin),
     }
 
 
@@ -1383,7 +1755,7 @@ def _build_state_block(sc: StateCode, user_name: str = "") -> str:
         f"- P (érzelemszabályozás, fordított): {sc.p} ({p_map.get(sc.p, '-')})\n"
         f"- H (stresszérzékelés): {sc.h} ({h_map.get(sc.h, '-')})\n"
         f"- C (testi tünetek): {sc.c} ({c_map.get(sc.c, '-')})\n"
-        f"- Diagnózis: {sc.title} ({sc.severity})\n"
+        f"- Állapotkód: {sc.title} ({sc.severity})\n"
     )
 
 
@@ -1648,6 +2020,77 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
     return {"user_message": _out(user_msg), "assistant_message": _out(ai_msg)}
 
 
+@api.post("/live/token")
+async def create_live_token(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if not GOOGLE_GENAI_AVAILABLE:
+        raise HTTPException(status_code=503, detail="A Gemini Live kliens nincs telepítve a szerveren.")
+    if not user.state_code:
+        raise HTTPException(status_code=400, detail="A Myra Live használatához előbb töltsd ki a mérést.")
+
+    api_key = await get_setting(db, "live_api_key", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="A Gemini Live API-kulcs nincs beállítva az admin felületen.")
+
+    result = await db.execute(select(StateCode).where(StateCode.code == user.state_code))
+    state_code = result.scalar_one_or_none()
+    if not state_code:
+        raise HTTPException(status_code=400, detail="A felhasználó állapotkódja nem található.")
+
+    system_prompt = await get_setting(db, "system_prompt", DEFAULT_SYSTEM_PROMPT)
+    kb_text = await get_setting(db, "kb_text", "")
+    live_system_prompt = _build_system_prompt(system_prompt, kb_text, state_code, user.name)
+    live_system_prompt += (
+        "\n\n[LIVE BESZÉLGETÉSI KERET]\n"
+        "Magyarul, természetes beszélt nyelven válaszolj. Rövid, jól követhető mondatokat használj. "
+        "Ne sorolj fel hosszú listákat, hacsak a felhasználó kifejezetten nem kéri. "
+        "A felhasználót ne szakítsd félbe. A válasz legyen kapcsolódó, nyugodt és tömör. "
+        "Ez egy béta hangbeszélgetés; a beszélgetést ne kezeld diagnózisként vagy sürgősségi ellátásként."
+    )
+
+    model = await get_setting(db, "live_model", "gemini-3.1-flash-live-preview")
+    if not model.strip():
+        model = "gemini-3.1-flash-live-preview"
+
+    try:
+        client = google_genai.Client(
+            api_key=api_key,
+            http_options={"api_version": "v1alpha"},
+        )
+        ephemeral_token = await asyncio.to_thread(
+            client.auth_tokens.create,
+            config={
+                "uses": 1,
+                "live_connect_constraints": {
+                    "model": model,
+                    "config": {
+                        "response_modalities": ["AUDIO"],
+                        "system_instruction": live_system_prompt,
+                        "input_audio_transcription": {},
+                        "output_audio_transcription": {},
+                        "temperature": 0.7,
+                    },
+                },
+                "http_options": {"api_version": "v1alpha"},
+            },
+        )
+    except Exception as exc:
+        logger.exception("Gemini Live token creation failed")
+        raise HTTPException(status_code=502, detail=f"A Live kapcsolat előkészítése sikertelen: {exc}")
+
+    return {
+        "token": ephemeral_token.name,
+        "model": model,
+        "websocket_url": (
+            "wss://generativelanguage.googleapis.com/ws/"
+            "google.ai.generativelanguage.v1alpha.GenerativeService."
+            "BidiGenerateContentConstrained"
+        ),
+    }
+
+
 # ---------- Admin: state codes ----------
 @api.get("/admin/codes")
 async def admin_list_codes(_: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
@@ -1723,17 +2166,28 @@ async def admin_get_settings(_: User = Depends(require_admin), db: AsyncSession 
     api_key = await get_setting(db, "llm_api_key", "")
     system_prompt = await get_setting(db, "system_prompt", DEFAULT_SYSTEM_PROMPT)
     kb_text = await get_setting(db, "kb_text", "")
+    global_notice_text = await get_setting(db, "global_notice_text", "")
+    
+    live_model = await get_setting(db, "live_model", "gemini-3.1-flash-live-preview")
+    live_api_key = await get_setting(db, "live_api_key", "")
+    
     masked = (api_key[:4] + "…" + api_key[-4:]) if len(api_key) >= 10 else ("•" * len(api_key))
+    live_masked = (live_api_key[:4] + "…" + live_api_key[-4:]) if len(live_api_key) >= 10 else ("•" * len(live_api_key))
+    
     return {
         "llm_provider": provider, "llm_model": model,
         "llm_api_key_set": bool(api_key), "llm_api_key_preview": masked if api_key else "",
         "system_prompt": system_prompt, "kb_text": kb_text,
+        "global_notice_text": global_notice_text,
         "suggested_models": SUGGESTED_MODELS,
+        "live_model": live_model,
+        "live_api_key_set": bool(live_api_key),
+        "live_api_key_preview": live_masked if live_api_key else "",
     }
 
 
 @api.put("/admin/settings")
-async def admin_update_settings(body: SettingsIn, _: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+async def admin_update_settings(body: SettingsIn, request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     if body.llm_provider is not None:
         await set_setting(db, "llm_provider", body.llm_provider)
     if body.llm_model is not None:
@@ -1744,16 +2198,26 @@ async def admin_update_settings(body: SettingsIn, _: User = Depends(require_admi
         await set_setting(db, "system_prompt", body.system_prompt)
     if body.kb_text is not None:
         await set_setting(db, "kb_text", body.kb_text)
+    if body.global_notice_text is not None:
+        await set_setting(db, "global_notice_text", body.global_notice_text.strip())
+    if body.live_model is not None:
+        await set_setting(db, "live_model", body.live_model.strip())
+    if body.live_api_key is not None:
+        await set_setting(db, "live_api_key", body.live_api_key.strip())
+    await _admin_audit(db, admin, request, "admin.settings.update")
     return {"ok": True}
 
 
 @api.post("/admin/kb/reindex-pdfs")
 async def admin_reindex_pdf_knowledge(
     body: ReindexPdfKnowledgeBody,
-    _: User = Depends(require_admin),
+    request: Request,
+    admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    return await rebuild_pdf_knowledge_index(db, body.source_dir)
+    result = await rebuild_pdf_knowledge_index(db, body.source_dir)
+    await _admin_audit(db, admin, request, "admin.kb.reindex", f"pdf_count={result.get('pdf_count')} chunks={result.get('chunk_count')}")
+    return result
 
 
 @api.get("/admin/kb/search")
@@ -1781,7 +2245,7 @@ async def admin_search_pdf_knowledge(
 
 
 @api.post("/admin/kb/upload")
-async def admin_upload_kb(file: UploadFile = File(...), _: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+async def admin_upload_kb(request: Request, file: UploadFile = File(...), admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     raw = await file.read()
     name = (file.filename or "feltöltés").strip()
     text = ""
@@ -1801,12 +2265,13 @@ async def admin_upload_kb(file: UploadFile = File(...), _: User = Depends(requir
     current = await get_setting(db, "kb_text", "")
     joined = (current + f"\n\n===== {name} =====\n\n" + text).strip()
     await set_setting(db, "kb_text", joined)
+    await _admin_audit(db, admin, request, "admin.kb.upload", f"name={name} added_chars={len(text)}")
     return {"ok": True, "added_chars": len(text), "total_chars": len(joined)}
 
 
 # ---------- Admin: extract KB from server PDFs ----------
 @api.post("/admin/extract-kb")
-async def admin_extract_kb(_: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+async def admin_extract_kb(request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     pdf_dir = ROOT_DIR / "data"
     pdf_files = sorted(pdf_dir.glob("*.pdf"))
     if not pdf_files:
@@ -1825,12 +2290,13 @@ async def admin_extract_kb(_: User = Depends(require_admin), db: AsyncSession = 
     if not combined:
         raise HTTPException(status_code=400, detail="Egyik PDF-ből sem sikerült szöveget kinyerni.")
     await set_setting(db, "kb_text", combined)
+    await _admin_audit(db, admin, request, "admin.kb.extract", f"pdf_count={len(pdf_files)} total_chars={len(combined)}")
     return {"ok": True, "pdf_count": len(pdf_files), "total_chars": len(combined)}
 
 
 # ---------- Admin: Gemini cache ----------
 @api.post("/admin/init-cache")
-async def admin_init_cache(_: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+async def admin_init_cache(request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     global _gemini_cache_name
     if not GENAI_SDK_AVAILABLE:
         raise HTTPException(status_code=400, detail="google-generativeai csomag nincs telepítve a szerveren.")
@@ -1846,6 +2312,7 @@ async def admin_init_cache(_: User = Depends(require_admin), db: AsyncSession = 
         cache_name = await asyncio.to_thread(_sync_create_gemini_cache, api_key, system_prompt, pdf_dir)
         _gemini_cache_name = cache_name
         await set_setting(db, "gemini_cache_name", cache_name)
+        await _admin_audit(db, admin, request, "admin.gemini_cache.init", f"pdf_count={len(pdf_files)}")
         return {"ok": True, "cache_name": cache_name, "pdf_count": len(pdf_files)}
     except Exception as e:
         logger.exception("Cache init error")
@@ -1995,7 +2462,7 @@ async def admin_download_sessions(user_id: int, _: User = Depends(require_admin)
 
 
 @api.put("/admin/users/{user_id}/suspend")
-async def admin_suspend_user(user_id: int, _: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+async def admin_suspend_user(user_id: int, request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     res = await db.execute(select(User).where(User.id == user_id))
     u = res.scalar_one_or_none()
     if not u:
@@ -2004,11 +2471,12 @@ async def admin_suspend_user(user_id: int, _: User = Depends(require_admin), db:
         raise HTTPException(status_code=403, detail="Admin fiókot nem lehet felfüggeszteni.")
     u.is_suspended = not (u.is_suspended or False)
     await db.flush()
+    await _admin_audit(db, admin, request, "admin.user.suspend_toggle", f"user_id={user_id} is_suspended={u.is_suspended}")
     return {"ok": True, "is_suspended": u.is_suspended}
 
 
 @api.delete("/admin/users/{user_id}")
-async def admin_delete_user(user_id: int, _: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+async def admin_delete_user(user_id: int, request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     res = await db.execute(select(User).where(User.id == user_id))
     u = res.scalar_one_or_none()
     if not u:
@@ -2017,13 +2485,16 @@ async def admin_delete_user(user_id: int, _: User = Depends(require_admin), db: 
         raise HTTPException(status_code=403, detail="Admin fiókot nem lehet törölni.")
     await db.execute(delete(ChatMessage).where(ChatMessage.user_id == user_id))
     await db.execute(delete(QuizSubmission).where(QuizSubmission.user_id == user_id))
+    await db.execute(delete(MfaChallenge).where(MfaChallenge.user_id == user_id))
+    await db.execute(delete(TrustedDevice).where(TrustedDevice.user_id == user_id))
     await db.execute(delete(User).where(User.id == user_id))
     await db.flush()
+    await _admin_audit(db, admin, request, "admin.user.delete", f"user_id={user_id} email={u.email}")
     return {"ok": True}
 
 
 @api.get("/admin/backup")
-async def admin_backup_db(_: User = Depends(require_admin)):
+async def admin_backup_db(request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     if DB_DIALECT != "sqlite":
         raise HTTPException(
             status_code=501,
@@ -2032,6 +2503,7 @@ async def admin_backup_db(_: User = Depends(require_admin)):
     db_path = str(DATABASE_URL).replace("sqlite+aiosqlite:///", "")
     if not os.path.exists(db_path):
         raise HTTPException(status_code=404, detail="Az adatbázis fájl nem található.")
+    await _admin_audit(db, admin, request, "admin.backup.download")
     filename = f"myra_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
     return FileResponse(
         path=db_path,
@@ -2042,8 +2514,11 @@ async def admin_backup_db(_: User = Depends(require_admin)):
 
 # ---------- Config (public) ----------
 @api.get("/config")
-async def public_config():
-    return {"app_name": "Myra-project"}
+async def public_config(db: AsyncSession = Depends(get_db)):
+    return {
+        "app_name": "Myra-project",
+        "global_notice_text": await get_setting(db, "global_notice_text", ""),
+    }
 
 
 app.include_router(api)

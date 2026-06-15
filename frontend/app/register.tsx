@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -24,6 +25,8 @@ import ContentBackground from "@/src/components/ContentBackground";
 import { gdprText } from "@/src/constants/docs/gdpr";
 import { termsText } from "@/src/constants/docs/terms";
 import { kisokosText } from "@/src/constants/docs/kisokos";
+
+const MYRA_MARK = require("@/assets/images/uj_logo1_kor.png");
 
 export default function RegisterScreen() {
   const router = useRouter();
@@ -68,6 +71,9 @@ export default function RegisterScreen() {
         <ContentBackground>
           <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
             <View style={styles.hero}>
+              <View style={[styles.logoRing, shadow.glow]}>
+                <Image source={MYRA_MARK} style={styles.logo} resizeMode="contain" />
+              </View>
               <T variant="caption" color={theme.accentSoft} style={styles.heroCaption}>ESV-MODELL</T>
               <T variant="display" color={theme.textOnDark} style={styles.heroTitle}>Fiók létrehozása</T>
               <T variant="body" color="rgba(245,249,255,0.72)" align="center" style={styles.heroSubtitle}>
@@ -182,6 +188,18 @@ const styles = StyleSheet.create({
     paddingBottom: 30,
     paddingHorizontal: 28,
   },
+  logoRing: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.20)",
+    marginBottom: 16,
+  },
+  logo: { width: 82, height: 82, borderRadius: 41 },
   heroCaption: { fontSize: 10, letterSpacing: 1.4 },
   heroTitle: { fontSize: 38, lineHeight: 44, textAlign: "center", marginTop: 16 },
   heroSubtitle: { maxWidth: 300, marginTop: 10 },

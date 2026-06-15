@@ -1,14 +1,14 @@
 export const termsText = `FELHASZNÁLÁSI FELTÉTELEK
 
-Hatályos: 2026. június 4.
+Hatályos: 2026. június 15.
 
 1. A szolgáltatás jellege
 A Myra egy magánszemély által, nem kereskedelmi célból fejlesztett, mérésvezérelt, reflektív mentálhigiénés önismereti alkalmazás. A rendszer az ESV-modell (Érzelem-Stressz-Viselkedés) alapján működik: önkitöltős állapotfelmérést, belső állapotkódot és mesterséges intelligenciával támogatott beszélgetési keretet biztosít.
 
-A szolgáltatás célja az önreflexió, az állapotkövetés és a mentálhigiénés tájékozódás támogatása. A Myra nem egészségügyi szolgáltatás, nem orvostechnikai eszköz, nem pszichológiai vagy pszichiátriai ellátás, és nem pszichoterápia.
+A szolgáltatás kizárólagos célja az önreflexió, az állapotkövetés és a mentális jólét (wellness) támogatása. A Myra nem egészségügyi szolgáltatás, nem orvostechnikai eszköz, nem pszichológiai vagy pszichiátriai ellátás, nem diagnosztizál és nem nyújt terápiát.
 
 2. Nem diagnosztikai és nem terápiás rendszer
-A Myra által megjelenített állapotkódok, kategóriák, chatbot-válaszok és visszajelzések kizárólag belső modellhez kötött, tájékoztató és önismereti célú értelmezések. Ezek nem minősülnek hivatalos diagnózisnak, egészségügyi minősítésnek, terápiás javaslatnak, szakvéleménynek vagy orvosi/pszichológiai döntésnek.
+A Myra által megjelenített állapotkódok, kategóriák, chatbot-válaszok és visszajelzések kizárólag belső modellhez kötött, tájékoztató és önismereti célú értelmezések. Ezek nem minősülnek hivatalos diagnózisnak, egészségügyi minősítésnek, terápiás javaslatnak, szakvéleménynek vagy orvosi/pszichológiai döntésnek. Nem alkalmasak klinikai megelőzésre, kezelésre vagy orvosi beavatkozások pótlására.
 
 A Myra nem helyettesíti a szakemberrel történő konzultációt, orvosi vizsgálatot, pszichológiai vagy pszichiátriai ellátást, sürgősségi segítségnyújtást vagy bármely hivatalos egészségügyi szolgáltatást.
 

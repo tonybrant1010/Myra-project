@@ -5,6 +5,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { theme } from "@/src/theme";
 import { T } from "@/src/components/Typography";
+import GlobalNotice from "@/src/components/GlobalNotice";
 import SideMenu from "@/src/components/SideMenu";
 
 type Props = {
@@ -18,53 +19,56 @@ export default function TopBar({ title, showBack, rightLabel }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
-    <LinearGradient
-      colors={["#04101D", "#08223B", "#123E66"]}
-      locations={[0, 0.58, 1]}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={styles.bar}
-      testID="top-bar"
-    >
-      <View pointerEvents="none" style={styles.topMist} />
-      <View style={styles.sideContainer}>
-        {showBack ? (
-          <TouchableOpacity
-            onPress={() => router.replace("/welcome")}
-            style={styles.iconBtn}
-            testID="topbar-back"
-            hitSlop={10}
-          >
-            <Ionicons name="chevron-back" size={22} color={theme.textOnDark} />
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            onPress={() => setMenuOpen(true)}
-            style={styles.iconBtn}
-            testID="topbar-menu"
-            hitSlop={10}
-          >
-            <Ionicons name="menu" size={22} color={theme.textOnDark} />
-          </TouchableOpacity>
-        )}
-      </View>
+    <View>
+      <LinearGradient
+        colors={["#04101D", "#08223B", "#123E66"]}
+        locations={[0, 0.58, 1]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.bar}
+        testID="top-bar"
+      >
+        <View pointerEvents="none" style={styles.topMist} />
+        <View style={styles.sideContainer}>
+          {showBack ? (
+            <TouchableOpacity
+              onPress={() => router.replace("/welcome")}
+              style={styles.iconBtn}
+              testID="topbar-back"
+              hitSlop={10}
+            >
+              <Ionicons name="chevron-back" size={22} color={theme.textOnDark} />
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              onPress={() => setMenuOpen(true)}
+              style={styles.iconBtn}
+              testID="topbar-menu"
+              hitSlop={10}
+            >
+              <Ionicons name="menu" size={22} color={theme.textOnDark} />
+            </TouchableOpacity>
+          )}
+        </View>
 
-      <T variant="h2" align="center" color={theme.textOnDark} style={styles.title} numberOfLines={1}>
-        {title || ""}
-      </T>
+        <T variant="h2" align="center" color={theme.textOnDark} style={styles.title} numberOfLines={1}>
+          {title || ""}
+        </T>
 
-      <View style={[styles.sideContainer, { alignItems: "flex-end" }]}>
-        {rightLabel ? (
-          <View style={styles.rightPill}>
-            <T variant="caption" color={theme.accentSoft} style={{ fontSize: 10, letterSpacing: 1.5 }}>
-              {rightLabel}
-            </T>
-          </View>
-        ) : null}
-      </View>
+        <View style={[styles.sideContainer, { alignItems: "flex-end" }]}>
+          {rightLabel ? (
+            <View style={styles.rightPill}>
+              <T variant="caption" color={theme.accentSoft} style={{ fontSize: 10, letterSpacing: 1.5 }}>
+                {rightLabel}
+              </T>
+            </View>
+          ) : null}
+        </View>
 
-      <SideMenu visible={menuOpen} onClose={() => setMenuOpen(false)} />
-    </LinearGradient>
+        <SideMenu visible={menuOpen} onClose={() => setMenuOpen(false)} />
+      </LinearGradient>
+      <GlobalNotice />
+    </View>
   );
 }
 

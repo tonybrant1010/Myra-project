@@ -7,7 +7,7 @@ Az ambivalencia pszichológiai és biológiai hatásainak vizsgálata
 Szerző: Ódor Antal, független kutató
 DOI: 10.5281/zenodo.18062030
 ID: https://orcid.org/0009-0009-2027-3245
-odor.antal@mozgasjavito.com
+odor-antal@research.hu
 Budapest, 2020
 Bevezetés
  Az ambivalencia - azaz ellentétes érzelmek és késztetések egyidejű megjelenése ugyanazon 
@@ -77,7 +77,7 @@ Az Érzelem-Stressz-Viselkedés (ESV) modell alapján kifejlesztett korai burnou
 Szerző: Ódor Antal, független kutató
 DOI: 10.5281/zenodo.18076417 
 ID: https://orcid.org/0009-0009-2027-3245
-odor.antal@mozgasjavito.com
+odor-antal@research.hu
 Budapest, 2025
 Absztrakt
  A jelen elemzés a burnout jelenségének újradefiniálására tesz kísérletet, a hagyományos érzelmi 
@@ -232,7 +232,7 @@ Szerző: Ódor Antal, független kutató
 DOI: 
 1 0.5281/zenodo.18075183
 ID: https://orcid.org/0009-0009-2027-3245
-odor.antal@mozgasjavito.com
+odor-antal@research.hu
 Budapest, 2025
 Absztrakt
  A jelen elemzés a burnout jelenségének újradefiniálására tesz kísérletet, a hagyományos érzelmi 
@@ -359,7 +359,7 @@ Egy evolúciós, pszichodinamikus és kapcsolati modell integrált megközelít�
 Szerző: Ódor Antal, független kutató
 DOI: 10.5281/zenodo.18074455
 ID: https://orcid.org/0009-0009-2027-3245
-odor.antal@mozgasjavito.com
+odor-antal@research.hu
 Budapest, 2025
 Absztrakt
  Ez a tanulmány annak az emberi működésnek az eredetét vizsgálja, amely a szenvedés 
@@ -533,7 +533,7 @@ mechanizmusában
 Szerző: Ódor Antal, független kutató
 DOI: 10.5281/zenodo.18067060 
 ID: https://orcid.org/0009-0009-2027-3245
-odor.antal@mozgasjavito.com
+odor-antal@research.hu
 Budapest, 2024
 Bevezetés
 Az ESV-modell és a kölcsönhatások jelentősége
@@ -862,7 +862,7 @@ Egy integrált pszichobiológiai rendszerelméleti megközelítés az emberi mű
 Szerző: Ódor Antal, független kutató
 DOI: 10.5281/zenodo.18069155 
 ID: https://orcid.org/0009-0009-2027-3245
-odor.antal@mozgasjavito.com
+odor-antal@research.hu
 Budapest, 2025
 Absztrakt
  Az Érzelem-Stressz-Viselkedés (ESV) modell egy új pszichobiológiai rendszerelméleti keret, 
@@ -937,7 +937,7 @@ pszichodiagnosztikában
 Szerző: Ódor Antal, független kutató
 DOI: 10.5281/zenodo.18059802
 ID: https://orcid.org/0009-0009-2027-3245
-odor.antal@mozgasjavito.com
+odor-antal@research.hu
 Budapest, 2025
 Absztrakt
  A modern pszichiátriai kutatások egyik központi kérdése a neurobiológiai alapkutatások 
@@ -1029,7 +1029,7 @@ Viselkedés (ESV) modell kifejlesztéséről
 Szerző: Ódor Antal, független kutató
 DOI: 10.5281/zenodo.18076114
 ID: https://orcid.org/0009-0009-2027-3245
-odor.antal@mozgasjavito.com
+odor-antal@research.hu
 Budapest, 2025
 Absztrakt
  A jelen tanulmány egy autoetnográfiai esettanulmányon keresztül mutatja be a hagyományos 
@@ -1176,7 +1176,7 @@ A függőségek mechanizmusa
 Szerző: Ódor Antal, független kutató
 DOI: 10.5281/zenodo.18063294
 ID: https://orcid.org/0009-0009-2027-3245
-odor.antal@mozgasjavito.com
+odor-antal@research.hu
 Budapest, 2023
 Bevezetés
  Az addikciók, különösen az alkoholfogyasztás, napjaink egyik jelentős közegészségügyi 
@@ -1262,7 +1262,7 @@ Egy nem-lineáris nyelvi tükörfunkció koncepciója a mesterséges jelenlét �
 Szerző: Ódor Antal, független kutató
 DOI: 10.5281/zenodo.18075979
 ID: https://orcid.org/0009-0009-2027-3245
-odor.antal@mozgasjavito.com
+odor-antal@research.hu
 Budapest, 2025
 Bevezetés
  A mesterséges intelligenciáról szóló közbeszéd jelenleg alapvetően funkcionalista keretek között 
@@ -1453,7 +1453,7 @@ Az Ötlépéses írásterápia tudományos elemzése
 Szerző: Ódor Antal, független kutató
 DOI: 10.5281/zenodo.18062959 
 ID: https://orcid.org/0009-0009-2027-3245
-odor.antal@mozgasjavito.com
+odor-antal@research.hu
 Budapest, 2018
 Bevezetés
  Az expresszív írás terápiás alkalmazása egyre inkább a tudományos kutatások fókuszába kerül. Az 
@@ -1529,7 +1529,7 @@ Elmélet, esettanulmány, kapcsolódó kutatások
 Szerző: Ódor Antal, független kutató
 DOI: 10.5281/zenodo.18067292 
 ID: https://orcid.org/0009-0009-2027-3245
-odor.antal@mozgasjavito.com
+odor-antal@research.hu
 Budapest, 2024
 Bevezetés
  A pszichés kényszerhurok egy komplex mentális állapot, amelyben a trauma által kiváltott 
@@ -1643,7 +1643,7 @@ Az ESV keretrendszer alkalmazása
 Szerző: Ódor Antal, független kutató
 DOI: 10.5281/zenodo.18106131 
 ID: https://orcid.org/0009-0009-2027-3245
-odor.antal@mozgasjavito.com
+odor-antal@research.hu
 Budapest, 2025
 Absztrakt
  A szuicid viselkedés funkcionális modelljei gyakran az érzelmi állapotok és a pszichés folyamatok 
@@ -1732,7 +1732,7 @@ Egy kérdőíves pilotvizsgálat eredményei
 Szerző: Ódor Antal, független kutató
 DOI: 10.5281/zenodo.18069510 
 ID: https://orcid.org/0009-0009-2027-3245
-odor.antal@mozgasjavito.com
+odor-antal@research.hu
 Budapest, 2025
 Absztrakt
  A jelen tanulmány az Érzelem-Stressz-Viselkedés (ESV) modell empirikus tesztelésére tett 
@@ -2001,7 +2001,7 @@ Módszertani beszámoló
 Szerző: Ódor Antal, független kutató
 DOI: 10.5281/zenodo.18076570 
 ID: https://orcid.org/0009-0009-2027-3245
-odor.antal@mozgasjavito.com
+odor-antal@research.hu
 Budapest, 2025. augusztus 26. - október 11.
 Absztrakt
  A tanulmány egy öthetes, intenzív terepmunka tapasztalatait összegzi, amelynek célja az Érzelem-
@@ -2175,7 +2175,7 @@ kifejezett, írásos engedélye nélkül.
 struktúrájának vagy a diagnosztikai kódrendszernek a megváltoztatása, átdolgozása.
  Minden, a fentiektől eltérő felhasználás (pl. kutatási együttműködés, hivatalos oktatási 
 akkreditáció) kizárólag a szerző előzetes írásbeli hozzájárulásával lehetséges.
-Kapcsolat: odor.antal@mozgasjavito.com
+Kapcsolat: odor-antal@research.hu
 Copyright © 2025 Ódor Antal. Minden jog fenntartva.
 I. fejezet: Elméleti alapvetés
 „A pszichológia a trauma feldolgozásában hajlamos leegyszerűsítő, ’tiszta’ narratívákban 
@@ -3355,7 +3355,7 @@ Az Érzelem-Stressz-Viselkedés (ESV) modell funkcionális rendszere
 Szerző: Ódor Antal, független kutató
 DOI: 10.5281/zenodo.18175305 
 ID: https://orcid.org/0009-0009-2027-3245
-odor.antal@mozgasjavito.com
+odor-antal@research.hu
 Budapest, 2026
 Jogi és etikai nyilatkozat
  Az ESV funkcionális elemzési kézikönyv egy független tudományos és pszichológiai 

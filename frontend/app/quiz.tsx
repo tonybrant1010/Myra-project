@@ -19,6 +19,7 @@ export default function QuizScreen() {
   const [sections, setSections] = useState<Section[]>([]);
   const [loading, setLoading] = useState(true);
   const [sectionIdx, setSectionIdx] = useState(0);
+  const [showConsent, setShowConsent] = useState(true);
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,6 +117,51 @@ export default function QuizScreen() {
         <TopBar title="Kérdőív" />
         <ContentBackground>
           <View style={styles.center}><T variant="body" color={theme.danger}>Nem sikerült betölteni a kérdőívet.</T></View>
+        </ContentBackground>
+      </SafeAreaView>
+    );
+  }
+
+  if (showConsent) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <TopBar title="Kérdőív" />
+        <ContentBackground>
+          <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+            <LinearGradient colors={["rgba(255,255,255,0.16)", "rgba(255,255,255,0.07)"]} style={[styles.sectionHeader, shadow.card]}>
+              <View pointerEvents="none" style={styles.sectionSheen} />
+              <T variant="caption" color={theme.accentSoft}>TÁJÉKOZTATÁS ÉS HOZZÁJÁRULÁS</T>
+              <T variant="display" color={theme.textOnDark} style={styles.sectionTitle}>Mérés indítása</T>
+              <T variant="body" color="rgba(247,251,255,0.72)" style={styles.sectionIntro}>
+                A Myra kérdőíves állapotfelmérése az ESV-modell (Érzelem-Stressz-Viselkedés) alapján segít feltérképezni a pillanatnyi közérzetedet és testi-lelki stressz-szintedet.
+              </T>
+            </LinearGradient>
+
+            <View style={[styles.qCard, shadow.card]}>
+              <T variant="bodyLg" color={theme.textOnDark} style={{ marginBottom: 12, fontFamily: "Manrope_700Bold" }}>Fontos tudnivalók:</T>
+              <View style={{ gap: 10, marginBottom: 16 }}>
+                <T variant="body" color="rgba(247,251,255,0.80)">
+                  • <T color={theme.textOnDark} style={{ fontFamily: "Manrope_700Bold" }}>Nem diagnózis:</T> A kapott állapotkód és a profil kizárólag önismereti célú, nem minősül orvosi, pszichológiai vagy egyéb klinikai diagnózisnak.
+                </T>
+                <T variant="body" color="rgba(247,251,255,0.80)">
+                  • <T color={theme.textOnDark} style={{ fontFamily: "Manrope_700Bold" }}>Nem orvostechnikai eszköz:</T> A rendszer nem alkalmas betegségek megelőzésére, diagnosztizálására vagy kezelésére.
+                </T>
+                <T variant="body" color="rgba(247,251,255,0.80)">
+                  • <T color={theme.textOnDark} style={{ fontFamily: "Manrope_700Bold" }}>Adatkezelési hozzájárulás:</T> A kérdésekre adott válaszaid mentális és testi stresszre utaló, érzékeny adatokat tartalmazhatnak. A mérés elindításával kifejezetten és önkéntesen hozzájárulsz ezek feldolgozásához az állapotkódod képzése és az önismereti csevegés céljából.
+                </T>
+              </View>
+
+              <TouchableOpacity style={styles.consentBtn} onPress={() => setShowConsent(false)} activeOpacity={0.85}>
+                <LinearGradient colors={[theme.accentDeep, theme.primarySoft]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.consentGradient}>
+                  <T variant="title" color={theme.white}>Elfogadom és megkezdem</T>
+                </LinearGradient>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.cancelConsentBtn} onPress={() => router.replace("/welcome")} activeOpacity={0.80}>
+                <T variant="title" color={theme.textOnDark}>Mégse</T>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
         </ContentBackground>
       </SafeAreaView>
     );
@@ -240,4 +286,7 @@ const styles = StyleSheet.create({
   },
   nextBtn: { flex: 1, borderRadius: 12, overflow: "hidden", alignItems: "center", justifyContent: "center" },
   nextGradient: { width: "100%", paddingVertical: 14, alignItems: "center", justifyContent: "center" },
+  consentBtn: { marginTop: 20, borderRadius: 12, overflow: "hidden", alignItems: "center", justifyContent: "center" },
+  consentGradient: { width: "100%", paddingVertical: 14, alignItems: "center", justifyContent: "center" },
+  cancelConsentBtn: { paddingVertical: 14, borderRadius: 12, borderWidth: 1.5, borderColor: "rgba(255,255,255,0.28)", alignItems: "center", justifyContent: "center", marginTop: 10 },
 });

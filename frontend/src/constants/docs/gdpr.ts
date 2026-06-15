@@ -1,6 +1,6 @@
 export const gdprText = `ADATKEZELÉSI TÁJÉKOZTATÓ
 
-Hatályos: 2026. június 4.
+Hatályos: 2026. június 15.
 
 1. Az adatkezelő
 Név: Ódor Antal
@@ -34,7 +34,7 @@ Az alkalmazás az alábbi adatokat kezelheti:
 4. Különleges adatok és kifejezett hozzájárulás
 A Myra használata során a felhasználó mentális állapotára, érzelmi terhelésére, stressz-szintjére vagy egészségi állapotára utaló információk is megjelenhetnek. Ezek az adatok a GDPR 9. cikke alapján különleges kategóriájú személyes adatnak minősülhetnek.
 
-Az ilyen adatok kezelése a felhasználó kifejezett, önkéntes hozzájárulásán alapul a GDPR 9. cikk (2) bekezdés a) pontja szerint. A regisztrációval és a tájékoztató elfogadásával a felhasználó kifejezetten hozzájárul ahhoz, hogy a Myra az alkalmazás működéséhez szükséges mértékben ilyen adatokat kezeljen.
+Az ilyen adatok kezelése a felhasználó kifejezett, önkéntes hozzájárulásán alapul a GDPR 9. cikk (2) bekeznés a) pontja szerint. A regisztrációval és a tájékoztató elfogadásával a felhasználó kifejezetten hozzájárul ahhoz, hogy a Myra az alkalmazás működéséhez szükséges mértékben ilyen adatokat kezeljen.
 
 5. Az adatkezelés jogalapja
 Az adatkezelés fő jogalapja a felhasználó önkéntes hozzájárulása:
@@ -44,27 +44,25 @@ Az adatkezelés fő jogalapja a felhasználó önkéntes hozzájárulása:
 Biztonsági, visszaélés-megelőzési és működésfenntartási célú technikai adatkezelés esetén az adatkezelő jogos érdeke is felmerülhet a GDPR 6. cikk (1) bekezdés f) pontja alapján. Ez nem terjed ki a szükséges mértéken túlmutató mentálhigiénés tartalomelemzésre.
 
 6. Adattárolás helye és adatbiztonság
-A felhasználói adatbázis európai uniós régióban működő adatbázis-szolgáltatáson keresztül kerül tárolásra. A rendszer kialakítása törekszik arra, hogy a backend és az adatbázis elkülönítetten működjön, és a kliensoldali felület ne tartalmazzon AI API-kulcsot vagy adatbázis-hozzáférést.
+A felhasználói adatbázis (Supabase) európai uniós régióban (Frankfurt) működő adatbázis-szolgáltatáson keresztül, titkosítva kerül tárolásra. A webalkalmazás kiszolgáló és futtató környezetei (Vercel, Google Cloud) az Egyesült Államokban működhetnek, azonban ezeken a szervereken semmilyen állandó adat (adatbázis) nem tárolódik, kizárólag a kérések átmeneti feldolgozása történik a memóriában (in-memory).
 
-A jelszavak egyirányú hash formában kerülnek tárolásra. Az adatkezelő törekszik a hozzáférések korlátozására, az érzékeny adatok védelmére, a technikai naplók és admin funkciók ésszerű korlátozására, valamint arra, hogy az adatokhoz csak indokolt esetben legyen hozzáférés.
+A rendszer kialakítása törekszik arra, hogy a backend és az adatbázis elkülönítetten működjön, és a kliensoldali felület ne tartalmazzon AI API-kulcsot vagy közvetlen adatbázis-hozzáférést. A jelszavak egyirányú hash formában kerülnek tárolásra. Az adatkezelő törekszik a hozzáférések korlátozására, az érzékeny adatok védelmére, a technikai naplók és admin funkciók ésszerű korlátozására, valamint arra, hogy az adatokhoz csak indokolt esetben legyen hozzáférés.
 
 7. Külső szolgáltatók és adattovábbítás
-A chatbot működéséhez a felhasználó üzeneteinek tartalma külső mesterséges intelligencia szolgáltatóhoz kerülhet továbbításra válaszgenerálás céljából. Ez az adattovábbítás kizárólag a szolgáltatás működéséhez szükséges mértékben történik.
+A chatbot és az élő hangalapú asszisztens működéséhez a felhasználó üzeneteinek tartalma és bemeneti hanganyaga külső mesterséges intelligencia szolgáltatókhoz (különösen: Google Gemini, OpenAI, Anthropic) továbbítódik a válaszok és hanganyagok generálása céljából.
 
-A szolgáltatás működéséhez igénybe vett külső szolgáltatók lehetnek különösen:
-- tárhely-, frontend- vagy backend-szolgáltatók,
-- adatbázis-szolgáltató,
-- mesterséges intelligencia szolgáltató,
+Ez az adattovábbítás kizárólag a szolgáltatás működéséhez szükséges mértékben történik. A továbbítás az adott szolgáltatók hivatalos fejlesztői (Enterprise/API) felületein keresztül zajlik, amelyek szerződéses feltételei kifejezetten garantálják, hogy a Myra által beküldött adatokat és üzeneteket a szolgáltatók bizalmasan kezelik, és nem használják fel saját modelljeik tanítására vagy fejlesztésére.
+
+A szolgáltatás működéséhez igényve vett külső szolgáltatók lehetnek különösen:
+- tárhely-, frontend- vagy backend-szolgáltatók (Vercel, Google Cloud),
+- adatbázis-szolgáltató (Supabase),
+- mesterséges intelligencia szolgáltatók (Google, OpenAI, Anthropic),
 - biztonsági, naplózási vagy üzemeltetési szolgáltatások.
 
-A felhasználó tudomásul veszi, hogy a mesterséges intelligencia szolgáltató saját technikai és adatvédelmi feltételei is érinthetik az üzenetek feldolgozását. A Myra célja, hogy a külső szolgáltatók felé csak a működéshez szükséges adat kerüljön továbbításra.
-
 8. Adatmegőrzési idő
-Az adatok a felhasználói fiók aktív fennállásáig kerülnek megőrzésre, kivéve ha jogszabály, biztonsági incidens kezelése vagy jogos érdek alapján rövidebb vagy hosszabb megőrzés indokolt.
+Az adatok a felhasználói fiók aktív fennállásáig kerülnek megőrzésre. Mivel a Myra egy nonprofit kutatási és önismereti projekt, jogszabály nem írja elő az adatok kötelező megőrzési idejét.
 
-A felhasználó bármikor kérheti fiókja és kapcsolódó adatainak törlését közvetlenül az alkalmazásból, ha erre a funkció elérhető, vagy emailben: odor-antal@research.hu
-
-A hozzájárulás visszavonása a fiók és az adatok törlésének kérésével történhet. A hozzájárulás visszavonása nem érinti a visszavonás előtti adatkezelés jogszerűségét.
+A felhasználó bármikor kezdeményezheti fiókja és kapcsolódó adatainak azonnali és végleges törlését a Beállítások menüben a "Fiók törlése" gombbal, vagy e-mailben: odor-antal@research.hu. A törlés során a felhasználói profil, a mérési eredmények (kérdőívek), a megbízható eszközök és az összes chat beszélgetés előzménye véglegesen törlődik a futó adatbázisból. A hozzájárulás visszavonása a fiók és az adatok törlésének kérésével történhet. A hozzájárulás visszavonása nem érinti a visszavonás előtti adatkezelés jogszerűségét.
 
 9. A felhasználó jogai
 A felhasználó a GDPR alapján jogosult:

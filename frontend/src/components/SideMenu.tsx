@@ -2,8 +2,8 @@ import React, { useEffect, useState } from "react";
 import { ActivityIndicator, Modal, ScrollView, StyleSheet, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { authedFetch, useAuth } from "@/src/auth/AuthContext";
 import { shadow, theme } from "@/src/theme";
 import { T } from "@/src/components/Typography";
@@ -22,7 +22,6 @@ export default function SideMenu({ visible, onClose }: Props) {
   const { user, token, logout, setUserLocal } = useAuth();
   const [busy, setBusy] = useState(false);
   const [confirmRetake, setConfirmRetake] = useState(false);
-  const [confirmDeleteAccount, setConfirmDeleteAccount] = useState(false);
   const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
@@ -78,21 +77,6 @@ export default function SideMenu({ visible, onClose }: Props) {
     router.replace("/login");
   };
 
-  const handleDeleteAccount = async () => {
-    setBusy(true);
-    try {
-      const r = await authedFetch(token, "/api/auth/delete-account", { method: "DELETE" });
-      if (r.ok) {
-        setConfirmDeleteAccount(false);
-        await logout();
-        onClose();
-        router.replace("/login");
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.backdrop}>
@@ -120,17 +104,23 @@ export default function SideMenu({ visible, onClose }: Props) {
                 </View>
               ) : null}
 
-              <View style={styles.actionBox}>
+              <MenuGroup title="Alapműveletek">
                 <MenuItem label="Főoldal" icon="home-outline" onPress={() => { onClose(); router.replace("/welcome"); }} testID="menu-welcome" />
                 <MenuItem label="Új mérés" icon="analytics-outline" onPress={() => setConfirmRetake(true)} testID="menu-retake" disabled={busy} />
-                {user?.is_admin ? (
-                  <>
-                    <MenuItem label="Chatbot beállítások" icon="settings-outline" onPress={() => { onClose(); router.push("/admin-settings"); }} testID="menu-admin-settings" />
-                    <MenuItem label="Admin · kódok" icon="keypad-outline" onPress={() => { onClose(); router.push("/admin"); }} testID="menu-admin" />
-                    <MenuItem label="Felhasználók" icon="people-outline" onPress={() => { onClose(); router.push("/admin-users"); }} testID="menu-admin-users" />
-                  </>
-                ) : null}
-              </View>
+                <MenuItem label="Beállítások" icon="person-circle-outline" onPress={() => { onClose(); router.push("/settings" as any); }} testID="menu-settings" />
+              </MenuGroup>
+
+              <MenuGroup title="Béta">
+                <MenuItem label="Myra Live" icon="mic-circle-outline" onPress={() => { onClose(); router.push("/myra-live" as any); }} testID="menu-myra-live" />
+              </MenuGroup>
+
+              {user?.is_admin ? (
+                <MenuGroup title="Admin">
+                  <MenuItem label="Chatbot beállítások" icon="settings-outline" onPress={() => { onClose(); router.push("/admin-settings"); }} testID="menu-admin-settings" />
+                  <MenuItem label="Állapotkódok" icon="keypad-outline" onPress={() => { onClose(); router.push("/admin"); }} testID="menu-admin" />
+                  <MenuItem label="Felhasználók" icon="people-outline" onPress={() => { onClose(); router.push("/admin-users"); }} testID="menu-admin-users" />
+                </MenuGroup>
+              ) : null}
 
               <View style={styles.historyBox}>
                 <View style={styles.historyHeader}>
@@ -171,7 +161,6 @@ export default function SideMenu({ visible, onClose }: Props) {
 
               <View style={styles.footer}>
                 <MenuItem label="Kijelentkezés" icon="log-out-outline" onPress={handleLogout} testID="menu-logout" subtle />
-                <MenuItem label="Regisztráció törlése" icon="person-remove-outline" onPress={() => setConfirmDeleteAccount(true)} testID="menu-delete-account" danger />
               </View>
             </View>
           </LinearGradient>
@@ -198,18 +187,16 @@ export default function SideMenu({ visible, onClose }: Props) {
         busy={busy}
         danger
       />
-
-      <ConfirmModal
-        visible={confirmDeleteAccount}
-        title="Fiók törlése"
-        text="Ez a művelet véglegesen törli a fiókodat, az összes chatüzenetedet és mérési eredményedet. Ez nem visszavonható."
-        confirmLabel="Törlés"
-        onCancel={() => setConfirmDeleteAccount(false)}
-        onConfirm={handleDeleteAccount}
-        busy={busy}
-        danger
-      />
     </Modal>
+  );
+}
+
+function MenuGroup({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <View style={styles.menuGroup}>
+      <T variant="caption" color="rgba(247,251,255,0.54)" style={styles.menuGroupTitle}>{title}</T>
+      {children}
+    </View>
   );
 }
 
@@ -293,14 +280,15 @@ const styles = StyleSheet.create({
     borderColor: theme.borderOnDark,
   },
   codeText: { fontSize: 34, lineHeight: 40, letterSpacing: 3, marginTop: 4 },
-  actionBox: {
+  menuGroup: {
     borderRadius: 12,
     borderWidth: 1,
     borderColor: theme.borderOnDark,
     backgroundColor: "rgba(255,255,255,0.08)",
     paddingVertical: 6,
   },
-  menuItem: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12, paddingHorizontal: 12 },
+  menuGroupTitle: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 2 },
+  menuItem: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 11, paddingHorizontal: 12 },
   menuIcon: {
     width: 30,
     height: 30,

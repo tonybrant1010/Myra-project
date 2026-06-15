@@ -1,9 +1,12 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { Platform } from "react-native";
 import { storage } from "@/src/utils/storage";
 
-const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || "";
+function backendUrl() {
+  return (process.env.EXPO_PUBLIC_BACKEND_URL || "").trim().replace(/\/+$/, "");
+}
 const TOKEN_KEY = "myra_jwt";
+const DEVICE_TOKEN_KEY = "myra_trusted_device";
 
 export type AppUser = {
   id: number;
@@ -11,12 +14,23 @@ export type AppUser = {
   name: string;
   is_admin: boolean;
   state_code?: string | null;
+  mfa_enabled?: boolean;
+  mfa_forced?: boolean;
 };
 
 type AuthState = { loading: boolean; user: AppUser | null; token: string | null };
+export type AuthResult = {
+  ok: boolean;
+  error?: string;
+  mfaRequired?: boolean;
+  challengeId?: string;
+  isAdmin?: boolean;
+  detail?: string;
+};
 
 type Ctx = AuthState & {
-  login: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
+  login: (email: string, password: string) => Promise<AuthResult>;
+  verifyMfa: (challengeId: string, code: string, rememberDevice: boolean) => Promise<AuthResult>;
   register: (email: string, name: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
@@ -40,12 +54,27 @@ async function writeToken(t: string | null) {
   else await storage.secureSet(TOKEN_KEY, t);
 }
 
+async function readDeviceToken(): Promise<string | null> {
+  if (Platform.OS === "web") return await storage.getItem<string>(DEVICE_TOKEN_KEY, "");
+  return await storage.secureGet<string>(DEVICE_TOKEN_KEY, "");
+}
+
+async function writeDeviceToken(t: string | null) {
+  if (!t) {
+    if (Platform.OS === "web") await storage.removeItem(DEVICE_TOKEN_KEY);
+    else await storage.secureRemove(DEVICE_TOKEN_KEY);
+    return;
+  }
+  if (Platform.OS === "web") await storage.setItem(DEVICE_TOKEN_KEY, t);
+  else await storage.secureSet(DEVICE_TOKEN_KEY, t);
+}
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = useState<AuthState>({ loading: true, user: null, token: null });
 
   const fetchMe = useCallback(async (token: string): Promise<AppUser | null> => {
     try {
-      const r = await fetch(`${BACKEND_URL}/api/auth/me`, {
+      const r = await fetch(apiUrl("/api/auth/me"), {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!r.ok) return null;
@@ -56,14 +85,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
-  const handleAuthResult = useCallback(async (r: Response): Promise<{ ok: boolean; error?: string }> => {
+  const handleAuthResult = useCallback(async (r: Response): Promise<AuthResult> => {
     if (!r.ok) {
       let msg = "Hiba történt.";
       try {
         const d = await r.json();
         if (typeof d?.detail === "string") msg = d.detail;
         else if (Array.isArray(d?.detail) && d.detail.length > 0) {
-          // Pydantic 422 validation error — detail is an array of objects
           msg = d.detail[0]?.msg || "Érvénytelen adat.";
         } else if (d?.detail) {
           msg = String(d.detail);
@@ -71,25 +99,47 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } catch {}
       return { ok: false, error: msg };
     }
+
     const data = await r.json();
+    if (data?.mfa_required) {
+      return {
+        ok: false,
+        mfaRequired: true,
+        challengeId: data.challenge_id,
+        isAdmin: !!data.is_admin,
+        detail: data.detail || "Biztonsági kód szükséges.",
+      };
+    }
+
     const token: string = data.access_token;
     const user: AppUser = data.user;
+    if (data.device_token) await writeDeviceToken(data.device_token);
     await writeToken(token);
     setState({ loading: false, user, token });
     return { ok: true };
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {
-    const r = await fetch(`${BACKEND_URL}/api/auth/login`, {
+    const deviceToken = await readDeviceToken();
+    const r = await fetch(apiUrl("/api/auth/login"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, device_token: deviceToken || undefined }),
+    });
+    return handleAuthResult(r);
+  }, [handleAuthResult]);
+
+  const verifyMfa = useCallback(async (challengeId: string, code: string, rememberDevice: boolean) => {
+    const r = await fetch(apiUrl("/api/auth/mfa/verify"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ challenge_id: challengeId, code, remember_device: rememberDevice }),
     });
     return handleAuthResult(r);
   }, [handleAuthResult]);
 
   const register = useCallback(async (email: string, name: string, password: string) => {
-    const r = await fetch(`${BACKEND_URL}/api/auth/register`, {
+    const r = await fetch(apiUrl("/api/auth/register"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, name, password }),
@@ -100,7 +150,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = useCallback(async () => {
     try {
       if (state.token) {
-        await fetch(`${BACKEND_URL}/api/auth/logout`, {
+        await fetch(apiUrl("/api/auth/logout"), {
           method: "POST",
           headers: { Authorization: `Bearer ${state.token}` },
         });
@@ -124,7 +174,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let mounted = true;
     (async () => {
       const token = await readToken();
-      if (!token) { if (mounted) setState({ loading: false, user: null, token: null }); return; }
+      if (!token) {
+        if (mounted) setState({ loading: false, user: null, token: null });
+        return;
+      }
       const u = await fetchMe(token);
       if (!u) {
         await writeToken(null);
@@ -137,7 +190,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [fetchMe]);
 
   return (
-    <AuthContext.Provider value={{ ...state, login, register, logout, refreshUser, setUserLocal }}>
+    <AuthContext.Provider value={{ ...state, login, verifyMfa, register, logout, refreshUser, setUserLocal }}>
       {children}
     </AuthContext.Provider>
   );
@@ -150,7 +203,8 @@ export function useAuth() {
 }
 
 export function apiUrl(path: string) {
-  return `${BACKEND_URL}${path.startsWith("/") ? path : `/${path}`}`;
+  const cleanPath = path.trim();
+  return `${backendUrl()}${cleanPath.startsWith("/") ? cleanPath : `/${cleanPath}`}`;
 }
 
 export async function authedFetch(token: string | null, path: string, init: RequestInit = {}) {

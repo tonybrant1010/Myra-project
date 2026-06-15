@@ -507,6 +507,12 @@ export default function ChatScreen() {
               ) : null}
             </View>
           )}
+
+          <View style={styles.disclaimerBar}>
+            <T variant="small" color="rgba(247,251,255,0.42)" align="center" style={styles.disclaimerText}>
+              A Myra egy mesterséges intelligenciával támogatott önismereti asszisztens. Nem ad orvosi tanácsot és nem helyettesíti a szakembert.
+            </T>
+          </View>
         </KeyboardAvoidingView>
       </ContentBackground>
     </SafeAreaView>
@@ -674,4 +680,15 @@ const styles = StyleSheet.create({
   sendBtn: { width: 44, height: 44, borderRadius: 12, overflow: "hidden", alignItems: "center", justifyContent: "center" },
   sendGradient: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
   sendBtnDisabled: { opacity: 0.45 },
+  disclaimerBar: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    backgroundColor: "rgba(6,19,32,0.62)",
+    borderTopWidth: 0.5,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  disclaimerText: {
+    fontSize: 10,
+    lineHeight: 14,
+  },
 });
