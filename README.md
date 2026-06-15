@@ -11,6 +11,9 @@ Fontos: a Myra nem hivatalos diagnosztikai vagy terápiás eszköz, és nem hely
 - 256 állapotkód kezelése;
 - mérési eredményoldal;
 - méréshez kötött Myra chat;
+- felhasználó kifejezett adatvédelmi hozzájárulását kezelő indító kártya a mérés megkezdése előtt;
+- fix önismereti tájékoztatók és disclaimerek a mérés, a chat és a Live beszélgetések felületén;
+- Zenodo-n publikált technikai és jogi megfelelőségi audit jelentés (DOI: 10.5281/zenodo.20698359);
 - PDF-alapú tudásvisszakeresés: Myra az aktuális üzenethez releváns tudásrészleteket kapja meg, nem a teljes tudásanyagot;
 - chat- és mérési előzmények;
 - admin felület felhasználókhoz, mérésekhez, tudásbázishoz és LLM-beállításokhoz;
@@ -62,6 +65,10 @@ frontend/
   scripts/patch-dist.js
   vercel.json
   package.json
+
+publication/
+  self_audit_report.docx
+  myra_data_flow_map.png
 
 docker-compose.yml
 README.md
