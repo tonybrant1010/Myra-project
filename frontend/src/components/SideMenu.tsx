@@ -17,6 +17,13 @@ function formatSessionLabel(s: Session): string {
   return `${s.code} - ${date}`;
 }
 
+function isSessionExpired(s: Session): boolean {
+  const created = new Date(s.created_at);
+  const now = new Date();
+  const msIn30Days = 30 * 24 * 60 * 60 * 1000;
+  return (now.getTime() - created.getTime()) >= msIn30Days;
+}
+
 export default function SideMenu({ visible, onClose }: Props) {
   const router = useRouter();
   const { user, token, logout, setUserLocal } = useAuth();
@@ -143,9 +150,18 @@ export default function SideMenu({ visible, onClose }: Props) {
                           testID={`session-item-${s.id}`}
                           activeOpacity={0.75}
                         >
-                          <T variant="small" color={idx === 0 ? theme.success : "#FF8A8A"} style={styles.sessionText}>
-                            {formatSessionLabel(s)}
-                          </T>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                            {isSessionExpired(s) ? (
+                              <Ionicons name="lock-closed-outline" size={12} color="rgba(247,251,255,0.40)" />
+                            ) : null}
+                            <T
+                              variant="small"
+                              color={isSessionExpired(s) ? "rgba(247,251,255,0.40)" : idx === 0 ? theme.success : "#FF8A8A"}
+                              style={styles.sessionText}
+                            >
+                              {formatSessionLabel(s)}{isSessionExpired(s) ? " (Archivált)" : ""}
+                            </T>
+                          </View>
                         </TouchableOpacity>
                         <TouchableOpacity
                           style={styles.deleteSessionBtn}

@@ -5,6 +5,8 @@ Hatályos: 2026. június 15.
 1. A szolgáltatás jellege
 A Myra egy magánszemély által, nem kereskedelmi célból fejlesztett, mérésvezérelt, reflektív mentálhigiénés önismereti alkalmazás. A rendszer az ESV-modell (Érzelem-Stressz-Viselkedés) alapján működik: önkitöltős állapotfelmérést, belső állapotkódot és mesterséges intelligenciával támogatott beszélgetési keretet biztosít.
 
+A szolgáltatás jellege miatt a kitöltött kérdőívek alapján generált állapotkódok és a hozzájuk kapcsolódó elemzések érvényességi ideje a kiértékeléstől számított legfeljebb 30 nap. A 30 napos időszak lejárta után a kapcsolódó beszélgetési szál lezárásra kerül, és kizárólag olvasható (archivált) formában marad elérhető a felhasználó számára. A felhasználó bármikor indíthat új mérést a szolgáltatás folytatásához.
+
 A szolgáltatás kizárólagos célja az önreflexió, az állapotkövetés és a mentális jólét (wellness) támogatása. A Myra nem egészségügyi szolgáltatás, nem orvostechnikai eszköz, nem pszichológiai vagy pszichiátriai ellátás, nem diagnosztizál és nem nyújt terápiát.
 
 2. Nem diagnosztikai és nem terápiás rendszer

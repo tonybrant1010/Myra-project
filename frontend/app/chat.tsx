@@ -14,7 +14,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useLocalSearchParams, useNavigation } from "expo-router";
+import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { authedFetch, useAuth } from "@/src/auth/AuthContext";
 import { shadow, theme } from "@/src/theme";
 import ContentBackground from "@/src/components/ContentBackground";
@@ -137,6 +137,7 @@ function MarkdownMessage({ text }: { text: string }) {
 export default function ChatScreen() {
   const { token, user } = useAuth();
   const navigation = useNavigation();
+  const router = useRouter();
   const { session_id: paramSessionId } = useLocalSearchParams<{ session_id?: string }>();
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -271,7 +272,8 @@ export default function ChatScreen() {
     }
   }, [viewSessionId, loadHistory]);
 
-  const isReadOnly = viewSessionId !== null && viewSessionId !== activeSessionId;
+  const isExpired = !!user?.is_code_expired;
+  const isReadOnly = (viewSessionId !== null && viewSessionId !== activeSessionId) || isExpired;
 
   const stopSpeech = useCallback(() => {
     audioRef.current?.pause?.();
@@ -442,6 +444,13 @@ export default function ChatScreen() {
       <TopBar title="Myra Project" rightLabel={user?.state_code || undefined} />
       <ContentBackground>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={Platform.OS === "ios" ? 60 : 0}>
+          {!isReadOnly && user?.code_days_remaining !== undefined && user.code_days_remaining <= 2 && user.code_days_remaining > 0 ? (
+            <View style={styles.warningBanner}>
+              <T variant="small" color={theme.white} align="center" style={{ fontWeight: "600" }}>
+                ⏳ A mérési ciklusod {user.code_days_remaining} nap múlva lejár. Ezután a beszélgetés archiválásra kerül. Készülj fel az újramérésre!
+              </T>
+            </View>
+          ) : null}
           {loading ? (
             <View style={styles.center}><ActivityIndicator color={theme.primary} /></View>
           ) : messages.length === 0 ? (
@@ -491,7 +500,26 @@ export default function ChatScreen() {
 
           {isReadOnly ? (
             <View style={styles.readOnlyBar} testID="read-only-bar">
-              <T variant="small" color="rgba(247,251,255,0.70)" align="center">Ez egy korábbi mérési szál, jelenleg csak olvasható.</T>
+              {isExpired && viewSessionId === activeSessionId ? (
+                <View style={{ gap: 10, alignItems: "center" }}>
+                  <T variant="small" color="rgba(247,251,255,0.70)" align="center">
+                    Ez a mérési ciklus lezárult. A beszélgetés archiválásra került, így ide már nem küldhetsz új üzenetet.
+                  </T>
+                  <TouchableOpacity
+                    style={styles.actionBtn}
+                    onPress={() => {
+                      router.replace("/quiz");
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <T variant="title" color={theme.white}>Új mérés indítása</T>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <T variant="small" color="rgba(247,251,255,0.70)" align="center">
+                  Ez egy korábbi mérési szál, jelenleg csak olvasható.
+                </T>
+              )}
             </View>
           ) : (
             <View style={styles.inputBar}>
@@ -707,5 +735,22 @@ const styles = StyleSheet.create({
   disclaimerText: {
     fontSize: 10,
     lineHeight: 14,
+  },
+  warningBanner: {
+    backgroundColor: "rgba(226,135,67,0.92)",
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.16)",
+  },
+  actionBtn: {
+    backgroundColor: theme.primary,
+    paddingVertical: 10,
+    paddingHorizontal: 22,
+    borderRadius: 10,
+    marginTop: 6,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.20)",
   },
 });

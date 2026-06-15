@@ -1531,11 +1531,23 @@ async def auth_delete_account(user: User = Depends(get_current_user), db: AsyncS
 
 
 def _user_out(u: User) -> dict:
+    is_expired = False
+    days_remaining = 0
+    if u.state_code and u.code_verified_at:
+        now = _now()
+        age = now - u.code_verified_at
+        days_remaining = 30 - age.days
+        if days_remaining <= 0:
+            is_expired = True
+            days_remaining = 0
+
     return {
         "id": u.id, "email": u.email, "name": u.name,
         "is_admin": u.is_admin, "state_code": u.state_code,
         "mfa_enabled": bool(u.mfa_enabled or u.is_admin),
         "mfa_forced": bool(u.is_admin),
+        "is_code_expired": is_expired,
+        "code_days_remaining": max(0, days_remaining),
     }
 
 
@@ -1564,9 +1576,24 @@ async def codes_verify(body: CodeVerifyBody, user: User = Depends(get_current_us
 async def codes_me(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     if not user.state_code:
         return {"state_code": None, "profile": None}
+    
+    is_expired = False
+    days_remaining = 0
+    if user.code_verified_at:
+        age = _now() - user.code_verified_at
+        days_remaining = 30 - age.days
+        if days_remaining <= 0:
+            is_expired = True
+            days_remaining = 0
+
     res = await db.execute(select(StateCode).where(StateCode.code == user.state_code))
     sc = res.scalar_one_or_none()
-    return {"state_code": user.state_code, "profile": _sc_out(sc) if sc else None}
+    return {
+        "state_code": user.state_code,
+        "profile": _sc_out(sc) if sc else None,
+        "is_expired": is_expired,
+        "days_remaining": max(0, days_remaining),
+    }
 
 
 @api.post("/codes/reset")
@@ -1911,6 +1938,13 @@ async def chat_history(
 async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     if not user.state_code:
         raise HTTPException(status_code=400, detail="Először töltsd ki a kérdőívet.")
+    
+    # Check if measurement is expired
+    if user.code_verified_at:
+        age = _now() - user.code_verified_at
+        if age.days >= 30:
+            raise HTTPException(status_code=403, detail="Ez a mérési ciklus lezárult. Kérjük, tölts ki egy új kérdőívet.")
+
     res = await db.execute(select(StateCode).where(StateCode.code == user.state_code))
     sc = res.scalar_one_or_none()
     if not sc:

@@ -149,6 +149,9 @@ export default function QuizScreen() {
                 <T variant="body" color="rgba(247,251,255,0.80)">
                   • <T color={theme.textOnDark} style={{ fontFamily: "Manrope_700Bold" }}>Adatkezelési hozzájárulás:</T> A kérdésekre adott válaszaid mentális és testi stresszre utaló, érzékeny adatokat tartalmazhatnak. A mérés elindításával kifejezetten és önkéntesen hozzájárulsz ezek feldolgozásához az állapotkódod képzése és az önismereti csevegés céljából.
                 </T>
+                <T variant="body" color="rgba(247,251,255,0.80)">
+                  • <T color={theme.textOnDark} style={{ fontFamily: "Manrope_700Bold" }}>Érvényességi idő:</T> A méréssel egy egyéni, 30 napos ciklus indul el. A Myra ezen időszak alatt támogat a kapott állapotkód alapján. A 30 nap letelte után a beszélgetés archiválásra kerül (visszaolvasható marad), és új mérést végezhetsz a folytatáshoz.
+                </T>
               </View>
 
               <TouchableOpacity style={styles.consentBtn} onPress={() => setShowConsent(false)} activeOpacity={0.85}>

@@ -16,6 +16,8 @@ export type AppUser = {
   state_code?: string | null;
   mfa_enabled?: boolean;
   mfa_forced?: boolean;
+  is_code_expired?: boolean;
+  code_days_remaining?: number;
 };
 
 type AuthState = { loading: boolean; user: AppUser | null; token: string | null };
