@@ -1535,7 +1535,11 @@ def _user_out(u: User) -> dict:
     days_remaining = 0
     if u.state_code and u.code_verified_at:
         now = _now()
-        age = now - u.code_verified_at
+        verified_at = u.code_verified_at
+        if verified_at.tzinfo is None:
+            age = now.replace(tzinfo=None) - verified_at
+        else:
+            age = now - verified_at
         days_remaining = 30 - age.days
         if days_remaining <= 0:
             is_expired = True
@@ -1580,7 +1584,12 @@ async def codes_me(user: User = Depends(get_current_user), db: AsyncSession = De
     is_expired = False
     days_remaining = 0
     if user.code_verified_at:
-        age = _now() - user.code_verified_at
+        now = _now()
+        verified_at = user.code_verified_at
+        if verified_at.tzinfo is None:
+            age = now.replace(tzinfo=None) - verified_at
+        else:
+            age = now - verified_at
         days_remaining = 30 - age.days
         if days_remaining <= 0:
             is_expired = True
@@ -1941,7 +1950,12 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
     
     # Check if measurement is expired
     if user.code_verified_at:
-        age = _now() - user.code_verified_at
+        now = _now()
+        verified_at = user.code_verified_at
+        if verified_at.tzinfo is None:
+            age = now.replace(tzinfo=None) - verified_at
+        else:
+            age = now - verified_at
         if age.days >= 30:
             raise HTTPException(status_code=403, detail="Ez a mérési ciklus lezárult. Kérjük, tölts ki egy új kérdőívet.")
 
