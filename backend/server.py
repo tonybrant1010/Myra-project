@@ -1,4 +1,4 @@
-"""Myra-project backend — SQLite + custom JWT, no external dependencies except the
+"""Myra-project backend — Supabase/PostgreSQL + custom JWT, no external dependencies except the
 configurable LLM provider (OpenAI / Anthropic / Google Gemini) chosen by the admin."""
 import asyncio
 import csv
@@ -60,7 +60,9 @@ _gemini_cache_name: Optional[str] = None
 JWT_SECRET = os.environ.get("JWT_SECRET", "")
 JWT_ALG = os.environ.get("JWT_ALG", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "10080"))
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:////app/backend/data/myra.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL env variable must be set (Supabase/PostgreSQL)")
 ADMIN_EMAIL_ALLOWLIST = {
     e.strip().lower() for e in os.environ.get("ADMIN_EMAIL_ALLOWLIST", "").split(",") if e.strip()
 }

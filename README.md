@@ -21,7 +21,7 @@ Fontos: a Myra nem hivatalos diagnosztikai vagy terápiás eszköz, és nem hely
 - Vercel webes frontend;
 - Dockerben futó FastAPI backend;
 - EU régiós Supabase/Postgres adatbázis érzékeny felhasználói adatokhoz;
-- lokális SQLite fallback fejlesztéshez.
+- 30 napos mérési érvényességi ciklus és automatikus beszélgetés-archiválás (lock & gate) rendszer.
 
 ## Stack
 
@@ -30,9 +30,8 @@ Fontos: a Myra nem hivatalos diagnosztikai vagy terápiás eszköz, és nem hely
 - Python 3.11
 - FastAPI
 - SQLAlchemy async
-- Supabase/Postgres / `asyncpg`
-- SQLite / `aiosqlite` lokális fejlesztési fallbackként
-- PDF-alapú tudásindex Postgres/SQLite kompatibilis kereséssel
+- Supabase/Postgres / `asyncpg` (kizárólagos adatbázis mind lokális, mind éles környezetben)
+- PDF-alapú tudásindex Postgres kompatibilis kereséssel
 - JWT auth
 - Docker / Docker Compose
 - LLM provider: admin felületen konfigurálható, jelenleg főként Gemini használatra optimalizálva
@@ -57,6 +56,7 @@ backend/
       *.pdf
     knowledge_base.txt
     esv_calc.ods
+  tests/                 # Backend integrációs és egységtesztek
 
 frontend/
   app/
@@ -67,8 +67,11 @@ frontend/
   package.json
 
 publication/
-  self_audit_report.docx
-  myra_data_flow_map.png
+  self_audit_report.docx # Hitelesített önértékelési jelentés
+  myra_data_flow_map.png # Adatfolyam és architektúra térkép
+
+tests/
+  __init__.py            # Root tesztelési modul
 
 docker-compose.yml
 README.md
@@ -76,7 +79,10 @@ README.md
 
 ## Adatkezelés
 
-Az éles felhasználói adatok és a chat-/mérési előzmények EU régiós Supabase/Postgres adatbázisban élnek. A backend a `DATABASE_URL`, `DATABASE_SSL` és `DATABASE_SSL_MODE` környezeti változókból olvassa a kapcsolatot.
+Az éles és a lokális fejlesztési adatok kizárólag EU régiós Supabase/Postgres adatbázisban élnek. A backend a `DATABASE_URL`, `DATABASE_SSL` és `DATABASE_SSL_MODE` környezeti változókból olvassa a kapcsolatot.
+
+> [!IMPORTANT]
+> A projektben szigorúan tilos bármilyen SQLite `.db` fájl vagy egyéb lokális adatbázis-fájl használata, generálása és commitolása a repóba. A rendszer kizárólagos adatbázisa a Supabase/PostgreSQL.
 
 A backend konténerben az adatkönyvtár továbbra is bind mounttal van bekötve:
 
@@ -279,7 +285,7 @@ backend/data/kb_pdfs/ ellenőrzés nélkül
 
 ## Backup
 
-Az éles adatbázis mentését Supabase/Postgres oldalon kell kezelni. Ha szerverről készült ideiglenes SQLite vagy export mentés, az nem kerülhet GitHubra, és csak titkosított/lokális mentési helyen maradhat.
+Az adatbázis mentéseit kizárólag a Supabase/Postgres beépített biztonsági mentési rendszere végzi. A projekt mappájában semmilyen adatbázis-export fájl nem tárolható.
 
 ## Hasznos Ellenőrző Parancsok
 

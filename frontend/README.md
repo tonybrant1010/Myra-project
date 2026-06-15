@@ -1,50 +1,43 @@
-# Welcome to your Expo app 👋
+# Myra Frontend Client
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Ez a Myra mentálhigiénés önismereti alkalmazás webes és mobil frontendje, amely React Native és Expo használatával készült, és Vercelre van optimalizálva.
 
-## Get started
+## Fő Technológiai Stack
 
-1. Install dependencies
+- **Expo (SDK 51)** és **React Native Web**: Lehetővé teszi az univerzális kódmegosztást és a reszponzív, glassmorphism alapú webes felületet.
+- **Expo Router**: Fájlrendszer-alapú navigáció és útvonalkezelés.
+- **TypeScript**: Tiszta, típusbiztos kódbázis.
+- **Vite/Vercel**: Gyors betöltést biztosító frontend hosztolási és útvonal-átirányítási struktúra.
 
+## Mappa Struktúra
+
+- `/app`: A navigációs képernyők és útvonalak helye (pl. `chat.tsx`, `quiz.tsx`, `welcome.tsx`).
+- `/src/components`: Közös UI komponensek (pl. `SideMenu.tsx`, `TopBar.tsx`, `PasswordInput.tsx`).
+- `/src/auth`: Bejelentkezési folyamatok és munkamenet-érvényesség kezelése (`AuthContext.tsx`).
+- `/assets`: Képek, betűtípusok és dizájn-assetek.
+- `/scripts`: Gyártási folyamatokat segítő scriptek (pl. asset patcher Vercel-hez).
+
+## Fejlesztési Folyamat
+
+### Lokális futtatás
+
+1. Telepítsd a függőségeket:
    ```bash
-   npm install
+   yarn install
    ```
 
-2. Start the app
-
+2. Állítsd be a backend elérését környezeti változóban, majd indítsd el a dev szervert:
    ```bash
-   npx expo start
+   set EXPO_PUBLIC_BACKEND_URL=http://localhost:8001
+   npx expo start --web
    ```
 
-In the output, you'll find options to open the app in a
+## Vercel Élesítés
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
+A projekt élesítése a `frontend` mappából futtatott alábbi paranccsal történik:
 ```bash
-npm run reset-project
+npm run deploy
 ```
+Ez a parancs lefuttatja a webes exportot (`npx expo export --platform web`), alkalmazza a szükséges javításokat az asseteken a `scripts/patch-dist.js` segítségével, majd feltölti a buildet a Vercel-re.
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
-
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+Az API hívások átirányítását a backend felé a `vercel.json` rewrite szabályai kezelik.
