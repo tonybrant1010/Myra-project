@@ -85,79 +85,81 @@ export default function SideMenu({ visible, onClose }: Props) {
           <LinearGradient colors={["#061320", "#0A2340", "#11365A"]} style={styles.drawerGradient}>
             <View pointerEvents="none" style={styles.drawerMist} />
             <View style={styles.drawerInner} testID="side-menu">
-              <View style={styles.header}>
-                <View style={styles.avatarFallback}>
-                  <T variant="h2" color={theme.textOnDark}>{user?.name ? user.name.charAt(0).toUpperCase() : "?"}</T>
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ gap: 12 }} showsVerticalScrollIndicator={false}>
+                <View style={styles.header}>
+                  <View style={styles.avatarFallback}>
+                    <T variant="h2" color={theme.textOnDark}>{user?.name ? user.name.charAt(0).toUpperCase() : "?"}</T>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <T variant="h2" color={theme.textOnDark} testID="menu-user-name">{user?.name || "Felhasználó"}</T>
+                    <T variant="small" color="rgba(247,251,255,0.68)">{user?.email}</T>
+                  </View>
                 </View>
-                <View style={{ flex: 1 }}>
-                  <T variant="h2" color={theme.textOnDark} testID="menu-user-name">{user?.name || "Felhasználó"}</T>
-                  <T variant="small" color="rgba(247,251,255,0.68)">{user?.email}</T>
-                </View>
-              </View>
 
-              {user?.state_code ? (
-                <View style={styles.codeBadge}>
-                  <T variant="caption" color={theme.accentSoft} style={{ fontSize: 10 }}>Jelenlegi állapotkód</T>
-                  <T variant="hero" color={theme.textOnDark} style={styles.codeText} testID="menu-current-code">
-                    {user.state_code}
-                  </T>
-                </View>
-              ) : null}
+                {user?.state_code ? (
+                  <View style={styles.codeBadge}>
+                    <T variant="caption" color={theme.accentSoft} style={{ fontSize: 10 }}>Jelenlegi állapotkód</T>
+                    <T variant="hero" color={theme.textOnDark} style={styles.codeText} testID="menu-current-code">
+                      {user.state_code}
+                    </T>
+                  </View>
+                ) : null}
 
-              <MenuGroup title="Alapműveletek">
-                <MenuItem label="Főoldal" icon="home-outline" onPress={() => { onClose(); router.replace("/welcome"); }} testID="menu-welcome" />
-                <MenuItem label="Új mérés" icon="analytics-outline" onPress={() => setConfirmRetake(true)} testID="menu-retake" disabled={busy} />
-                <MenuItem label="Beállítások" icon="person-circle-outline" onPress={() => { onClose(); router.push("/settings" as any); }} testID="menu-settings" />
-              </MenuGroup>
-
-              <MenuGroup title="Béta">
-                <MenuItem label="Myra Live" icon="mic-circle-outline" onPress={() => { onClose(); router.push("/myra-live" as any); }} testID="menu-myra-live" />
-              </MenuGroup>
-
-              {user?.is_admin ? (
-                <MenuGroup title="Admin">
-                  <MenuItem label="Chatbot beállítások" icon="settings-outline" onPress={() => { onClose(); router.push("/admin-settings"); }} testID="menu-admin-settings" />
-                  <MenuItem label="Állapotkódok" icon="keypad-outline" onPress={() => { onClose(); router.push("/admin"); }} testID="menu-admin" />
-                  <MenuItem label="Felhasználók" icon="people-outline" onPress={() => { onClose(); router.push("/admin-users"); }} testID="menu-admin-users" />
+                <MenuGroup title="Alapműveletek">
+                  <MenuItem label="Főoldal" icon="home-outline" onPress={() => { onClose(); router.replace("/welcome"); }} testID="menu-welcome" />
+                  <MenuItem label="Új mérés" icon="analytics-outline" onPress={() => setConfirmRetake(true)} testID="menu-retake" disabled={busy} />
+                  <MenuItem label="Beállítások" icon="person-circle-outline" onPress={() => { onClose(); router.push("/settings" as any); }} testID="menu-settings" />
                 </MenuGroup>
-              ) : null}
 
-              <View style={styles.historyBox}>
-                <View style={styles.historyHeader}>
-                  <T variant="caption" color="rgba(247,251,255,0.60)">Mérések és chatek</T>
-                  {sessionsLoading ? <ActivityIndicator color={theme.accent} size="small" /> : null}
+                <MenuGroup title="Béta">
+                  <MenuItem label="Myra Live" icon="mic-circle-outline" onPress={() => { onClose(); router.push("/myra-live" as any); }} testID="menu-myra-live" />
+                </MenuGroup>
+
+                {user?.is_admin ? (
+                  <MenuGroup title="Admin">
+                    <MenuItem label="Chatbot beállítások" icon="settings-outline" onPress={() => { onClose(); router.push("/admin-settings"); }} testID="menu-admin-settings" />
+                    <MenuItem label="Állapotkódok" icon="keypad-outline" onPress={() => { onClose(); router.push("/admin"); }} testID="menu-admin" />
+                    <MenuItem label="Felhasználók" icon="people-outline" onPress={() => { onClose(); router.push("/admin-users"); }} testID="menu-admin-users" />
+                  </MenuGroup>
+                ) : null}
+
+                <View style={styles.historyBox}>
+                  <View style={styles.historyHeader}>
+                    <T variant="caption" color="rgba(247,251,255,0.60)">Mérések és chatek</T>
+                    {sessionsLoading ? <ActivityIndicator color={theme.accent} size="small" /> : null}
+                  </View>
+                  <ScrollView style={styles.historyScroll} showsVerticalScrollIndicator>
+                    {sessions.length === 0 && !sessionsLoading ? (
+                      <T variant="small" color="rgba(247,251,255,0.58)" style={styles.emptyHistory}>Nincs korábbi mérés.</T>
+                    ) : null}
+                    {sessions.map((s, idx) => (
+                      <View key={s.id} style={styles.sessionItem}>
+                        <TouchableOpacity
+                          style={styles.sessionOpen}
+                          onPress={() => {
+                            onClose();
+                            router.push({ pathname: "/chat", params: { session_id: s.id } });
+                          }}
+                          testID={`session-item-${s.id}`}
+                          activeOpacity={0.75}
+                        >
+                          <T variant="small" color={idx === 0 ? theme.success : "#FF8A8A"} style={styles.sessionText}>
+                            {formatSessionLabel(s)}
+                          </T>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.deleteSessionBtn}
+                          onPress={() => setSessionToDelete(s)}
+                          testID={`session-delete-${s.id}`}
+                          hitSlop={8}
+                        >
+                          <Ionicons name="trash-outline" size={16} color="rgba(247,251,255,0.70)" />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </ScrollView>
                 </View>
-                <ScrollView style={styles.historyScroll} showsVerticalScrollIndicator>
-                  {sessions.length === 0 && !sessionsLoading ? (
-                    <T variant="small" color="rgba(247,251,255,0.58)" style={styles.emptyHistory}>Nincs korábbi mérés.</T>
-                  ) : null}
-                  {sessions.map((s, idx) => (
-                    <View key={s.id} style={styles.sessionItem}>
-                      <TouchableOpacity
-                        style={styles.sessionOpen}
-                        onPress={() => {
-                          onClose();
-                          router.push({ pathname: "/chat", params: { session_id: s.id } });
-                        }}
-                        testID={`session-item-${s.id}`}
-                        activeOpacity={0.75}
-                      >
-                        <T variant="small" color={idx === 0 ? theme.success : "#FF8A8A"} style={styles.sessionText}>
-                          {formatSessionLabel(s)}
-                        </T>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.deleteSessionBtn}
-                        onPress={() => setSessionToDelete(s)}
-                        testID={`session-delete-${s.id}`}
-                        hitSlop={8}
-                      >
-                        <Ionicons name="trash-outline" size={16} color="rgba(247,251,255,0.70)" />
-                      </TouchableOpacity>
-                    </View>
-                  ))}
-                </ScrollView>
-              </View>
+              </ScrollView>
 
               <View style={styles.footer}>
                 <MenuItem label="Kijelentkezés" icon="log-out-outline" onPress={handleLogout} testID="menu-logout" subtle />
@@ -299,8 +301,7 @@ const styles = StyleSheet.create({
   },
   menuLabel: { fontSize: 15, lineHeight: 20 },
   historyBox: {
-    flex: 1,
-    minHeight: 130,
+    height: 220,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: theme.borderOnDark,
