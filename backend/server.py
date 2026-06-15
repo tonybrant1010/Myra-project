@@ -1575,7 +1575,16 @@ async def codes_verify(body: CodeVerifyBody, user: User = Depends(get_current_us
         raise HTTPException(status_code=404, detail="Ezt a kódot nem találom. Ellenőrizd a kérdőív végén kapott számot.")
     user.state_code = code
     user.code_verified_at = _now()
-    return {"ok": True, "state_code": _sc_out(sc)}
+    
+    # Create a QuizSubmission session so they have a valid active session for chat
+    session_id = str(uuid.uuid4())
+    db.add(QuizSubmission(
+        id=session_id, user_id=user.id, answers=[3]*21,
+        norms={"a": 0.5, "p": 0.5, "h": 0.5, "c": 0.5}, code=code,
+        created_at=user.code_verified_at
+    ))
+    
+    return {"ok": True, "state_code": _sc_out(sc), "session_id": session_id}
 
 
 @api.get("/codes/me")
@@ -2570,107 +2579,6 @@ async def public_config(db: AsyncSession = Depends(get_db)):
         "global_notice_text": await get_setting(db, "global_notice_text", ""),
     }
 
-
-# ---------- Debug and Restore (temporary) ----------
-@api.get("/debug/user/{email}")
-async def debug_user(email: str, db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(User).where(User.email == email.lower().strip()))
-    u = res.scalar_one_or_none()
-    if not u:
-        return {"error": "User not found"}
-    
-    # Get user sessions (quiz submissions)
-    s_res = await db.execute(
-        select(QuizSubmission)
-        .where(QuizSubmission.user_id == u.id)
-        .order_by(QuizSubmission.created_at.desc())
-    )
-    sessions = s_res.scalars().all()
-    
-    # Get user out data
-    user_out = _user_out(u)
-    
-    return {
-        "server_now": _now().isoformat(),
-        "user": {
-            "id": u.id,
-            "email": u.email,
-            "state_code": u.state_code,
-            "code_verified_at": u.code_verified_at.isoformat() if u.code_verified_at else None,
-            "is_code_expired": user_out.get("is_code_expired"),
-            "code_days_remaining": user_out.get("code_days_remaining"),
-        },
-        "sessions": [
-            {
-                "id": s.id,
-                "code": s.code,
-                "created_at": s.created_at.isoformat() if s.created_at else None,
-            }
-            for s in sessions
-        ]
-    }
-
-
-@api.post("/debug/user/{email}/restore")
-async def debug_restore_user(email: str, db: AsyncSession = Depends(get_db)):
-    from sqlalchemy import update
-    res = await db.execute(select(User).where(User.email == email.lower().strip()))
-    u = res.scalar_one_or_none()
-    if not u:
-        return {"error": "User not found"}
-    
-    # Update code_verified_at to now
-    u.code_verified_at = _now()
-    
-    # Ensure they have a state code
-    if not u.state_code:
-        u.state_code = "4141"
-        
-    # Get latest session
-    s_res = await db.execute(
-        select(QuizSubmission)
-        .where(QuizSubmission.user_id == u.id)
-        .order_by(QuizSubmission.created_at.desc())
-        .limit(1)
-    )
-    latest_session = s_res.scalar_one_or_none()
-    
-    created_new = False
-    updated_existing = False
-    
-    if not latest_session:
-        # Create a new session
-        latest_session = QuizSubmission(
-            id=str(uuid.uuid4()),
-            user_id=u.id,
-            answers=[3]*21,
-            norms={"a": 0.5, "p": 0.5, "h": 0.5, "c": 0.5},
-            code=u.state_code,
-            created_at=_now()
-        )
-        db.add(latest_session)
-        created_new = True
-    else:
-        # Update existing session's created_at to now
-        latest_session.created_at = _now()
-        latest_session.code = u.state_code
-        updated_existing = True
-        
-    # Also update all user's messages without a session to the latest session
-    await db.execute(
-        update(ChatMessage)
-        .where(ChatMessage.user_id == u.id, ChatMessage.session_id == None)
-        .values(session_id=latest_session.id)
-    )
-    
-    return {
-        "ok": True,
-        "created_new": created_new,
-        "updated_existing": updated_existing,
-        "session_id": latest_session.id,
-        "state_code": u.state_code,
-        "code_verified_at": u.code_verified_at.isoformat()
-    }
 
 
 app.include_router(api)
