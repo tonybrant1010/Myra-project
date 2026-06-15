@@ -14,7 +14,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams, useNavigation } from "expo-router";
 import { authedFetch, useAuth } from "@/src/auth/AuthContext";
 import { shadow, theme } from "@/src/theme";
 import ContentBackground from "@/src/components/ContentBackground";
@@ -136,6 +136,7 @@ function MarkdownMessage({ text }: { text: string }) {
 
 export default function ChatScreen() {
   const { token, user } = useAuth();
+  const navigation = useNavigation();
   const { session_id: paramSessionId } = useLocalSearchParams<{ session_id?: string }>();
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -223,16 +224,27 @@ export default function ChatScreen() {
 
   useEffect(() => {
     if (!token) return;
-    authedFetch(token, "/api/quiz/sessions")
-      .then((r) => r.json())
-      .then((d) => {
-        const sessions: { id: string }[] = d.sessions || [];
-        const latest = sessions[0]?.id || null;
-        setActiveSessionId(latest);
-        setViewSessionId(paramSessionId || latest);
-      })
-      .catch(() => {});
-  }, [token, paramSessionId]);
+
+    const fetchSessions = () => {
+      authedFetch(token, "/api/quiz/sessions")
+        .then((r) => r.json())
+        .then((d) => {
+          const sessions: { id: string }[] = d.sessions || [];
+          const latest = sessions[0]?.id || null;
+          setActiveSessionId(latest);
+          setViewSessionId(paramSessionId || latest);
+        })
+        .catch(() => {});
+    };
+
+    fetchSessions();
+
+    const unsubscribe = navigation.addListener("focus", () => {
+      fetchSessions();
+    });
+
+    return unsubscribe;
+  }, [token, paramSessionId, navigation]);
 
   const loadHistory = useCallback(async (sid: string | null) => {
     setLoading(true);
@@ -251,7 +263,12 @@ export default function ChatScreen() {
   }, [token]);
 
   useEffect(() => {
-    if (viewSessionId !== undefined) loadHistory(viewSessionId);
+    if (viewSessionId !== null && viewSessionId !== undefined) {
+      loadHistory(viewSessionId);
+    } else {
+      setMessages([]);
+      setLoading(false);
+    }
   }, [viewSessionId, loadHistory]);
 
   const isReadOnly = viewSessionId !== null && viewSessionId !== activeSessionId;
