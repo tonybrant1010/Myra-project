@@ -16,12 +16,14 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useAuth, authedFetch } from "@/src/auth/AuthContext";
+import { useAuthGuard } from "@/src/auth/useAuthGuard";
 import { theme } from "@/src/theme";
 import TopBar from "@/src/components/TopBar";
 import ContentBackground from "@/src/components/ContentBackground";
 // A severity hivatalosan is a típus része lett
 type Item = { code: string; title: string; profile: string; severity?: string };
 export default function AdminScreen() {
+  useAuthGuard();
   const { token, user } = useAuth();
   const router = useRouter();
   const [items, setItems] = useState<Item[]>([]);

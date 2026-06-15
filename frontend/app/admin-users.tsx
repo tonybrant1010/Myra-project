@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth, authedFetch } from "@/src/auth/AuthContext";
+import { useAuthGuard } from "@/src/auth/useAuthGuard";
 import { theme } from "@/src/theme";
 import TopBar from "@/src/components/TopBar";
 import ContentBackground from "@/src/components/ContentBackground";
@@ -224,6 +225,7 @@ function AdminTrendChart({ sessions }: { sessions: SessionItem[] }) {
 }
 
 export default function AdminUsersScreen() {
+  useAuthGuard();
   const { token, user } = useAuth();
   const [users, setUsers] = useState<UserItem[]>([]);
   const [activity, setActivity] = useState<ChatActivity | null>(null);

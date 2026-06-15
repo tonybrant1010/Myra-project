@@ -13,6 +13,7 @@ import { GoogleGenAI, Modality, type Session } from "@google/genai";
 import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { authedFetch, useAuth } from "@/src/auth/AuthContext";
+import { useAuthGuard } from "@/src/auth/useAuthGuard";
 import ContentBackground from "@/src/components/ContentBackground";
 import TopBar from "@/src/components/TopBar";
 import { T } from "@/src/components/Typography";
@@ -78,6 +79,7 @@ function microphoneErrorMessage(error: unknown): string {
 }
 
 export default function MyraLiveScreen() {
+  useAuthGuard();
   const { token } = useAuth();
   const [phase, setPhase] = useState<LivePhase>("idle");
   const [status, setStatus] = useState("Érintsd meg a mikrofont a beszélgetéshez.");

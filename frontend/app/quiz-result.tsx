@@ -5,12 +5,14 @@ import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { authedFetch, useAuth } from "@/src/auth/AuthContext";
+import { useAuthGuard } from "@/src/auth/useAuthGuard";
 import { shadow, theme } from "@/src/theme";
 import ContentBackground from "@/src/components/ContentBackground";
 import TopBar from "@/src/components/TopBar";
 import { T } from "@/src/components/Typography";
 
 export default function QuizResultScreen() {
+  useAuthGuard();
   const router = useRouter();
   const { token } = useAuth();
   const { code } = useLocalSearchParams<{ code: string }>();

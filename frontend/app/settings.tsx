@@ -16,6 +16,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { authedFetch, useAuth } from "@/src/auth/AuthContext";
+import { useAuthGuard } from "@/src/auth/useAuthGuard";
 import ContentBackground from "@/src/components/ContentBackground";
 import PasswordInput from "@/src/components/PasswordInput";
 import TopBar from "@/src/components/TopBar";
@@ -35,6 +36,7 @@ type TrustedDevice = {
 };
 
 export default function SettingsScreen() {
+  useAuthGuard();
   const router = useRouter();
   const { user, token, logout, refreshUser } = useAuth();
   const [currentPassword, setCurrentPassword] = useState("");

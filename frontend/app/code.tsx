@@ -12,11 +12,13 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useAuth, authedFetch } from "@/src/auth/AuthContext";
+import { useAuthGuard } from "@/src/auth/useAuthGuard";
 import { theme } from "@/src/theme";
 import TopBar from "@/src/components/TopBar";
 import ContentBackground from "@/src/components/ContentBackground";
 
 export default function CodeScreen() {
+  useAuthGuard();
   const router = useRouter();
   const { token, setUserLocal } = useAuth();
   const [digits, setDigits] = useState<string[]>(["", "", "", ""]);

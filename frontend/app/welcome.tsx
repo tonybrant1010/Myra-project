@@ -4,12 +4,14 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "@/src/auth/AuthContext";
+import { useAuthGuard } from "@/src/auth/useAuthGuard";
 import ContentBackground from "@/src/components/ContentBackground";
 import TopBar from "@/src/components/TopBar";
 import { T } from "@/src/components/Typography";
 import { shadow, theme } from "@/src/theme";
 
 export default function WelcomeScreen() {
+  useAuthGuard();
   const { user } = useAuth();
   const greeting = user?.name ? `Szia ${user.name}!` : "Szia!";
 

@@ -12,6 +12,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { apiUrl, authedFetch, useAuth } from "@/src/auth/AuthContext";
+import { useAuthGuard } from "@/src/auth/useAuthGuard";
 import ContentBackground from "@/src/components/ContentBackground";
 import TopBar from "@/src/components/TopBar";
 import { T } from "@/src/components/Typography";
@@ -36,6 +37,7 @@ type Settings = {
 const PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "groq", "cerebras", "mistral"];
 
 export default function AdminSettingsScreen() {
+  useAuthGuard();
   const { token, user } = useAuth();
   const [data, setData] = useState<Settings | null>(null);
   const [loading, setLoading] = useState(true);
