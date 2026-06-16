@@ -1843,7 +1843,29 @@ async def quiz_delete_session(
     latest = latest_res.scalar_one_or_none()
     user.state_code = latest.code if latest else None
     user.code_verified_at = latest.created_at if latest else None
-    return {"ok": True, "deleted": session_id, "state_code": user.state_code}
+
+    # Calculate updated expiration status
+    is_expired = False
+    days_remaining = 0
+    if user.state_code and user.code_verified_at:
+        now = _now()
+        verified_at = user.code_verified_at
+        if verified_at.tzinfo is None:
+            age = now.replace(tzinfo=None) - verified_at
+        else:
+            age = now - verified_at
+        days_remaining = 30 - age.days
+        if days_remaining <= 0:
+            is_expired = True
+            days_remaining = 0
+
+    return {
+        "ok": True,
+        "deleted": session_id,
+        "state_code": user.state_code,
+        "is_code_expired": is_expired,
+        "code_days_remaining": days_remaining
+    }
 
 
 # ---------- Chat (pluggable LLM provider) ----------

@@ -70,7 +70,12 @@ export default function SideMenu({ visible, onClose }: Props) {
       if (r.ok) {
         const data = await r.json().catch(() => ({}));
         setSessions((items) => items.filter((item) => item.id !== sessionToDelete.id));
-        setUserLocal((u) => (u ? { ...u, state_code: data.state_code ?? null } : u));
+        setUserLocal((u) => (u ? {
+          ...u,
+          state_code: data.state_code ?? null,
+          is_code_expired: data.is_code_expired ?? false,
+          code_days_remaining: data.code_days_remaining ?? 0
+        } : u));
         setSessionToDelete(null);
       }
     } finally {
