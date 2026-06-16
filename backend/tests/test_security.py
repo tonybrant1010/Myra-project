@@ -96,3 +96,58 @@ async def test_call_llm_gemini_error_masking(mock_post):
     assert exc_info.value.status_code == 502
     assert "quota" not in exc_info.value.detail
     assert "Gemini API hiba" in exc_info.value.detail
+
+def test_verify_vercel_proxy_middleware():
+    from fastapi.testclient import TestClient
+    import server
+    
+    # Register a dummy endpoint dynamically on the app instance
+    # to test middleware without hitting database dependency
+    @server.app.get("/test-middleware-ping")
+    def ping():
+        return {"ping": "pong"}
+    
+    # Preserve original state
+    orig_env = os.environ.get("ENVIRONMENT")
+    orig_secret = server.MYRA_PROXY_SECRET
+    
+    client = TestClient(server.app)
+    
+    try:
+        # Case 1: ENVIRONMENT is development -> bypass check
+        os.environ["ENVIRONMENT"] = "development"
+        r = client.get("/test-middleware-ping")
+        assert r.status_code == 200
+        assert r.json() == {"ping": "pong"}
+        
+        # Case 2: ENVIRONMENT is production -> enforce check
+        os.environ["ENVIRONMENT"] = "production"
+        server.MYRA_PROXY_SECRET = "test-proxy-secret-123"
+        
+        # Without header -> 403 Forbidden
+        r = client.get("/test-middleware-ping")
+        assert r.status_code == 403
+        assert r.json()["detail"] == "Direct access to origin is forbidden."
+        
+        # With incorrect header -> 403 Forbidden
+        r = client.get("/test-middleware-ping", headers={"X-Myra-Proxy-Secret": "wrong-secret"})
+        assert r.status_code == 403
+        
+        # With correct header -> 200 OK
+        r = client.get("/test-middleware-ping", headers={"X-Myra-Proxy-Secret": "test-proxy-secret-123"})
+        assert r.status_code == 200
+        assert r.json() == {"ping": "pong"}
+        
+        # OPTIONS request should bypass even in production
+        r = client.options("/test-middleware-ping")
+        assert r.status_code != 403 or (r.status_code == 403 and r.json().get("detail") != "Direct access to origin is forbidden.")
+
+    finally:
+        # Restore original state
+        if orig_env is not None:
+            os.environ["ENVIRONMENT"] = orig_env
+        else:
+            os.environ.pop("ENVIRONMENT", None)
+        server.MYRA_PROXY_SECRET = orig_secret
+
+

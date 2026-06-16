@@ -25,7 +25,7 @@ import httpx
 import jwt
 from dotenv import load_dotenv
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Header, Request, UploadFile, File, BackgroundTasks, Query
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr, Field
@@ -908,6 +908,32 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Myra API", lifespan=lifespan)
+
+MYRA_PROXY_SECRET = os.environ.get("MYRA_PROXY_SECRET", "")
+
+@app.middleware("http")
+async def verify_vercel_proxy(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    # Allow local development and localhost requests
+    if os.environ.get("ENVIRONMENT") == "development":
+        return await call_next(request)
+    if request.client and request.client.host in ("127.0.0.1", "localhost"):
+        return await call_next(request)
+
+    incoming_secret = request.headers.get("X-Myra-Proxy-Secret", "")
+
+    # Time-constant comparison to protect against timing attacks
+    if not MYRA_PROXY_SECRET or not secrets.compare_digest(incoming_secret, MYRA_PROXY_SECRET):
+        logger.warning(f"Unauthorized direct access attempt from: {request.client.host if request.client else 'Unknown'}")
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Direct access to origin is forbidden."}
+        )
+
+    return await call_next(request)
+
 api = APIRouter(prefix="/api")
 
 

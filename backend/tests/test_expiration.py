@@ -8,6 +8,8 @@ from sqlalchemy import select, delete
 # Set environment variables for testing before importing server
 import os
 os.environ["DB_DIALECT"] = "sqlite"
+os.environ["ENVIRONMENT"] = "development"
+
 
 import sys
 sys.path.append(os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
