@@ -1011,11 +1011,14 @@ def _piper_config_path() -> Path:
 
 def _ensure_piper_ready() -> None:
     if not PIPER_BINARY.exists():
-        raise HTTPException(status_code=503, detail=f"Piper binaris nem talalhato: {PIPER_BINARY}")
+        logger.error(f"Piper binary not found at: {PIPER_BINARY}")
+        raise HTTPException(status_code=503, detail="A felolvasó (TTS) szolgáltatás jelenleg nem érhető el.")
     if not PIPER_MODEL.exists():
-        raise HTTPException(status_code=503, detail=f"Piper magyar hangmodell nem talalhato: {PIPER_MODEL}")
+        logger.error(f"Piper model not found at: {PIPER_MODEL}")
+        raise HTTPException(status_code=503, detail="A felolvasó (TTS) szolgáltatás jelenleg nem érhető el.")
     if not _piper_config_path().exists():
-        raise HTTPException(status_code=503, detail=f"Piper hangmodell config nem talalhato: {_piper_config_path()}")
+        logger.error(f"Piper config not found at: {_piper_config_path()}")
+        raise HTTPException(status_code=503, detail="A felolvasó (TTS) szolgáltatás jelenleg nem érhető el.")
 
 
 def _supertonic_model_files() -> list[Path]:
@@ -1033,7 +1036,8 @@ def _supertonic_model_files() -> list[Path]:
 def _ensure_supertonic_ready() -> None:
     missing = [str(path) for path in _supertonic_model_files() if not path.exists()]
     if missing:
-        raise HTTPException(status_code=503, detail=f"Supertonic modellfajlok hianyoznak: {', '.join(missing[:3])}")
+        logger.error(f"Supertonic model files missing: {', '.join(missing)}")
+        raise HTTPException(status_code=503, detail="A felolvasó (TTS) szolgáltatás jelenleg nem érhető el.")
 
 
 def _get_supertonic_tts():
@@ -1107,7 +1111,8 @@ def _synthesize_supertonic_wav(text_value: str) -> Path:
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Supertonic hanggeneralasi hiba: {exc}")
+        logger.exception("Supertonic audio generation failed")
+        raise HTTPException(status_code=500, detail="Supertonic hanggenerálási hiba történt.")
 
     tmp_path = PIPER_CACHE_DIR / f"{cache_key}.tmp.wav"
     sf.write(tmp_path, audio.samples, samplerate=audio.sample_rate)
@@ -1122,7 +1127,8 @@ def _synthesize_tts_wav(text_value: str) -> Path:
         return _synthesize_piper_wav(text_value)
     if TTS_ENGINE == "supertonic":
         return _synthesize_supertonic_wav(text_value)
-    raise HTTPException(status_code=503, detail=f"Ismeretlen TTS motor: {TTS_ENGINE}")
+    logger.error(f"Unknown TTS engine configured: {TTS_ENGINE}")
+    raise HTTPException(status_code=503, detail="A felolvasó motor nincs megfelelően konfigurálva.")
 
 
 def _synthesize_piper_wav(text_value: str) -> Path:
@@ -1166,13 +1172,15 @@ def _synthesize_piper_wav(text_value: str) -> Path:
             cwd=str(PIPER_BINARY.parent),
         )
     except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="A felolvasas tul sokaig tartott.")
+        raise HTTPException(status_code=504, detail="A felolvasás túl sokáig tartott.")
     except OSError as exc:
-        raise HTTPException(status_code=503, detail=f"Piper inditasi hiba: {exc}")
+        logger.exception("Piper execution failed")
+        raise HTTPException(status_code=503, detail="Piper indítási hiba történt.")
 
     if completed.returncode != 0 or not tmp_path.exists() or tmp_path.stat().st_size <= 44:
         stderr = (completed.stderr or "").strip()[-500:]
-        raise HTTPException(status_code=500, detail=f"Piper hanggeneralasi hiba: {stderr or completed.returncode}")
+        logger.error(f"Piper audio generation failed. Return code: {completed.returncode}, stderr: {stderr}")
+        raise HTTPException(status_code=500, detail="Piper hanggenerálási hiba történt.")
 
     tmp_path.replace(out_path)
     return out_path
@@ -1249,9 +1257,10 @@ Myra-project csapat""", "plain", "utf-8")
 
 
 def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",", 1)[0].strip()[:80]
+    if os.environ.get("TRUST_PROXY", "").lower() == "true":
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            return forwarded.split(",", 1)[0].strip()[:80]
     return (request.client.host if request.client else "")[:80]
 
 
@@ -1770,7 +1779,8 @@ async def quiz_submit(body: QuizSubmitBody, user: User = Depends(get_current_use
     res = await db.execute(select(StateCode).where(StateCode.code == code))
     sc = res.scalar_one_or_none()
     if not sc:
-        raise HTTPException(status_code=500, detail=f"A kód ({code}) nincs az adatbázisban.")
+        logger.error(f"State code {code} is missing from the database.")
+        raise HTTPException(status_code=500, detail="A számított állapotkód nem található az adatbázisban.")
     user.state_code = code
     user.code_verified_at = _now()
     session_id = str(uuid.uuid4())
@@ -1951,7 +1961,8 @@ async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str,
                 await asyncio.sleep(8)
                 continue
             break
-        raise HTTPException(status_code=502, detail=f"{label} hiba: {last_error}")
+        logger.error(f"{label} API call failed: status={r.status_code}, response={last_error}")
+        raise HTTPException(status_code=502, detail=f"{label} API hiba történt.")
 
     if provider == "anthropic":
         msgs = []
@@ -1964,7 +1975,8 @@ async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str,
             json={"model": model, "max_tokens": 1024, "system": system_prompt, "messages": msgs},
         )
         if r.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"Anthropic hiba: {r.text[:300]}")
+            logger.error(f"Anthropic API call failed: status={r.status_code}, response={r.text[:1000]}")
+            raise HTTPException(status_code=502, detail="Hiba történt az AI szolgáltatónál.")
         data = r.json()
         return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
 
@@ -1986,7 +1998,8 @@ async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str,
                 data = r.json()
                 cands = data.get("candidates", [])
                 if not cands:
-                    raise HTTPException(status_code=502, detail="Üres válasz a Gemini-től.")
+                    logger.error("Empty candidates list received from Gemini.")
+                    raise HTTPException(status_code=502, detail="Üres válasz érkezett az AI szolgáltatótól.")
                 return "".join(p.get("text", "") for p in cands[0].get("content", {}).get("parts", []))
             last_error = r.text[:300]
             # 5xx vagy 429: átmeneti hiba, újrapróbálkozunk
@@ -1994,7 +2007,8 @@ async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str,
                 await asyncio.sleep(8)
                 continue
             break
-        raise HTTPException(status_code=502, detail=f"Gemini hiba: {last_error}")
+        logger.error(f"Gemini API call failed: status={r.status_code}, response={last_error}")
+        raise HTTPException(status_code=502, detail="Gemini API hiba történt.")
 
     raise HTTPException(status_code=400, detail=f"Ismeretlen LLM provider: {provider}")
 
@@ -2128,7 +2142,7 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
             raise
         except Exception as e:
             logger.exception("LLM error")
-            raise HTTPException(status_code=502, detail=f"AI hiba: {e}")
+            raise HTTPException(status_code=502, detail="Váratlan hiba történt a válaszadás során.")
 
     ai_msg = ChatMessage(id=str(uuid.uuid4()), user_id=user.id, state_code=user.state_code,
                          session_id=active_session_id, role="assistant", text=str(reply))
@@ -2201,7 +2215,7 @@ async def create_live_token(
         )
     except Exception as exc:
         logger.exception("Gemini Live token creation failed")
-        raise HTTPException(status_code=502, detail=f"A Live kapcsolat előkészítése sikertelen: {exc}")
+        raise HTTPException(status_code=502, detail="A Live kapcsolat előkészítése sikertelen.")
 
     return {
         "token": ephemeral_token.name,
@@ -2439,7 +2453,7 @@ async def admin_init_cache(request: Request, admin: User = Depends(require_admin
         return {"ok": True, "cache_name": cache_name, "pdf_count": len(pdf_files)}
     except Exception as e:
         logger.exception("Cache init error")
-        raise HTTPException(status_code=500, detail=f"Cache létrehozási hiba: {str(e)}")
+        raise HTTPException(status_code=500, detail="A gyorsítótár (cache) inicializálása sikertelen.")
 
 
 # ---------- Admin: users ----------
