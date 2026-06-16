@@ -41,7 +41,7 @@ for (const f of iconFiles) {
 // 1. Vercel rewrites.
 const vercelJson = {
   rewrites: [
-    { source: "/api/:path*", destination: "http://91.214.112.96:8001/:path*" },
+    { source: "/api/:path*", destination: "/api/proxy?path=:path*" },
     { source: "/assets/:path*", destination: "/assets/:path*" },
     { source: "/vendor-assets/:path*", destination: "/vendor-assets/:path*" },
     { source: "/_expo/:path*", destination: "/_expo/:path*" },
@@ -50,6 +50,66 @@ const vercelJson = {
 };
 fs.writeFileSync(path.join(distDir, "vercel.json"), JSON.stringify(vercelJson, null, 2));
 console.log("OK dist/vercel.json patched");
+
+// Create dist/api directory and write proxy.js
+const apiDir = path.join(distDir, "api");
+if (!fs.existsSync(apiDir)) {
+  fs.mkdirSync(apiDir, { recursive: true });
+}
+
+const proxyCode = `
+export default async function handler(req, res) {
+  const path = req.query.path || '';
+  const targetUrl = new URL(\`http://91.214.112.96:8001/api/\${path}\`);
+  
+  for (const [key, value] of Object.entries(req.query)) {
+    if (key !== 'path') {
+      targetUrl.searchParams.append(key, value);
+    }
+  }
+
+  const headers = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (key.toLowerCase() !== 'host') {
+      headers[key] = value;
+    }
+  }
+  headers['X-Myra-Proxy-Secret'] = process.env.MYRA_PROXY_SECRET || '';
+
+  let body = undefined;
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    body = await new Promise((resolve) => {
+      let chunks = [];
+      req.on('data', (chunk) => chunks.push(chunk));
+      req.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+  }
+
+  try {
+    const response = await fetch(targetUrl.toString(), {
+      method: req.method,
+      headers: headers,
+      body: body,
+      redirect: 'manual'
+    });
+
+    res.status(response.status);
+    response.headers.forEach((value, key) => {
+      res.setHeader(key, value);
+    });
+
+    const responseBody = await response.arrayBuffer();
+    res.send(Buffer.from(responseBody));
+  } catch (error) {
+    console.error("Proxy error:", error);
+    res.status(502).json({ detail: "Proxy error connecting to origin." });
+  }
+}
+`;
+
+fs.writeFileSync(path.join(apiDir, "proxy.js"), proxyCode.trim());
+console.log("OK dist/api/proxy.js written");
+
 
 // 1/b. Move font/icon assets out of an assets/node_modules URL.
 const nodeAssetSrc = path.join(distDir, "assets/node_modules");
@@ -68,7 +128,24 @@ if (copyDir(nodeAssetSrc, vendorAssetDst)) {
 
 // 2. index.html patch: iOS / PWA meta tags.
 const indexPath = path.join(distDir, "index.html");
-let html = fs.readFileSync(indexPath, "utf8");
+let html;
+let retries = 5;
+while (retries > 0) {
+  try {
+    html = fs.readFileSync(indexPath, "utf8");
+    break;
+  } catch (e) {
+    if (e.code === "ENOENT" && retries > 1) {
+      console.log("Waiting for index.html to be written (Windows filesystem delay)...");
+      const start = Date.now();
+      while (Date.now() - start < 500) {}
+      retries--;
+    } else {
+      throw e;
+    }
+  }
+}
+
 
 html = html.replace(
   /(<meta\s+name="viewport"\s+content=")[^"]*"/,
