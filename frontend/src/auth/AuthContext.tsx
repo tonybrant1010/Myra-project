@@ -191,6 +191,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => { mounted = false; };
   }, [fetchMe]);
 
+  useEffect(() => {
+    const unsubscribe = registerUnauthorizedListener(() => {
+      logout();
+    });
+    return unsubscribe;
+  }, [logout]);
+
   return (
     <AuthContext.Provider value={{ ...state, login, verifyMfa, register, logout, refreshUser, setUserLocal }}>
       {children}
@@ -209,11 +216,29 @@ export function apiUrl(path: string) {
   return `${backendUrl()}${cleanPath.startsWith("/") ? cleanPath : `/${cleanPath}`}`;
 }
 
+const unauthorizedListeners: (() => void)[] = [];
+
+export function registerUnauthorizedListener(cb: () => void) {
+  unauthorizedListeners.push(cb);
+  return () => {
+    const idx = unauthorizedListeners.indexOf(cb);
+    if (idx !== -1) unauthorizedListeners.splice(idx, 1);
+  };
+}
+
+function notifyUnauthorized() {
+  unauthorizedListeners.forEach((cb) => cb());
+}
+
 export async function authedFetch(token: string | null, path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers || {});
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (!headers.has("Content-Type") && init.body && !(init.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
-  return await fetch(apiUrl(path), { ...init, headers });
+  const r = await fetch(apiUrl(path), { ...init, headers });
+  if (r.status === 401) {
+    notifyUnauthorized();
+  }
+  return r;
 }

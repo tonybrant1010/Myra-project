@@ -350,6 +350,62 @@ def _record_reg(request: Request) -> None:
     _reg_attempts[ip] = s
 
 
+# Elfelejtett jelszó limit (IP + Email)
+_forgot_attempts: dict[str, dict] = {}
+FORGOT_WINDOW_S = 300  # 5 perc
+FORGOT_MAX = 3        # max 3 kérés / 5 perc
+
+def _check_forgot_limit(request: Request, email: str) -> None:
+    ip = request.client.host if request.client else "?"
+    key = f"{ip}:{(email or '').lower().strip()}"
+    now = time.monotonic()
+    s = _forgot_attempts.get(key)
+    if s and now - s.get("first", now) > FORGOT_WINDOW_S:
+        _forgot_attempts.pop(key, None)
+        s = None
+    if s and s.get("count", 0) >= FORGOT_MAX:
+        raise HTTPException(status_code=429, detail="Túl sok jelszó-visszaállítási kérés erről a címről/IP-ről. Próbáld újra 5 perc múlva.")
+
+def _record_forgot(request: Request, email: str) -> None:
+    ip = request.client.host if request.client else "?"
+    key = f"{ip}:{(email or '').lower().strip()}"
+    now = time.monotonic()
+    s = _forgot_attempts.get(key) or {"count": 0, "first": now}
+    if now - s.get("first", now) > FORGOT_WINDOW_S:
+        s = {"count": 1, "first": now}
+    else:
+        s["count"] = s.get("count", 0) + 1
+    _forgot_attempts[key] = s
+
+
+# Jelszó visszaállítás brute-force limit (IP)
+_reset_attempts: dict[str, dict] = {}
+RESET_WINDOW_S = 900  # 15 perc
+RESET_MAX = 5         # max 5 sikertelen próbálkozás / 15 perc
+
+def _check_reset_throttle(request: Request) -> None:
+    ip = request.client.host if request.client else "?"
+    now = time.monotonic()
+    s = _reset_attempts.get(ip)
+    if s and now < s.get("blocked_until", 0):
+        raise HTTPException(status_code=429, detail="Túl sok hibás próbálkozás. Próbáld újra 15 perc múlva.")
+    if s and now - s.get("first", now) > RESET_WINDOW_S:
+        _reset_attempts.pop(ip, None)
+
+def _record_reset_failure(request: Request) -> None:
+    ip = request.client.host if request.client else "?"
+    now = time.monotonic()
+    s = _reset_attempts.get(ip) or {"failed": 0, "first": now, "blocked_until": 0}
+    if now - s.get("first", now) > RESET_WINDOW_S:
+        s = {"failed": 1, "first": now, "blocked_until": 0}
+    else:
+        s["failed"] = s.get("failed", 0) + 1
+    if s["failed"] >= RESET_MAX:
+        s["blocked_until"] = now + RESET_WINDOW_S
+    _reset_attempts[ip] = s
+
+
+
 def _ensure_knowledge_fts(conn) -> None:
     conn.execute("""
     CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_chunks_fts USING fts5(
@@ -741,6 +797,8 @@ async def get_current_user(
     user = res.scalar_one_or_none()
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="Felhasználó nem található")
+    if user.is_suspended:
+        raise HTTPException(status_code=401, detail="Ez a fiók fel van függesztve. Jelentkezz be újra.")
     if int(payload.get("token_version", 0) or 0) != int(user.token_version or 0):
         raise HTTPException(status_code=401, detail="A munkamenet lejárt. Jelentkezz be újra.")
     if user.is_admin and not payload.get("mfa"):
@@ -1380,8 +1438,11 @@ async def auth_admin_action_code(
 
 
 @api.post("/auth/forgot-password")
-async def auth_forgot_password(body: ForgotPasswordBody, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
+async def auth_forgot_password(body: ForgotPasswordBody, request: Request, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
     email = body.email.lower().strip()
+    _check_forgot_limit(request, email)
+    _record_forgot(request, email)
+    
     res = await db.execute(select(User).where(User.email == email))
     user = res.scalar_one_or_none()
 
@@ -1396,18 +1457,21 @@ async def auth_forgot_password(body: ForgotPasswordBody, background_tasks: Backg
 
 
 @api.post("/auth/reset-password")
-async def auth_reset_password(body: ResetPasswordBody, db: AsyncSession = Depends(get_db)):
+async def auth_reset_password(body: ResetPasswordBody, request: Request, db: AsyncSession = Depends(get_db)):
+    _check_reset_throttle(request)
     token_str = body.token.strip()
     
     res = await db.execute(select(User).where(User.reset_token == token_str))
     user = res.scalar_one_or_none()
     
     if not user:
+        _record_reset_failure(request)
         raise HTTPException(status_code=400, detail="Hibás vagy lejárt biztonsági kód.")
         
     if user.token_expires_at:
         expires_at = user.token_expires_at.replace(tzinfo=timezone.utc) if user.token_expires_at.tzinfo is None else user.token_expires_at
         if expires_at < datetime.now(timezone.utc):
+            _record_reset_failure(request)
             raise HTTPException(status_code=400, detail="A biztonsági kód ideje lejárt.")
         
     user.password_hash = hash_password(body.new_password)
@@ -2584,7 +2648,11 @@ async def public_config(db: AsyncSession = Depends(get_db)):
 app.include_router(api)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://www.myra-project.hu",
+        "https://myra-project.hu",
+    ],
+    allow_origin_regex="http://localhost:\\d+",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
