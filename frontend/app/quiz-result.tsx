@@ -74,9 +74,6 @@ export default function QuizResultScreen() {
                     </T>
                   </View>
                 ) : null}
-                <T variant="h1" align="center" color={theme.textOnDark} style={{ marginTop: 12 }}>
-                  {profile.title}
-                </T>
               </View>
             ) : null}
 
