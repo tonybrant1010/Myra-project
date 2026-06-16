@@ -41,7 +41,7 @@ for (const f of iconFiles) {
 // 1. Vercel rewrites.
 const vercelJson = {
   rewrites: [
-    { source: "/api/:path*", destination: "/api/proxy?path=:path*" },
+    { source: "/api/:path((?!proxy(?:/|$)).*)", destination: "/api/proxy?path=:path" },
     { source: "/assets/:path*", destination: "/assets/:path*" },
     { source: "/vendor-assets/:path*", destination: "/vendor-assets/:path*" },
     { source: "/_expo/:path*", destination: "/_expo/:path*" },
@@ -60,7 +60,8 @@ if (!fs.existsSync(apiDir)) {
 const proxyCode = `
 export default async function handler(req, res) {
   const path = req.query.path || '';
-  const targetUrl = new URL(\`http://91.214.112.96:8001/api/\${path}\`);
+  const cleanPath = path.startsWith('api/') ? path : \`api/\${path}\`;
+  const targetUrl = new URL(\`http://91.214.112.96:8001/\${cleanPath}\`);
   
   for (const [key, value] of Object.entries(req.query)) {
     if (key !== 'path') {

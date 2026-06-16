@@ -2070,7 +2070,7 @@ async def chat_history(
     q = select(ChatMessage).where(ChatMessage.user_id == user.id)
     if session_id:
         q = q.where(ChatMessage.session_id == session_id)
-    res = await db.execute(q.order_by(ChatMessage.created_at))
+    res = await db.execute(q.order_by(ChatMessage.created_at.asc(), ChatMessage.role.desc()))
     msgs = res.scalars().all()
     return {"messages": [
         {"id": m.id, "role": m.role, "text": m.text,
@@ -2129,7 +2129,7 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
     res = await db.execute(
         select(ChatMessage)
         .where(ChatMessage.user_id == user.id, ChatMessage.session_id == active_session_id)
-        .order_by(ChatMessage.created_at)
+        .order_by(ChatMessage.created_at.asc(), ChatMessage.role.desc())
     )
     history = [{"role": m.role, "text": m.text} for m in res.scalars().all()][-20:]
     recent_user_text = "\n".join(m["text"] for m in history[-6:] if m["role"] == "user")
