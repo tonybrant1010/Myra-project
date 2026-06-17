@@ -6,6 +6,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
+import { authedFetch, useAuth } from "@/src/auth/AuthContext";
 
 import ContentBackground from "@/src/components/ContentBackground";
 import TopBar from "@/src/components/TopBar";
@@ -21,6 +22,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export default function RelaxMatchScreen() {
   const router = useRouter();
+  const { token } = useAuth();
 
   // State
   const [board, setBoard] = useState<string[][]>([]);
@@ -226,6 +228,7 @@ export default function RelaxMatchScreen() {
     let boardCopy = currentBoard.map((row) => [...row]);
     let currentCombo = initialCombo;
     let matches = findMatches(boardCopy);
+    let currentScore = score;
 
     while (matches.size > 0) {
       // 1. Highlight matches as Sparkles
@@ -257,7 +260,8 @@ export default function RelaxMatchScreen() {
 
       // Update Score: matches count * 10 * combo multiplier
       const pointsEarned = matches.size * 10 * currentCombo;
-      setScore((prev) => prev + pointsEarned);
+      currentScore += pointsEarned;
+      setScore(currentScore);
 
       await sleep(150);
 
@@ -317,6 +321,13 @@ export default function RelaxMatchScreen() {
     setMoves((currentMoves) => {
       if (currentMoves <= 0) {
         setGameOver(true);
+        if (token) {
+          authedFetch(token, "/api/leaderboard/submit", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ game_type: "match", score: currentScore }),
+          }).catch(() => {});
+        }
         try {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
         } catch (e) {}

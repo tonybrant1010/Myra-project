@@ -12,6 +12,7 @@ export type AppUser = {
   id: number;
   email: string;
   name: string;
+  nickname?: string | null;
   is_admin: boolean;
   state_code?: string | null;
   mfa_enabled?: boolean;

@@ -148,6 +148,8 @@ class User(Base):
     code_verified_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     
+    nickname = Column(String(50), nullable=True)
+    
     # Új oszlopok a 6 jegyű biztonsági kódhoz
     reset_token = Column(String(10), nullable=True)
     token_expires_at = Column(DateTime(timezone=True), nullable=True)
@@ -241,6 +243,17 @@ class AdminAuditLog(Base):
     ip = Column(String(80), nullable=False, default="")
     user_agent = Column(Text, nullable=False, default="")
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+
+class LeaderboardEntry(Base):
+    __tablename__ = "leaderboard"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    game_type = Column(String(40), nullable=False, index=True) # "match", "snake", "sudoku"
+    score = Column(Integer, nullable=False) # stores scores or times (seconds)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
 # ---------- Security ----------
@@ -724,6 +737,9 @@ async def _run_startup_migrations() -> None:
             if "token_version" not in _cols:
                 _conn.execute("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0")
                 print("[startup] migráció: users.token_version hozzáadva")
+            if "nickname" not in _cols:
+                _conn.execute("ALTER TABLE users ADD COLUMN nickname VARCHAR(50)")
+                print("[startup] migráció: users.nickname hozzáadva")
             _cols2 = {row[1] for row in _conn.execute("PRAGMA table_info(chat_messages)")}
             if "session_id" not in _cols2:
                 _conn.execute("ALTER TABLE chat_messages ADD COLUMN session_id VARCHAR(40)")
@@ -739,6 +755,7 @@ async def _run_startup_migrations() -> None:
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_suspended BOOLEAN NOT NULL DEFAULT false"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN NOT NULL DEFAULT false"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0"))
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname VARCHAR(50)"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token VARCHAR(10)"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMP WITH TIME ZONE"))
         await conn.execute(sql_text("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS session_id VARCHAR(40)"))
@@ -948,6 +965,15 @@ class LoginBody(BaseModel):
     email: EmailStr
     password: str
     device_token: Optional[str] = None
+
+
+class NicknameBody(BaseModel):
+    nickname: str = Field(min_length=1, max_length=50)
+
+
+class SubmitScoreBody(BaseModel):
+    game_type: Literal["match", "snake", "sudoku"]
+    score: int
 
 
 class MfaVerifyBody(BaseModel):
@@ -1648,6 +1674,7 @@ def _user_out(u: User) -> dict:
 
     return {
         "id": u.id, "email": u.email, "name": u.name,
+        "nickname": u.nickname,
         "is_admin": u.is_admin, "state_code": u.state_code,
         "mfa_enabled": bool(u.mfa_enabled or u.is_admin),
         "mfa_forced": bool(u.is_admin),
@@ -2698,6 +2725,98 @@ async def admin_backup_db(request: Request, admin: User = Depends(require_admin)
 
 
 # ---------- Config (public) ----------
+@api.post("/user/nickname")
+async def set_user_nickname(
+    body: NicknameBody,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    clean_nickname = body.nickname.strip()
+    if not clean_nickname:
+        raise HTTPException(status_code=400, detail="A becenév nem lehet üres.")
+    if len(clean_nickname) > 40:
+        raise HTTPException(status_code=400, detail="A becenév maximum 40 karakter lehet.")
+    
+    user.nickname = clean_nickname
+    await db.commit()
+    return {"status": "ok", "nickname": clean_nickname}
+
+
+@api.post("/leaderboard/submit")
+async def submit_leaderboard_score(
+    body: SubmitScoreBody,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    res = await db.execute(
+        select(LeaderboardEntry).where(
+            LeaderboardEntry.user_id == user.id,
+            LeaderboardEntry.game_type == body.game_type
+        )
+    )
+    entry = res.scalar_one_or_none()
+
+    if entry:
+        if body.game_type == "sudoku":
+            # For Sudoku, lower time is better
+            if body.score < entry.score:
+                entry.score = body.score
+                entry.updated_at = _now()
+        else:
+            # For Match and Snake, higher score is better
+            if body.score > entry.score:
+                entry.score = body.score
+                entry.updated_at = _now()
+    else:
+        entry = LeaderboardEntry(
+            user_id=user.id,
+            game_type=body.game_type,
+            score=body.score
+        )
+        db.add(entry)
+
+    await db.commit()
+    return {"status": "ok", "best_score": entry.score}
+
+
+@api.get("/leaderboard")
+async def get_leaderboard(db: AsyncSession = Depends(get_db)):
+    results = {}
+    
+    for game in ["match", "snake", "sudoku"]:
+        if game == "sudoku":
+            q = (
+                select(LeaderboardEntry, User)
+                .join(User, LeaderboardEntry.user_id == User.id)
+                .where(LeaderboardEntry.game_type == game)
+                .order_by(LeaderboardEntry.score.asc())
+                .limit(3)
+            )
+        else:
+            q = (
+                select(LeaderboardEntry, User)
+                .join(User, LeaderboardEntry.user_id == User.id)
+                .where(LeaderboardEntry.game_type == game)
+                .order_by(LeaderboardEntry.score.desc())
+                .limit(3)
+            )
+            
+        res = await db.execute(q)
+        rows = res.all()
+        
+        game_list = []
+        for rank, (entry, user) in enumerate(rows, 1):
+            name = user.nickname if (user.nickname and user.nickname.strip()) else user.name
+            game_list.append({
+                "rank": rank,
+                "name": name,
+                "score": entry.score
+            })
+        results[game] = game_list
+        
+    return results
+
+
 @api.get("/config")
 async def public_config(db: AsyncSession = Depends(get_db)):
     return {

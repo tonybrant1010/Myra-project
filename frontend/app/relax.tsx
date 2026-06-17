@@ -18,11 +18,29 @@ export default function RelaxCenterScreen() {
       <ContentBackground>
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
           <T variant="display" color={theme.textOnDark} style={styles.title}>
-            Lassíts le egy pillanatra.
+            Kikapcsolódás
           </T>
           <T variant="body" color="rgba(247,251,255,0.72)" style={styles.subtitle}>
-            Válassz egy pihentető játékot vagy gyakorlatot a feszültség levezetéséhez és az elme megnyugtatásához.
+            Játssz egy kicsit, csendesítsd el az elméd, és töltődj fel a megnyugtató játékainkkal.
           </T>
+
+          {/* Leaderboard button */}
+          <TouchableOpacity
+            style={[styles.leaderboardButton, shadow.card]}
+            onPress={() => router.push("/relax-leaderboard")}
+            activeOpacity={0.8}
+          >
+            <LinearGradient
+              colors={["rgba(255,215,0,0.15)", "rgba(18,58,98,0.3)"]}
+              style={styles.leaderboardGradient}
+            >
+              <Ionicons name="trophy-outline" size={20} color={theme.warm} />
+              <T variant="label" color={theme.textOnDark} style={{ marginLeft: 8, fontWeight: "600" }}>
+                Globális Ranglista Megtekintése
+              </T>
+              <Ionicons name="chevron-forward" size={16} color="rgba(247,251,255,0.6)" style={{ marginLeft: "auto" }} />
+            </LinearGradient>
+          </TouchableOpacity>
 
           {/* Activity 1: Myra Match */}
           <TouchableOpacity
@@ -216,5 +234,18 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     marginTop: spacing.xs,
+  },
+  leaderboardButton: {
+    borderRadius: radii.md,
+    overflow: "hidden",
+    marginBottom: spacing.md,
+    borderColor: "rgba(255,215,0,0.22)",
+    borderWidth: 1,
+  },
+  leaderboardGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
 });

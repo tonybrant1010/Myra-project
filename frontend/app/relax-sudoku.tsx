@@ -6,6 +6,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 
+import { authedFetch, useAuth } from "@/src/auth/AuthContext";
 import ContentBackground from "@/src/components/ContentBackground";
 import TopBar from "@/src/components/TopBar";
 import { T } from "@/src/components/Typography";
@@ -150,6 +151,8 @@ const checkConflicts = (currentBoard: (number | null)[][], size: SudokuSize): bo
 };
 
 export default function RelaxSudokuScreen() {
+  const { token } = useAuth();
+
   const [boardSize, setBoardSize] = useState<SudokuSize>(4);
   const [solvedBoard, setSolvedBoard] = useState<number[][]>([]);
   const [puzzleBoard, setPuzzleBoard] = useState<(number | null)[][]>([]);
@@ -260,6 +263,13 @@ export default function RelaxSudokuScreen() {
       setGameOver(true);
       setIsRunning(false);
       saveBestTime();
+      if (token) {
+        authedFetch(token, "/api/leaderboard/submit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ game_type: "sudoku", score: timer }),
+        }).catch(() => {});
+      }
       try {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       } catch (e) {

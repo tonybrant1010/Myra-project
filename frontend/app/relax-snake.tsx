@@ -6,6 +6,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
+import { authedFetch, useAuth } from "@/src/auth/AuthContext";
 
 import ContentBackground from "@/src/components/ContentBackground";
 import TopBar from "@/src/components/TopBar";
@@ -23,6 +24,7 @@ type Direction = "UP" | "DOWN" | "LEFT" | "RIGHT";
 
 export default function RelaxSnakeScreen() {
   const router = useRouter();
+  const { token } = useAuth();
 
   // State
   const [snake, setSnake] = useState<Coord[]>([
@@ -150,6 +152,13 @@ export default function RelaxSnakeScreen() {
   const triggerGameOver = () => {
     setIsRunning(false);
     setGameOver(true);
+    if (token) {
+      authedFetch(token, "/api/leaderboard/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ game_type: "snake", score }),
+      }).catch(() => {});
+    }
     try {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     } catch (e) {
