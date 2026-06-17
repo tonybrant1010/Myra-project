@@ -193,7 +193,7 @@ export default function RelaxSnakeScreen() {
 
   return (
     <SafeAreaView style={styles.safe} testID="relax-snake-screen">
-      <TopBar title="Kígyó Játék" />
+      <TopBar title="Kígyó Játék" showBack={true} backPath="/relax" />
       <ContentBackground>
         <View style={styles.container}>
           {/* Header Stats */}

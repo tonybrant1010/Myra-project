@@ -11,10 +11,11 @@ import SideMenu from "@/src/components/SideMenu";
 type Props = {
   title?: string;
   showBack?: boolean;
+  backPath?: string;
   rightLabel?: string;
 };
 
-export default function TopBar({ title, showBack, rightLabel }: Props) {
+export default function TopBar({ title, showBack, backPath, rightLabel }: Props) {
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -32,7 +33,13 @@ export default function TopBar({ title, showBack, rightLabel }: Props) {
         <View style={styles.sideContainer}>
           {showBack ? (
             <TouchableOpacity
-              onPress={() => router.replace("/welcome")}
+              onPress={() => {
+                if (backPath) {
+                  router.replace(backPath as any);
+                } else {
+                  router.replace("/welcome");
+                }
+              }}
               style={styles.iconBtn}
               testID="topbar-back"
               hitSlop={10}

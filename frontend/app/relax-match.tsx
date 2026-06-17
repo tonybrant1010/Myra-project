@@ -308,7 +308,7 @@ export default function RelaxMatchScreen() {
 
   return (
     <SafeAreaView style={styles.safe} testID="relax-match-screen">
-      <TopBar title="Myra Match" />
+      <TopBar title="Myra Match" showBack={true} backPath="/relax" />
       <ContentBackground>
         <View style={styles.container}>
           {/* Header Stats Panel */}

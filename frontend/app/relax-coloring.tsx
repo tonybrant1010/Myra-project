@@ -114,7 +114,7 @@ export default function RelaxColoringScreen() {
 
   return (
     <SafeAreaView style={styles.safe} testID="relax-coloring-screen">
-      <TopBar title="Pixel Színező" />
+      <TopBar title="Pixel Színező" showBack={true} backPath="/relax" />
       <ContentBackground>
         <View style={styles.container}>
           {/* Template Selector Options */}
