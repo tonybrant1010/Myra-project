@@ -31,6 +31,7 @@ export default function RelaxMatchScreen() {
   const [gameOver, setGameOver] = useState(false);
   const [animating, setAnimating] = useState(false);
   const [combo, setCombo] = useState(1);
+  const [showShuffleBanner, setShowShuffleBanner] = useState(false);
 
   // Load High Score on Mount
   useEffect(() => {
@@ -118,26 +119,96 @@ export default function RelaxMatchScreen() {
     return matchedCoords;
   };
 
+  // Check if any valid moves exist on the board
+  const hasValidMoves = (currentBoard: string[][]): boolean => {
+    if (currentBoard.length === 0) return false;
+    for (let r = 0; r < GRID_SIZE; r++) {
+      for (let c = 0; c < GRID_SIZE; c++) {
+        // Swap with right neighbor
+        if (c + 1 < GRID_SIZE) {
+          const tempBoard = performSwap(currentBoard, r, c, r, c + 1);
+          if (findMatches(tempBoard).size > 0) {
+            return true;
+          }
+        }
+        // Swap with down neighbor
+        if (r + 1 < GRID_SIZE) {
+          const tempBoard = performSwap(currentBoard, r, c, r + 1, c);
+          if (findMatches(tempBoard).size > 0) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  };
+
+  // Shuffle the board until a valid move exists and there are no pre-existing match-3s
+  const shuffleBoardUntilValid = (currentBoard: string[][]): string[][] => {
+    let copy = currentBoard.map((row) => [...row]);
+    let attempts = 0;
+    const flat = copy.flat();
+
+    while (attempts < 150) {
+      // Fisher-Yates shuffle
+      for (let i = flat.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const temp = flat[i];
+        flat[i] = flat[j];
+        flat[j] = temp;
+      }
+
+      // Reconstruct 2D board
+      const newBoard: string[][] = [];
+      for (let r = 0; r < GRID_SIZE; r++) {
+        newBoard.push(flat.slice(r * GRID_SIZE, (r + 1) * GRID_SIZE));
+      }
+
+      if (findMatches(newBoard).size === 0 && hasValidMoves(newBoard)) {
+        return newBoard;
+      }
+      attempts++;
+    }
+    return currentBoard; // Fallback
+  };
+
   // Start a new game with a matchless board
   const startNewGame = () => {
-    let newBoard: string[][] = Array(GRID_SIZE)
-      .fill(null)
-      .map(() =>
-        Array(GRID_SIZE)
-          .fill(null)
-          .map(() => getRandomEmoji())
-      );
-
-    // Make sure we have no matches at the beginning
-    let matches = findMatches(newBoard);
+    let newBoard: string[][] = [];
     let attempts = 0;
-    while (matches.size > 0 && attempts < 100) {
-      for (const coord of matches) {
-        const [r, c] = coord.split(",").map(Number);
-        newBoard[r][c] = getRandomEmoji();
+
+    while (attempts < 100) {
+      let tempBoard = Array(GRID_SIZE)
+        .fill(null)
+        .map(() =>
+          Array(GRID_SIZE)
+            .fill(null)
+            .map(() => getRandomEmoji())
+        );
+
+      let matches = findMatches(tempBoard);
+      let matchAttempts = 0;
+      while (matches.size > 0 && matchAttempts < 50) {
+        for (const coord of matches) {
+          const [r, c] = coord.split(",").map(Number);
+          tempBoard[r][c] = getRandomEmoji();
+        }
+        matches = findMatches(tempBoard);
+        matchAttempts++;
       }
-      matches = findMatches(newBoard);
+
+      if (findMatches(tempBoard).size === 0 && hasValidMoves(tempBoard)) {
+        newBoard = tempBoard;
+        break;
+      }
       attempts++;
+    }
+
+    if (newBoard.length === 0) {
+      // Fallback
+      newBoard = Array(GRID_SIZE)
+        .fill(null)
+        .map(() => Array(GRID_SIZE).fill(getRandomEmoji()));
     }
 
     setBoard(newBoard);
@@ -147,6 +218,7 @@ export default function RelaxMatchScreen() {
     setSelected(null);
     setAnimating(false);
     setCombo(1);
+    setShowShuffleBanner(false);
   };
 
   // Asynchronous gravity, clear, refill cascade loop
@@ -223,6 +295,18 @@ export default function RelaxMatchScreen() {
         currentCombo++;
         setCombo(currentCombo);
       }
+    }
+
+    // Check for deadlock after refilling and cascades finish
+    if (!hasValidMoves(boardCopy) && moves > 0) {
+      const shuffled = shuffleBoardUntilValid(boardCopy);
+      boardCopy = shuffled;
+      setBoard(shuffled);
+      setShowShuffleBanner(true);
+      setTimeout(() => setShowShuffleBanner(false), 2000);
+      try {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      } catch (e) {}
     }
 
     setAnimating(false);
@@ -409,6 +493,24 @@ export default function RelaxMatchScreen() {
                   >
                     <T variant="title" color={theme.white} style={{ fontWeight: "700" }}>Új játék</T>
                   </TouchableOpacity>
+                </LinearGradient>
+              </View>
+            )}
+
+            {/* Shuffle Overlay when no moves left */}
+            {showShuffleBanner && (
+              <View style={styles.overlay}>
+                <LinearGradient
+                  colors={["rgba(6,19,32,0.92)", "rgba(10,35,64,0.96)"]}
+                  style={styles.overlayGradient}
+                >
+                  <Ionicons name="shuffle-outline" size={56} color={theme.accent} style={{ marginBottom: 12 }} />
+                  <T variant="display" color={theme.textOnDark} align="center" style={{ marginBottom: 8 }}>
+                    Nincs több lépés!
+                  </T>
+                  <T variant="title" color="rgba(247,251,255,0.7)" align="center">
+                    Tábla újrakeverése...
+                  </T>
                 </LinearGradient>
               </View>
             )}

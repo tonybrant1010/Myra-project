@@ -116,6 +116,37 @@ export default function RelaxCenterScreen() {
               </View>
             </LinearGradient>
           </TouchableOpacity>
+
+          {/* Activity 4: Sudoku */}
+          <TouchableOpacity
+            style={[styles.card, shadow.card]}
+            onPress={() => router.push("/relax-sudoku")}
+            activeOpacity={0.85}
+          >
+            <LinearGradient
+              colors={["rgba(255,138,224,0.15)", "rgba(18,58,98,0.3)"]}
+              style={styles.cardGradient}
+            >
+              <View style={styles.cardHeader}>
+                <View style={[styles.iconBadge, { backgroundColor: "rgba(255,138,224,0.2)" }]}>
+                  <Ionicons name="apps-outline" size={24} color={theme.warm} />
+                </View>
+                <View style={[styles.badge, { backgroundColor: "rgba(255,138,224,0.12)" }]}>
+                  <T variant="small" color={theme.warm} style={{ fontWeight: "600" }}>ELÉRHETŐ</T>
+                </View>
+              </View>
+              <T variant="title" color={theme.textOnDark} style={styles.cardTitle}>
+                Meditatív Sudoku
+              </T>
+              <T variant="body" color="rgba(247,251,255,0.76)" style={styles.cardDesc}>
+                Töltsd ki a rácsot a számokkal, válaszd ki a neked tetsző méretet (4x4, 6x6 vagy 9x9), és koncentrálj a megnyugtató feladványra!
+              </T>
+              <View style={styles.playRow}>
+                <T variant="label" color={theme.warm}>Indítás</T>
+                <Ionicons name="arrow-forward" size={16} color={theme.warm} style={{ marginLeft: 6 }} />
+              </View>
+            </LinearGradient>
+          </TouchableOpacity>
         </ScrollView>
       </ContentBackground>
     </SafeAreaView>
