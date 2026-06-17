@@ -127,6 +127,10 @@ export default function SideMenu({ visible, onClose }: Props) {
                   <MenuItem label="Myra Live" icon="mic-circle-outline" onPress={() => { onClose(); router.push("/myra-live" as any); }} testID="menu-myra-live" />
                 </MenuGroup>
 
+                <MenuGroup title="Kikapcsolódás">
+                  <MenuItem label="Játékok" icon="game-controller-outline" onPress={() => { onClose(); router.push("/relax"); }} testID="menu-relax" />
+                </MenuGroup>
+
                 {user?.is_admin ? (
                   <MenuGroup title="Admin">
                     <MenuItem label="Chatbot beállítások" icon="settings-outline" onPress={() => { onClose(); router.push("/admin-settings"); }} testID="menu-admin-settings" />
