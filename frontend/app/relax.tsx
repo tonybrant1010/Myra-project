@@ -55,51 +55,67 @@ export default function RelaxCenterScreen() {
             </LinearGradient>
           </TouchableOpacity>
 
-          {/* Activity 2: Breathing Exercise (Coming Soon) */}
-          <View style={[styles.card, styles.cardDisabled, shadow.card]}>
+          {/* Activity 2: Snake */}
+          <TouchableOpacity
+            style={[styles.card, shadow.card]}
+            onPress={() => router.push("/relax-snake")}
+            activeOpacity={0.85}
+          >
             <LinearGradient
-              colors={["rgba(255,255,255,0.04)", "rgba(255,255,255,0.01)"]}
+              colors={["rgba(86,214,141,0.15)", "rgba(18,58,98,0.3)"]}
               style={styles.cardGradient}
             >
               <View style={styles.cardHeader}>
-                <View style={[styles.iconBadge, { backgroundColor: "rgba(255,255,255,0.05)" }]}>
-                  <Ionicons name="leaf-outline" size={24} color="rgba(247,251,255,0.4)" />
+                <View style={[styles.iconBadge, { backgroundColor: "rgba(86,214,141,0.2)" }]}>
+                  <Ionicons name="navigate-outline" size={24} color={theme.success} />
                 </View>
-                <View style={[styles.badge, styles.badgeDisabled]}>
-                  <T variant="small" color="rgba(247,251,255,0.4)" style={{ fontWeight: "600" }}>HAMAROSAN</T>
+                <View style={[styles.badge, { backgroundColor: "rgba(86,214,141,0.12)" }]}>
+                  <T variant="small" color={theme.success} style={{ fontWeight: "600" }}>ELÉRHETŐ</T>
                 </View>
               </View>
-              <T variant="title" color="rgba(247,251,255,0.5)" style={styles.cardTitle}>
-                Légzésgyakorlat
+              <T variant="title" color={theme.textOnDark} style={styles.cardTitle}>
+                Klasszikus Kígyó
               </T>
-              <T variant="body" color="rgba(247,251,255,0.4)" style={styles.cardDesc}>
-                Kövesd a ritmust, lassítsd le a légzésed és találd meg a belső egyensúlyod a vezetett légzésritmussal.
+              <T variant="body" color="rgba(247,251,255,0.76)" style={styles.cardDesc}>
+                Irányítsd a kígyót, gyűjtsd össze a pontokat, és kerüld el az ütközéseket ebben a letisztult, meditatív játékban!
               </T>
+              <View style={styles.playRow}>
+                <T variant="label" color={theme.success}>Indítás</T>
+                <Ionicons name="arrow-forward" size={16} color={theme.success} style={{ marginLeft: 6 }} />
+              </View>
             </LinearGradient>
-          </View>
+          </TouchableOpacity>
 
-          {/* Activity 3: Sound Bath (Coming Soon) */}
-          <View style={[styles.card, styles.cardDisabled, shadow.card]}>
+          {/* Activity 3: Coloring */}
+          <TouchableOpacity
+            style={[styles.card, shadow.card]}
+            onPress={() => router.push("/relax-coloring")}
+            activeOpacity={0.85}
+          >
             <LinearGradient
-              colors={["rgba(255,255,255,0.04)", "rgba(255,255,255,0.01)"]}
+              colors={["rgba(139,143,232,0.15)", "rgba(18,58,98,0.3)"]}
               style={styles.cardGradient}
             >
               <View style={styles.cardHeader}>
-                <View style={[styles.iconBadge, { backgroundColor: "rgba(255,255,255,0.05)" }]}>
-                  <Ionicons name="musical-notes-outline" size={24} color="rgba(247,251,255,0.4)" />
+                <View style={[styles.iconBadge, { backgroundColor: "rgba(139,143,232,0.2)" }]}>
+                  <Ionicons name="color-palette-outline" size={24} color={theme.violet} />
                 </View>
-                <View style={[styles.badge, styles.badgeDisabled]}>
-                  <T variant="small" color="rgba(247,251,255,0.4)" style={{ fontWeight: "600" }}>HAMAROSAN</T>
+                <View style={[styles.badge, { backgroundColor: "rgba(139,143,232,0.12)" }]}>
+                  <T variant="small" color={theme.violet} style={{ fontWeight: "600" }}>ELÉRHETŐ</T>
                 </View>
               </View>
-              <T variant="title" color="rgba(247,251,255,0.5)" style={styles.cardTitle}>
-                Meditációs Hangfürdő
+              <T variant="title" color={theme.textOnDark} style={styles.cardTitle}>
+                Pixel Színező
               </T>
-              <T variant="body" color="rgba(247,251,255,0.4)" style={styles.cardDesc}>
-                Nyugtató binaurális ütemek és természetes hangok gyűjteménye a mély relaxációhoz és meditációhoz.
+              <T variant="body" color="rgba(247,251,255,0.76)" style={styles.cardDesc}>
+                Színezz ki előre rajzolt pixel art mintákat (szív, virág, napocska) vagy alkoss szabadon a nyugtató színpalettával!
               </T>
+              <View style={styles.playRow}>
+                <T variant="label" color={theme.violet}>Indítás</T>
+                <Ionicons name="arrow-forward" size={16} color={theme.violet} style={{ marginLeft: 6 }} />
+              </View>
             </LinearGradient>
-          </View>
+          </TouchableOpacity>
         </ScrollView>
       </ContentBackground>
     </SafeAreaView>
@@ -133,9 +149,6 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
     backgroundColor: "rgba(255,255,255,0.03)",
   },
-  cardDisabled: {
-    opacity: 0.6,
-  },
   cardGradient: {
     padding: spacing.md,
   },
@@ -157,9 +170,6 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: radii.sm,
     backgroundColor: "rgba(87,199,255,0.12)",
-  },
-  badgeDisabled: {
-    backgroundColor: "rgba(255,255,255,0.06)",
   },
   cardTitle: {
     fontSize: 20,
