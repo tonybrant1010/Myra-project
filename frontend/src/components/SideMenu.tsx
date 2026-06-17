@@ -128,7 +128,7 @@ export default function SideMenu({ visible, onClose }: Props) {
                 </MenuGroup>
 
                 <MenuGroup title="Kikapcsolódás">
-                  <MenuItem label="Játékok" icon="game-controller-outline" onPress={() => { onClose(); router.push("/relax"); }} testID="menu-relax" />
+                  <MenuItem label="Játszótér" icon="game-controller-outline" onPress={() => { onClose(); router.push("/relax"); }} testID="menu-relax" />
                 </MenuGroup>
 
                 {user?.is_admin ? (
