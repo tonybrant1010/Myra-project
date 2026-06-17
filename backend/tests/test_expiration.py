@@ -31,8 +31,6 @@ async def override_get_db():
             await session.rollback()
             raise
 
-app.dependency_overrides[get_db] = override_get_db
-
 # Tell pytest to use anyio for async tests
 @pytest.fixture
 def anyio_backend():
@@ -41,12 +39,14 @@ def anyio_backend():
 # Create a fixture to initialize the database
 @pytest.fixture(autouse=True)
 async def init_db():
+    app.dependency_overrides[get_db] = override_get_db
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     yield
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+    app.dependency_overrides.clear()
 
 @pytest.mark.anyio
 async def test_expiration_scenarios():

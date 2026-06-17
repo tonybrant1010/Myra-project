@@ -101,6 +101,7 @@ const generateSudoku = (size: SudokuSize) => {
 // Compute conflicts list
 const checkConflicts = (currentBoard: (number | null)[][], size: SudokuSize): boolean[][] => {
   const conf = Array.from({ length: size }, () => Array(size).fill(false));
+  if (!currentBoard || currentBoard.length < size) return conf;
   let boxRows = 3;
   let boxCols = 3;
   if (size === 4) {
@@ -263,13 +264,6 @@ export default function RelaxSudokuScreen() {
       setGameOver(true);
       setIsRunning(false);
       saveBestTime();
-      if (token) {
-        authedFetch(token, "/api/leaderboard/submit", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ game_type: "sudoku", score: timer }),
-        }).catch(() => {});
-      }
       try {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       } catch (e) {
@@ -305,7 +299,7 @@ export default function RelaxSudokuScreen() {
 
   return (
     <SafeAreaView style={styles.safe} testID="relax-sudoku-screen">
-      <TopBar title="Sudoku Játék" showBack={true} backPath="/relax" />
+      <TopBar title="Sudoku" showBack={true} backPath="/relax" />
       <ContentBackground>
         <View style={styles.container}>
           {/* Header Stats */}
@@ -467,7 +461,7 @@ export default function RelaxSudokuScreen() {
                 <Ionicons name="apps-outline" size={48} color={theme.violet} style={{ marginBottom: 12 }} />
                 
                 <T variant="h2" color={theme.textOnDark} style={{ marginBottom: 8, fontWeight: "700" }}>
-                  Sudoku Játék
+                  Sudoku
                 </T>
                 <T variant="body" color="rgba(247,251,255,0.68)" align="center" style={{ marginBottom: 24, paddingHorizontal: 12 }}>
                   Válassz egy méretet a képességeidnek vagy a hangulatodnak megfelelően. A 4x4 kiváló gyors fejtéshez, míg a 9x9 a klasszikus Sudoku kihívás.

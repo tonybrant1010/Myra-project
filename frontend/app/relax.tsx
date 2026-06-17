@@ -154,7 +154,7 @@ export default function RelaxCenterScreen() {
                 </View>
               </View>
               <T variant="title" color={theme.textOnDark} style={styles.cardTitle}>
-                Meditatív Sudoku
+                Sudoku
               </T>
               <T variant="body" color="rgba(247,251,255,0.76)" style={styles.cardDesc}>
                 Töltsd ki a rácsot a számokkal, válaszd ki a neked tetsző méretet (4x4, 6x6 vagy 9x9), és koncentrálj a megnyugtató feladványra!

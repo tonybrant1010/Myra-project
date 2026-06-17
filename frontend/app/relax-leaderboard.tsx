@@ -8,6 +8,8 @@ import {
   ScrollView,
   Keyboard,
   Dimensions,
+  Modal,
+  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -110,10 +112,10 @@ export default function RelaxLeaderboardScreen() {
         loadLeaderboard();
       } else {
         const d = await response.json().catch(() => ({}));
-        alert(d.detail || "Hiba történt a becenév mentésekor.");
+        Alert.alert("Hiba", d.detail || "Hiba történt a becenév mentésekor.");
       }
     } catch (e) {
-      alert("Hálózati hiba történt.");
+      Alert.alert("Hiba", "Hálózati hiba történt.");
     } finally {
       setSavingNickname(false);
     }
@@ -206,10 +208,58 @@ export default function RelaxLeaderboardScreen() {
               </T>
             </View>
 
-            {isEditingNickname ? (
-              <View style={styles.editRow}>
+            <View style={styles.viewRow}>
+              <T variant="title" color={theme.white} style={{ fontWeight: "700" }}>
+                {user?.nickname || "Nincs beállítva"}
+              </T>
+              <TouchableOpacity
+                style={styles.modifyBtn}
+                onPress={() => {
+                  setNicknameInput(user?.nickname || "");
+                  setIsEditingNickname(true);
+                  try {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  } catch (e) {}
+                }}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="create-outline" size={16} color={theme.violet} />
+                <T variant="small" color={theme.violet} style={{ marginLeft: 4, fontWeight: "600" }}>
+                  {user?.nickname ? "Módosítás" : "Beállítás"}
+                </T>
+              </TouchableOpacity>
+            </View>
+          </LinearGradient>
+
+          {/* Nickname input popup modal window */}
+          <Modal
+            visible={isEditingNickname}
+            transparent={true}
+            animationType="fade"
+            onRequestClose={() => {
+              if (user?.nickname) {
+                setIsEditingNickname(false);
+              }
+            }}
+          >
+            <View style={styles.modalOverlay}>
+              <LinearGradient
+                colors={["rgba(10, 30, 58, 0.98)", "rgba(6, 19, 32, 0.99)"]}
+                style={[styles.modalContent, shadow.glow]}
+              >
+                <View style={styles.modalHeader}>
+                  <Ionicons name="person-outline" size={22} color={theme.violet} />
+                  <T variant="h2" color={theme.white} style={{ marginLeft: 8, fontWeight: "700" }}>
+                    Becenév Megadása
+                  </T>
+                </View>
+
+                <T variant="body" color="rgba(247,251,255,0.7)" style={{ marginBottom: spacing.md }}>
+                  Adj meg egy becenevet, ami a ranglistákon fog megjelenni a többi játékos számára.
+                </T>
+
                 <TextInput
-                  style={styles.input}
+                  style={styles.modalInput}
                   value={nicknameInput}
                   onChangeText={setNicknameInput}
                   placeholder="Beceneved a ranglistához..."
@@ -217,55 +267,41 @@ export default function RelaxLeaderboardScreen() {
                   maxLength={25}
                   returnKeyType="done"
                   onSubmitEditing={saveNickname}
+                  autoFocus={true}
                 />
-                <TouchableOpacity
-                  style={[styles.saveBtn, savingNickname && { opacity: 0.6 }]}
-                  onPress={saveNickname}
-                  disabled={savingNickname}
-                  activeOpacity={0.8}
-                >
-                  {savingNickname ? (
-                    <ActivityIndicator size="small" color={theme.white} />
-                  ) : (
-                    <T variant="label" color={theme.white} style={{ fontWeight: "700" }}>Mentés</T>
-                  )}
-                </TouchableOpacity>
-                {user?.nickname && (
+
+                <View style={styles.modalActions}>
+                  {user?.nickname ? (
+                    <TouchableOpacity
+                      style={styles.modalCancelBtn}
+                      onPress={() => setIsEditingNickname(false)}
+                      disabled={savingNickname}
+                      activeOpacity={0.7}
+                    >
+                      <T variant="label" color="rgba(247,251,255,0.6)" style={{ fontWeight: "600" }}>
+                        Mégse
+                      </T>
+                    </TouchableOpacity>
+                  ) : null}
+
                   <TouchableOpacity
-                    style={styles.cancelBtn}
-                    onPress={() => {
-                      setNicknameInput(user.nickname || "");
-                      setIsEditingNickname(false);
-                    }}
+                    style={[styles.modalSaveBtn, savingNickname && { opacity: 0.6 }]}
+                    onPress={saveNickname}
                     disabled={savingNickname}
+                    activeOpacity={0.8}
                   >
-                    <Ionicons name="close" size={20} color="rgba(247,251,255,0.5)" />
+                    {savingNickname ? (
+                      <ActivityIndicator size="small" color={theme.white} />
+                    ) : (
+                      <T variant="label" color={theme.white} style={{ fontWeight: "700" }}>
+                        Mentés
+                      </T>
+                    )}
                   </TouchableOpacity>
-                )}
-              </View>
-            ) : (
-              <View style={styles.viewRow}>
-                <T variant="title" color={theme.white} style={{ fontWeight: "700" }}>
-                  {user?.nickname}
-                </T>
-                <TouchableOpacity
-                  style={styles.modifyBtn}
-                  onPress={() => {
-                    setIsEditingNickname(true);
-                    try {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    } catch (e) {}
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name="create-outline" size={16} color={theme.violet} />
-                  <T variant="small" color={theme.violet} style={{ marginLeft: 4, fontWeight: "600" }}>
-                    Módosítás
-                  </T>
-                </TouchableOpacity>
-              </View>
-            )}
-          </LinearGradient>
+                </View>
+              </LinearGradient>
+            </View>
+          </Modal>
 
           {/* Leaderboard lists header */}
           <View style={styles.listsHeaderRow}>
@@ -316,13 +352,6 @@ export default function RelaxLeaderboardScreen() {
                 theme.success,
                 leaderboard?.snake,
                 false
-              )}
-              {renderLeaderboardList(
-                "Meditatív Sudoku",
-                "apps-outline",
-                theme.warm,
-                leaderboard?.sudoku,
-                true
               )}
             </View>
           )}
@@ -376,21 +405,61 @@ const styles = StyleSheet.create({
     fontFamily: "Manrope_500Medium",
     fontSize: 15,
   },
-  saveBtn: {
-    height: 40,
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: spacing.lg,
+  },
+  modalContent: {
+    width: "100%",
+    maxWidth: 400,
+    borderRadius: radii.lg,
+    padding: spacing.lg,
+    borderWidth: 1.2,
+    borderColor: "rgba(139,143,232,0.22)",
+    backgroundColor: "rgba(10,30,58,0.98)",
+  },
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: spacing.sm,
+  },
+  modalInput: {
+    width: "100%",
+    height: 46,
+    backgroundColor: "rgba(255, 255, 255, 0.06)",
+    borderColor: "rgba(255, 255, 255, 0.12)",
+    borderWidth: 1.2,
+    borderRadius: radii.md,
+    paddingHorizontal: 12,
+    color: theme.white,
+    fontFamily: "Manrope_500Medium",
+    fontSize: 16,
+    marginBottom: spacing.lg,
+  },
+  modalActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 12,
+    alignItems: "center",
+  },
+  modalCancelBtn: {
+    height: 44,
+    justifyContent: "center",
+    alignItems: "center",
     paddingHorizontal: 16,
+  },
+  modalSaveBtn: {
+    height: 44,
+    paddingHorizontal: 24,
     backgroundColor: theme.violet,
     borderRadius: radii.md,
     justifyContent: "center",
     alignItems: "center",
-    minWidth: 80,
+    minWidth: 90,
     ...shadow.glow,
-  },
-  cancelBtn: {
-    width: 32,
-    height: 40,
-    justifyContent: "center",
-    alignItems: "center",
   },
   modifyBtn: {
     flexDirection: "row",
