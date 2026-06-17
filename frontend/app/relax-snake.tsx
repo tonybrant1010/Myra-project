@@ -36,6 +36,7 @@ export default function RelaxSnakeScreen() {
   const [highScore, setHighScore] = useState(0);
   const [isRunning, setIsRunning] = useState(false);
   const [gameOver, setGameOver] = useState(false);
+  const [speed, setSpeed] = useState<"SLOW" | "MEDIUM" | "FAST">("SLOW");
 
   const directionRef = useRef<Direction>("UP");
   const lastDirectionRef = useRef<Direction>("UP");
@@ -65,12 +66,18 @@ export default function RelaxSnakeScreen() {
   useEffect(() => {
     if (!isRunning || gameOver) return;
 
+    const getSpeedInterval = (s: typeof speed) => {
+      if (s === "SLOW") return 360;
+      if (s === "FAST") return 150;
+      return 240;
+    };
+
     const interval = setInterval(() => {
       moveSnake();
-    }, 180);
+    }, getSpeedInterval(speed));
 
     return () => clearInterval(interval);
-  }, [isRunning, gameOver, snake, direction]);
+  }, [isRunning, gameOver, snake, direction, speed]);
 
   // Generate random food coordinates not on the snake
   const generateFood = (currentSnake: Coord[]): Coord => {
@@ -180,6 +187,25 @@ export default function RelaxSnakeScreen() {
     setIsRunning(true);
   };
 
+  const resetToStartScreen = () => {
+    const initialSnake = [
+      { x: 6, y: 6 },
+      { x: 6, y: 7 },
+      { x: 6, y: 8 },
+    ];
+    setSnake(initialSnake);
+    setFood({ x: 6, y: 3 });
+    setDirection("UP");
+    directionRef.current = "UP";
+    lastDirectionRef.current = "UP";
+    setScore(0);
+    setGameOver(false);
+    setIsRunning(false);
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    } catch (e) {}
+  };
+
   const toggleGame = () => {
     if (gameOver) {
       startNewGame();
@@ -268,7 +294,7 @@ export default function RelaxSnakeScreen() {
                   </T>
                   <TouchableOpacity
                     style={styles.restartBtn}
-                    onPress={startNewGame}
+                    onPress={resetToStartScreen}
                     activeOpacity={0.82}
                   >
                     <T variant="title" color={theme.white} style={{ fontWeight: "700" }}>Új játék</T>
@@ -279,16 +305,57 @@ export default function RelaxSnakeScreen() {
 
             {!isRunning && !gameOver && (
               <View style={styles.overlay}>
-                <TouchableOpacity
-                  style={styles.playButtonOverlay}
-                  onPress={toggleGame}
-                  activeOpacity={0.8}
+                <LinearGradient
+                  colors={["rgba(6,19,32,0.95)", "rgba(10,35,64,0.98)"]}
+                  style={styles.overlayGradient}
                 >
-                  <Ionicons name="play" size={40} color={theme.white} />
-                  <T variant="title" color={theme.white} style={{ marginTop: 8, fontWeight: "600" }}>
-                    Játék Indítása
+                  <Ionicons name="navigate-outline" size={44} color={theme.success} style={{ marginBottom: 12 }} />
+                  <T variant="h2" color={theme.textOnDark} style={{ marginBottom: 20, fontWeight: "700" }}>
+                    Kígyó Játék
                   </T>
-                </TouchableOpacity>
+                  
+                  <T variant="small" color="rgba(247,251,255,0.6)" style={{ marginBottom: 8 }}>
+                    Sebesség kiválasztása:
+                  </T>
+                  
+                  <View style={styles.speedRow}>
+                    {(["SLOW", "MEDIUM", "FAST"] as const).map((s) => {
+                      const isActive = speed === s;
+                      let label = "Közepes";
+                      if (s === "SLOW") label = "Lassú";
+                      if (s === "FAST") label = "Gyors";
+                      
+                      return (
+                        <TouchableOpacity
+                          key={s}
+                          style={[styles.speedBtn, isActive && styles.speedBtnActive]}
+                          onPress={() => {
+                            setSpeed(s);
+                            try {
+                              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            } catch (e) {}
+                          }}
+                          activeOpacity={0.8}
+                        >
+                          <T variant="small" color={isActive ? theme.white : "rgba(247,251,255,0.7)"} style={{ fontWeight: "600" }}>
+                            {label}
+                          </T>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  <TouchableOpacity
+                    style={[styles.playButtonOverlay, { marginTop: 20 }]}
+                    onPress={toggleGame}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="play" size={28} color={theme.white} />
+                    <T variant="title" color={theme.white} style={{ marginTop: 6, fontWeight: "600" }}>
+                      Játék Indítása
+                    </T>
+                  </TouchableOpacity>
+                </LinearGradient>
               </View>
             )}
           </LinearGradient>
@@ -483,5 +550,23 @@ const styles = StyleSheet.create({
   dpadCenterButton: {
     backgroundColor: "rgba(87,199,255,0.1)",
     borderColor: "rgba(87,199,255,0.22)",
+  },
+  speedRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 20,
+  },
+  speedBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: radii.pill,
+    backgroundColor: "rgba(255, 255, 255, 0.05)",
+    borderColor: "rgba(87, 199, 255, 0.12)",
+    borderWidth: 1.2,
+  },
+  speedBtnActive: {
+    backgroundColor: theme.success,
+    borderColor: theme.success,
+    ...shadow.glow,
   },
 });

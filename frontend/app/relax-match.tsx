@@ -424,15 +424,6 @@ export default function RelaxMatchScreen() {
               <Ionicons name="refresh" size={18} color={theme.textOnDark} />
               <T variant="label" color={theme.textOnDark} style={{ marginLeft: 6 }}>Újrakezdés</T>
             </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.actionButton, styles.exitButton]}
-              onPress={() => router.back()}
-              disabled={animating}
-            >
-              <Ionicons name="exit-outline" size={18} color="rgba(247,251,255,0.8)" />
-              <T variant="label" color="rgba(247,251,255,0.8)" style={{ marginLeft: 6 }}>Kilépés</T>
-            </TouchableOpacity>
           </View>
         </View>
       </ContentBackground>
