@@ -353,6 +353,13 @@ export default function RelaxLeaderboardScreen() {
                 leaderboard?.snake,
                 false
               )}
+              {renderLeaderboardList(
+                "Sudoku",
+                "apps-outline",
+                theme.warm,
+                leaderboard?.sudoku,
+                false
+              )}
             </View>
           )}
         </ScrollView>

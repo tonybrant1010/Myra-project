@@ -7,6 +7,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 
 import { authedFetch, useAuth } from "@/src/auth/AuthContext";
+import { generateLeaderboardSignature } from "@/src/utils/crypto";
 import ContentBackground from "@/src/components/ContentBackground";
 import TopBar from "@/src/components/TopBar";
 import { T } from "@/src/components/Typography";
@@ -181,7 +182,7 @@ export default function RelaxSudokuScreen() {
       } catch (e) {}
     };
     loadBestTime();
-  }, [boardSize, gameOver]);
+  }, [boardSize]);
 
   // Stopwatch timer hook
   useEffect(() => {
@@ -264,6 +265,32 @@ export default function RelaxSudokuScreen() {
       setGameOver(true);
       setIsRunning(false);
       saveBestTime();
+      
+      // Calculate score based on grid size and completion time
+      let calculatedScore = 100;
+      if (boardSize === 4) {
+        calculatedScore = Math.max(100, 1000 - 5 * timer);
+      } else if (boardSize === 6) {
+        calculatedScore = Math.max(300, 3000 - 3 * timer);
+      } else if (boardSize === 9) {
+        calculatedScore = Math.max(1000, 10000 - 2 * timer);
+      }
+
+      if (token) {
+        const timestamp = Math.floor(Date.now() / 1000);
+        const signature = generateLeaderboardSignature("sudoku", calculatedScore, timestamp);
+        authedFetch(token, "/api/leaderboard/submit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            game_type: "sudoku",
+            score: calculatedScore,
+            timestamp,
+            signature,
+          }),
+        }).catch(() => {});
+      }
+
       try {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       } catch (e) {
@@ -278,6 +305,7 @@ export default function RelaxSudokuScreen() {
       const currentBest = await AsyncStorage.getItem(key);
       if (currentBest === null || timer < parseInt(currentBest, 10)) {
         await AsyncStorage.setItem(key, timer.toString());
+        setBestTime(timer); // Update UI state directly to prevent race condition
       }
     } catch (e) {}
   };

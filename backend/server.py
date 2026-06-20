@@ -59,6 +59,7 @@ _gemini_cache_name: Optional[str] = None
 # ---------- Config ----------
 JWT_SECRET = os.environ.get("JWT_SECRET", "")
 JWT_ALG = os.environ.get("JWT_ALG", "HS256")
+LEADERBOARD_SALT = os.environ.get("LEADERBOARD_SALT", "myra-default-leaderboard-salt-2026")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "10080"))
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 if not DATABASE_URL:
@@ -974,6 +975,8 @@ class NicknameBody(BaseModel):
 class SubmitScoreBody(BaseModel):
     game_type: Literal["match", "snake", "sudoku"]
     score: int
+    timestamp: int
+    signature: str
 
 
 class MfaVerifyBody(BaseModel):
@@ -1955,9 +1958,49 @@ def _build_state_block(sc: StateCode, user_name: str = "") -> str:
     )
 
 
-def _build_system_prompt(system_prompt: str, kb_text: str, sc: StateCode, user_name: str = "") -> str:
+def _build_system_prompt(
+    system_prompt: str,
+    kb_text: str,
+    sc: StateCode,
+    user_name: str = "",
+    code_verified_at: Optional[datetime] = None
+) -> str:
     state_block = _build_state_block(sc, user_name)
-    parts = [system_prompt, "", state_block]
+    
+    # Dynamic time context in Hungarian
+    now = _now()
+    months = ["január", "február", "március", "április", "május", "június",
+              "július", "augusztus", "szeptember", "október", "november", "december"]
+    weekdays = ["hétfő", "kedd", "szerda", "csütörtök", "péntek", "szombat", "vasárnap"]
+    
+    month_name = months[now.month - 1]
+    weekday_name = weekdays[now.weekday()]
+    
+    time_block = (
+        f"[IDŐ KONTEXTUS]\n"
+        f"- Aktuális időpont: {now.year}. {month_name} {now.day}., {weekday_name}, {now.strftime('%H:%M')}\n"
+    )
+    
+    if code_verified_at:
+        if code_verified_at.tzinfo is None:
+            age = now.replace(tzinfo=None) - code_verified_at
+        else:
+            age = now - code_verified_at
+        days_ago = age.days
+        days_remaining = max(0, 30 - days_ago)
+        v_month = months[code_verified_at.month - 1]
+        time_block += (
+            f"- Felhasználó stresszfelmérése (mérése): {days_ago} napja történt ({code_verified_at.year}. {v_month} {code_verified_at.day}.)\n"
+            f"- Mérési kód érvényessége: még {days_remaining} napig aktív (a 30 napos ciklusból)\n"
+        )
+        
+    time_block += (
+        "- FONTOS: A beszélgetés előzményeiben szereplő üzenetek időbélyeggel vannak ellátva (pl. [2026.06.18 09:00]). "
+        "A saját válaszaid elejére vagy szövegébe SOHA NE tegyél időbélyeget (pl. ne kezdj így: [2026.06.18 09:00]), "
+        "egyszerűen csak küldd el a tiszta válaszodat.\n"
+    )
+    
+    parts = [system_prompt, "", state_block, "", time_block]
     if kb_text.strip():
         parts += ["", "TUDÁSANYAG (csak felismeréshez, soha ne idézd):", kb_text]
     return "\n".join(parts)
@@ -2158,9 +2201,18 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
         .where(ChatMessage.user_id == user.id, ChatMessage.session_id == active_session_id)
         .order_by(ChatMessage.created_at.asc(), ChatMessage.role.desc())
     )
-    history = [{"role": m.role, "text": m.text} for m in res.scalars().all()][-20:]
-    recent_user_text = "\n".join(m["text"] for m in history[-6:] if m["role"] == "user")
+    db_history = res.scalars().all()
+    
+    # Keep raw text for crisis check
+    recent_user_text = "\n".join(m.text for m in db_history[-6:] if m.role == "user")
     crisis_context = _build_crisis_safety_context() if _is_crisis_message(f"{recent_user_text}\n{text}") else ""
+
+    # Format history with timestamps for the LLM
+    history = []
+    for m in db_history[-20:]:
+        ts_str = m.created_at.strftime("%Y.%m.%d %H:%M") if m.created_at else ""
+        prefix = f"[{ts_str}] " if ts_str else ""
+        history.append({"role": m.role, "text": f"{prefix}{m.text}"})
 
     user_msg = ChatMessage(id=str(uuid.uuid4()), user_id=user.id, state_code=user.state_code,
                            session_id=active_session_id, role="user", text=text)
@@ -2178,9 +2230,36 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
             if refreshed:
                 _gemini_cache_name = cache_name
                 state_block = _build_state_block(sc, user.name)
+                
+                # Dynamic time context for cache
+                months = ["január", "február", "március", "április", "május", "június",
+                          "július", "augusztus", "szeptember", "október", "november", "december"]
+                weekdays = ["hétfő", "kedd", "szerda", "csütörtök", "péntek", "szombat", "vasárnap"]
+                now_cache = _now()
+                m_name = months[now_cache.month - 1]
+                w_name = weekdays[now_cache.weekday()]
+                time_block_cache = f"Aktuális időpont: {now_cache.year}. {m_name} {now_cache.day}., {w_name}, {now_cache.strftime('%H:%M')}\n"
+                
+                if user.code_verified_at:
+                    if user.code_verified_at.tzinfo is None:
+                        age = now_cache.replace(tzinfo=None) - user.code_verified_at
+                    else:
+                        age = now_cache - user.code_verified_at
+                    v_m_name = months[user.code_verified_at.month - 1]
+                    time_block_cache += (
+                        f"Felhasználó stresszfelmérése (mérése): {age.days} napja történt ({user.code_verified_at.year}. {v_m_name} {user.code_verified_at.day}.)\n"
+                        f"Mérési kód érvényessége: még {max(0, 30 - age.days)} napig aktív (a 30 napos ciklusból)\n"
+                    )
+                time_block_cache += (
+                    "FONTOS: A beszélgetés előzményeiben szereplő üzenetek időbélyeggel vannak ellátva (pl. [2026.06.18 09:00]). "
+                    "A saját válaszaid elejére vagy szövegébe SOHA NE tegyél időbélyeget, egyszerűen csak küldd el a tiszta válaszodat."
+                )
+
                 cached_contents = [
                     {"role": "user", "parts": [{"text": f"[BELSŐ KONTEXTUS – soha ne idézd a felhasználónak]\n{state_block}"}]},
                     {"role": "model", "parts": [{"text": "Megértettem."}]},
+                    {"role": "user", "parts": [{"text": f"[IDŐ KONTEXTUS]\n{time_block_cache}"}]},
+                    {"role": "model", "parts": [{"text": "Megértettem, figyelembe veszem a dátumot, az eltelt időt és a mérés korát."}]},
                 ]
                 if crisis_context:
                     cached_contents.extend([
@@ -2197,7 +2276,8 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
                         "role": "user" if m["role"] == "user" else "model",
                         "parts": [{"text": m["text"]}],
                     })
-                cached_contents.append({"role": "user", "parts": [{"text": text}]})
+                now_ts_str = now_cache.strftime("%Y.%m.%d %H:%M")
+                cached_contents.append({"role": "user", "parts": [{"text": f"[{now_ts_str}] {text}"}]})
                 try:
                     reply = await asyncio.to_thread(_sync_call_gemini_cached, api_key, cache_name, cached_contents)
                 except Exception as e:
@@ -2210,9 +2290,10 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
     # --- Hagyományos útvonal (fallback) ---
     if reply is None:
         effective_kb = "\n\n".join(part for part in [kb_text.strip(), crisis_context, retrieved_kb_context] if part)
-        sys_prompt = _build_system_prompt(sys_prompt_base, effective_kb, sc, user.name)
+        sys_prompt = _build_system_prompt(sys_prompt_base, effective_kb, sc, user.name, user.code_verified_at)
         try:
-            reply = await _call_llm(provider, model, api_key, sys_prompt, history, text)
+            now_ts_str = _now().strftime("%Y.%m.%d %H:%M")
+            reply = await _call_llm(provider, model, api_key, sys_prompt, history, f"[{now_ts_str}] {text}")
         except HTTPException:
             raise
         except Exception as e:
@@ -2731,9 +2812,10 @@ async def set_user_nickname(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    clean_nickname = body.nickname.strip()
+    # Strip HTML tags to prevent XSS
+    clean_nickname = re.sub(r"<[^>]*>", "", body.nickname.strip())
     if not clean_nickname:
-        raise HTTPException(status_code=400, detail="A becenév nem lehet üres.")
+        raise HTTPException(status_code=400, detail="A becenév nem lehet üres vagy érvvénytelen.")
     if len(clean_nickname) > 40:
         raise HTTPException(status_code=400, detail="A becenév maximum 40 karakter lehet.")
     
@@ -2748,6 +2830,30 @@ async def submit_leaderboard_score(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # 1. Verify timestamp is recent (within 60 seconds) to prevent replay attacks
+    now_ts = int(time.time())
+    if abs(now_ts - body.timestamp) > 60:
+        raise HTTPException(status_code=400, detail="A kérés lejárt (időbeli eltérés).")
+
+    # 2. Verify signature
+    payload = f"{body.game_type}:{body.score}:{body.timestamp}:{LEADERBOARD_SALT}"
+    expected_sig = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    if not secrets.compare_digest(body.signature, expected_sig):
+        raise HTTPException(status_code=403, detail="Érvénytelen pontszám aláírás.")
+
+    # 3. Sanity limits validation
+    if body.game_type == "match":
+        if body.score < 0 or body.score > 35000:
+            raise HTTPException(status_code=400, detail="Érvénytelen pontszám (Match limit).")
+    elif body.game_type == "snake":
+        if body.score < 0 or body.score > 1500:
+            raise HTTPException(status_code=400, detail="Érvénytelen pontszám (Kígyó limit).")
+    elif body.game_type == "sudoku":
+        if body.score < 100 or body.score > 10000:
+            raise HTTPException(status_code=400, detail="Érvénytelen pontszám (Sudoku limit).")
+    else:
+        raise HTTPException(status_code=400, detail="Ismeretlen játéktípus.")
+
     res = await db.execute(
         select(LeaderboardEntry).where(
             LeaderboardEntry.user_id == user.id,
@@ -2757,16 +2863,10 @@ async def submit_leaderboard_score(
     entry = res.scalar_one_or_none()
 
     if entry:
-        if body.game_type == "sudoku":
-            # For Sudoku, lower time is better
-            if body.score < entry.score:
-                entry.score = body.score
-                entry.updated_at = _now()
-        else:
-            # For Match and Snake, higher score is better
-            if body.score > entry.score:
-                entry.score = body.score
-                entry.updated_at = _now()
+        # All games now use score system where higher is better
+        if body.score > entry.score:
+            entry.score = body.score
+            entry.updated_at = _now()
     else:
         entry = LeaderboardEntry(
             user_id=user.id,
@@ -2784,22 +2884,14 @@ async def get_leaderboard(db: AsyncSession = Depends(get_db)):
     results = {}
     
     for game in ["match", "snake", "sudoku"]:
-        if game == "sudoku":
-            q = (
-                select(LeaderboardEntry, User)
-                .join(User, LeaderboardEntry.user_id == User.id)
-                .where(LeaderboardEntry.game_type == game)
-                .order_by(LeaderboardEntry.score.asc())
-                .limit(3)
-            )
-        else:
-            q = (
-                select(LeaderboardEntry, User)
-                .join(User, LeaderboardEntry.user_id == User.id)
-                .where(LeaderboardEntry.game_type == game)
-                .order_by(LeaderboardEntry.score.desc())
-                .limit(3)
-            )
+        # Unified descending order for all games
+        q = (
+            select(LeaderboardEntry, User)
+            .join(User, LeaderboardEntry.user_id == User.id)
+            .where(LeaderboardEntry.game_type == game)
+            .order_by(LeaderboardEntry.score.desc())
+            .limit(3)
+        )
             
         res = await db.execute(q)
         rows = res.all()

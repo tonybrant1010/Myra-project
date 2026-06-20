@@ -7,6 +7,7 @@ import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import { authedFetch, useAuth } from "@/src/auth/AuthContext";
+import { generateLeaderboardSignature } from "@/src/utils/crypto";
 
 import ContentBackground from "@/src/components/ContentBackground";
 import TopBar from "@/src/components/TopBar";
@@ -322,10 +323,17 @@ export default function RelaxMatchScreen() {
       if (currentMoves <= 0) {
         setGameOver(true);
         if (token) {
+          const timestamp = Math.floor(Date.now() / 1000);
+          const signature = generateLeaderboardSignature("match", currentScore, timestamp);
           authedFetch(token, "/api/leaderboard/submit", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ game_type: "match", score: currentScore }),
+            body: JSON.stringify({
+              game_type: "match",
+              score: currentScore,
+              timestamp,
+              signature,
+            }),
           }).catch(() => {});
         }
         try {
