@@ -171,9 +171,8 @@ export default function ChatScreen() {
     return () => {
       if (revealTimerRef.current) clearInterval(revealTimerRef.current);
       recognitionRef.current?.stop?.();
-      audioRef.current?.pause?.();
-      if (audioUrlRef.current && Platform.OS === "web") {
-        (globalThis as any).URL?.revokeObjectURL?.(audioUrlRef.current);
+      if (Platform.OS === "web") {
+        (globalThis as any).speechSynthesis?.cancel?.();
       }
     };
   }, []);
@@ -278,11 +277,8 @@ export default function ChatScreen() {
   const isReadOnly = (viewSessionId !== null && viewSessionId !== activeSessionId) || isExpired;
 
   const stopSpeech = useCallback(() => {
-    audioRef.current?.pause?.();
-    audioRef.current = null;
-    if (audioUrlRef.current && Platform.OS === "web") {
-      (globalThis as any).URL?.revokeObjectURL?.(audioUrlRef.current);
-      audioUrlRef.current = null;
+    if (Platform.OS === "web") {
+      (globalThis as any).speechSynthesis?.cancel?.();
     }
     setSpeakingId(null);
   }, []);
@@ -345,9 +341,15 @@ export default function ChatScreen() {
     recognition.start();
   }, [input, listening, stopDictation]);
 
-  const speakMessage = useCallback(async (msg: Msg) => {
+  const speakMessage = useCallback((msg: Msg) => {
     if (Platform.OS !== "web") {
       setVoiceStatus("A felolvasás ebben a környezetben nem elérhető.");
+      return;
+    }
+    const synth = (globalThis as any).speechSynthesis;
+    const Utterance = (globalThis as any).SpeechSynthesisUtterance;
+    if (!synth || !Utterance) {
+      setVoiceStatus("A böngésző nem támogatja a beépített felolvasást.");
       return;
     }
     if (speakingId === msg.id) {
@@ -355,39 +357,18 @@ export default function ChatScreen() {
       return;
     }
     stopSpeech();
-    setVoiceStatus("Hang készül...");
-    try {
-      const response = await authedFetch(token, "/api/tts/speak", {
-        method: "POST",
-        body: JSON.stringify({ text: msg.text }),
-      });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        setVoiceStatus(data?.detail || "A felolvasás most nem indult el.");
-        return;
-      }
-      const blob = await response.blob();
-      const url = (globalThis as any).URL.createObjectURL(blob);
-      const audio = new (globalThis as any).Audio(url);
-      audio.playbackRate = 1.03;
-      audio.preservesPitch = false;
-      audio.mozPreservesPitch = false;
-      audio.webkitPreservesPitch = false;
-      audioRef.current = audio;
-      audioUrlRef.current = url;
-      audio.onended = stopSpeech;
-      audio.onerror = () => {
-        setVoiceStatus("A hang lejátszása nem sikerült.");
-        stopSpeech();
-      };
-      setSpeakingId(msg.id);
-      setVoiceStatus(null);
-      await audio.play();
-    } catch {
-      setVoiceStatus("A felolvasás most nem indult el.");
-      stopSpeech();
-    }
-  }, [speakingId, stopSpeech, token]);
+    const utterance = new Utterance(msg.text);
+    utterance.lang = "hu-HU";
+    utterance.rate = 0.95;
+    utterance.pitch = 1;
+    const voices = synth.getVoices?.() || [];
+    const huVoice = voices.find((v: any) => String(v.lang || "").toLowerCase().startsWith("hu"));
+    if (huVoice) utterance.voice = huVoice;
+    utterance.onend = () => setSpeakingId(null);
+    utterance.onerror = () => setSpeakingId(null);
+    setSpeakingId(msg.id);
+    synth.speak(utterance);
+  }, [speakingId, stopSpeech]);
 
   const send = async () => {
     const text = input.trim();

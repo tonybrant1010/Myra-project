@@ -88,7 +88,7 @@ PIPER_MAX_CHARS = int(os.environ.get("PIPER_MAX_CHARS", "1800"))
 PIPER_CACHE_MAX_AGE_DAYS = int(os.environ.get("PIPER_CACHE_MAX_AGE_DAYS", "1"))
 PIPER_NOISE_SCALE = os.environ.get("PIPER_NOISE_SCALE", "0.667")
 PIPER_NOISE_W = os.environ.get("PIPER_NOISE_W", "0.8")
-TTS_ENGINE = os.environ.get("TTS_ENGINE", "piper").strip().lower()
+TTS_ENGINE = os.environ.get("TTS_ENGINE", "none").strip().lower()
 SUPERTONIC_MODEL_DIR = Path(os.environ.get("SUPERTONIC_MODEL_DIR", str(DB_FILE_DIR / "tts" / "supertonic-3-hu")))
 SUPERTONIC_SID = int(os.environ.get("SUPERTONIC_SID", "0"))
 SUPERTONIC_NUM_STEPS = int(os.environ.get("SUPERTONIC_NUM_STEPS", "8"))
@@ -321,6 +321,14 @@ def create_access_token(user: User, *, mfa_verified: bool = False) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
 
+def _client_ip(request: Request) -> str:
+    if os.environ.get("TRUST_PROXY", "").lower() == "true":
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            return forwarded.split(",", 1)[0].strip()[:80]
+    return (request.client.host if request.client else "")[:80]
+
+
 # In-memory throttle (per-process)
 _attempts: dict[tuple[str, str], dict] = {}
 THROTTLE_WINDOW_S = 60
@@ -334,7 +342,7 @@ REG_MAX = 5           # max 5 regisztráció / IP / óra
 
 
 def _throttle_key(request: Request, email: str) -> tuple[str, str]:
-    ip = request.client.host if request.client else "?"
+    ip = _client_ip(request)
     return (ip, (email or "").lower())
 
 
@@ -363,7 +371,7 @@ def _register_failure(request: Request, email: str) -> None:
 
 def _check_reg_limit(request: Request) -> None:
     """IP-alapú regisztrációs limit: max REG_MAX regisztráció / REG_WINDOW_S másodperc."""
-    ip = request.client.host if request.client else "?"
+    ip = _client_ip(request)
     now = time.monotonic()
     s = _reg_attempts.get(ip)
     if s and now - s.get("first", now) > REG_WINDOW_S:
@@ -375,7 +383,7 @@ def _check_reg_limit(request: Request) -> None:
 
 def _record_reg(request: Request) -> None:
     """Sikeres regisztráció rögzítése az IP-limithez."""
-    ip = request.client.host if request.client else "?"
+    ip = _client_ip(request)
     now = time.monotonic()
     s = _reg_attempts.get(ip) or {"count": 0, "first": now}
     if now - s.get("first", now) > REG_WINDOW_S:
@@ -391,7 +399,7 @@ FORGOT_WINDOW_S = 300  # 5 perc
 FORGOT_MAX = 3        # max 3 kérés / 5 perc
 
 def _check_forgot_limit(request: Request, email: str) -> None:
-    ip = request.client.host if request.client else "?"
+    ip = _client_ip(request)
     key = f"{ip}:{(email or '').lower().strip()}"
     now = time.monotonic()
     s = _forgot_attempts.get(key)
@@ -402,7 +410,7 @@ def _check_forgot_limit(request: Request, email: str) -> None:
         raise HTTPException(status_code=429, detail="Túl sok jelszó-visszaállítási kérés erről a címről/IP-ről. Próbáld újra 5 perc múlva.")
 
 def _record_forgot(request: Request, email: str) -> None:
-    ip = request.client.host if request.client else "?"
+    ip = _client_ip(request)
     key = f"{ip}:{(email or '').lower().strip()}"
     now = time.monotonic()
     s = _forgot_attempts.get(key) or {"count": 0, "first": now}
@@ -419,7 +427,7 @@ RESET_WINDOW_S = 900  # 15 perc
 RESET_MAX = 5         # max 5 sikertelen próbálkozás / 15 perc
 
 def _check_reset_throttle(request: Request) -> None:
-    ip = request.client.host if request.client else "?"
+    ip = _client_ip(request)
     now = time.monotonic()
     s = _reset_attempts.get(ip)
     if s and now < s.get("blocked_until", 0):
@@ -428,7 +436,7 @@ def _check_reset_throttle(request: Request) -> None:
         _reset_attempts.pop(ip, None)
 
 def _record_reset_failure(request: Request) -> None:
-    ip = request.client.host if request.client else "?"
+    ip = _client_ip(request)
     now = time.monotonic()
     s = _reset_attempts.get(ip) or {"failed": 0, "first": now, "blocked_until": 0}
     if now - s.get("first", now) > RESET_WINDOW_S:
@@ -1340,12 +1348,6 @@ Myra-project csapat""", "plain", "utf-8")
         return False
 
 
-def _client_ip(request: Request) -> str:
-    if os.environ.get("TRUST_PROXY", "").lower() == "true":
-        forwarded = request.headers.get("x-forwarded-for", "")
-        if forwarded:
-            return forwarded.split(",", 1)[0].strip()[:80]
-    return (request.client.host if request.client else "")[:80]
 
 
 def _client_label(request: Request) -> str:
@@ -1540,7 +1542,7 @@ async def auth_forgot_password(body: ForgotPasswordBody, request: Request, backg
     user = res.scalar_one_or_none()
 
     if user and user.is_active:
-        token = "".join([str(random.randint(0, 9)) for _ in range(6)])
+        token = f"{secrets.randbelow(1_000_000):06d}"
         user.reset_token = token
         user.token_expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
         await db.flush()

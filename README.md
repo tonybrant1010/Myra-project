@@ -115,6 +115,7 @@ DATABASE_SSL_MODE=require
 EXPO_PUBLIC_BACKEND_URL=http://localhost:8001
 GMAIL_USER=myra.project.hu@gmail.com
 GMAIL_APP_PASSWORD=titkos-gmail-alkalmazaskod
+TRUST_PROXY=true
 ```
 
 Indítás:

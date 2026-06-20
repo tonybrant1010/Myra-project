@@ -17,6 +17,7 @@ services:
       - DATABASE_SSL=${DATABASE_SSL:-true}
       - DATABASE_SSL_MODE=${DATABASE_SSL_MODE:-require}
       - ADMIN_EMAIL_ALLOWLIST=${ADMIN_EMAIL_ALLOWLIST:-}
+      - TRUST_PROXY=${TRUST_PROXY:-true}
     volumes:
       - ./backend/data:/app/data
     healthcheck:
