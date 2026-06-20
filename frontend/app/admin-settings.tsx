@@ -254,22 +254,14 @@ export default function AdminSettingsScreen() {
             <View style={styles.center}><ActivityIndicator color={theme.accent} /></View>
           ) : (
             <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-              <Section title="Felhasználói közlemény" icon="megaphone-outline">
+              
+              {/* GROUP 1: CHATBOT BEÁLLÍTÁSOK */}
+              <Section title="Chatbot & MI Asszisztens" icon="sparkles-outline">
                 <T variant="small" color="rgba(247,251,255,0.66)" style={styles.sectionHelp}>
-                  Ez a rövid üzenet minden bejelentkezett felhasználónál megjelenik a felső sáv alatt. Ha üresen hagyod, nem látszik semmi.
+                  Itt adhatod meg a Myra chatbot és a hangalapú asszisztens működését vezérlő MI modellek adatait és a system promptot.
                 </T>
-                <TextInput
-                  style={styles.input}
-                  value={notice}
-                  onChangeText={setNotice}
-                  placeholder="Pl. Ma este 22:00 után rövid karbantartás várható."
-                  placeholderTextColor="rgba(247,251,255,0.48)"
-                  maxLength={180}
-                  testID="global-notice-input"
-                />
-              </Section>
 
-              <Section title="Nyelvi modell" icon="sparkles-outline">
+                <FieldLabel text="LLM Szolgáltató" />
                 <View style={styles.providerRow}>
                   {PROVIDERS.map((p) => (
                     <TouchableOpacity
@@ -316,7 +308,7 @@ export default function AdminSettingsScreen() {
                   </View>
                 ) : null}
 
-                <FieldLabel text="API kulcs" />
+                <FieldLabel text="Modell API kulcs" />
                 <TextInput
                   style={styles.input}
                   value={apiKey}
@@ -327,23 +319,17 @@ export default function AdminSettingsScreen() {
                   autoCapitalize="none"
                   testID="api-key-input"
                 />
-                <T variant="small" color="rgba(247,251,255,0.58)" style={{ marginTop: 6 }}>
+                <T variant="small" color="rgba(247,251,255,0.58)" style={{ marginTop: 6, marginBottom: 12 }}>
                   {providerHelp(provider)}
                 </T>
-              </Section>
 
-              <Section title="Myra Live beállítások" icon="mic-outline">
-                <T variant="small" color="rgba(247,251,255,0.66)" style={styles.sectionHelp}>
-                  A Myra Live hangalapú asszisztens beállításai (Gemini Multimodal Live API).
-                </T>
-
-                <FieldLabel text="Live modell neve" />
+                <FieldLabel text="Live (Hangalapú) modell neve" />
                 <TextInput
                   style={styles.input}
                   value={liveModel}
                   onChangeText={setLiveModel}
                   autoCapitalize="none"
-                  placeholder="Válassz vagy írj be modellnevet..."
+                  placeholder="Pl. gemini-2.0-flash-exp"
                   placeholderTextColor="rgba(247,251,255,0.48)"
                   testID="live-model-input"
                 />
@@ -359,31 +345,50 @@ export default function AdminSettingsScreen() {
                   autoCapitalize="none"
                   testID="live-api-key-input"
                 />
-              </Section>
 
-              <Section title="System prompt" icon="construct-outline">
+                <FieldLabel text="Chatbot System Prompt" />
                 <TextInput
                   style={[styles.input, styles.textarea]}
                   value={prompt}
                   onChangeText={setPrompt}
                   multiline
-                  placeholder="A Myra chatbot system promptja..."
+                  placeholder="A Myra chatbot viselkedését meghatározó prompt..."
                   placeholderTextColor="rgba(247,251,255,0.48)"
                   testID="prompt-input"
                 />
               </Section>
 
-              <Section title="Mentés és Letöltések" icon="save-outline">
+              {/* GROUP 2: RENDSZER & KÖZLEMÉNYEK */}
+              <Section title="Rendszer & Karbantartás" icon="construct-outline">
+                <T variant="small" color="rgba(247,251,255,0.66)" style={styles.sectionHelp}>
+                  Globális értesítés a felhasználók felé és biztonsági adatbázis mentések.
+                </T>
+
+                <FieldLabel text="Felhasználói közlemény" />
+                <TextInput
+                  style={styles.input}
+                  value={notice}
+                  onChangeText={setNotice}
+                  placeholder="Pl. Ma este 22:00 után rövid karbantartás várható."
+                  placeholderTextColor="rgba(247,251,255,0.48)"
+                  maxLength={180}
+                  testID="global-notice-input"
+                />
+
                 {msg ? <T variant="small" color={theme.success} style={styles.feedback}>{msg}</T> : null}
                 {err ? <T variant="small" color={theme.danger} style={styles.feedback}>{err}</T> : null}
+
                 <TouchableOpacity style={styles.saveBtn} onPress={save} disabled={saving} testID="save-button">
                   {saving ? <ActivityIndicator color={theme.white} /> : <T variant="title" color={theme.white}>Beállítások mentése</T>}
                 </TouchableOpacity>
+
                 <TouchableOpacity style={styles.outlineBtn} onPress={() => downloadBackup(token)} testID="backup-button">
+                  <Ionicons name="download-outline" size={16} color={theme.accent} style={{ marginRight: 6 }} />
                   <T variant="label" color={theme.accent}>Adatbázis mentés letöltése</T>
                 </TouchableOpacity>
               </Section>
 
+              {/* GROUP 3: SÜRGŐSSÉGI ESZKÖZÖK */}
               <Section title="Sürgősségi Eszközök (SOS)" icon="warning-outline">
                 <T variant="small" color="rgba(247,251,255,0.66)" style={styles.sectionHelp}>
                   Rendszerdiagnosztika, karbantartási mód, munkamenetek törlése és backend újraindítása közvetlenül mobilról.
@@ -647,7 +652,7 @@ const styles = StyleSheet.create({
   dropList: { borderWidth: 1, borderColor: "rgba(255,255,255,0.18)", borderRadius: 12, backgroundColor: "rgba(6,19,32,0.94)", marginTop: 4, overflow: "hidden" },
   dropItem: { paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.10)" },
   dropItemSelected: { backgroundColor: theme.accentDeep },
-  saveBtn: { marginTop: 4, backgroundColor: theme.accentDeep, minHeight: 52, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  saveBtn: { marginTop: 10, backgroundColor: theme.accentDeep, minHeight: 52, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   outlineBtn: {
     marginTop: 10,
     minHeight: 48,
@@ -657,8 +662,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 14,
+    flexDirection: "row",
   },
-  feedback: { marginBottom: 10 },
+  feedback: { marginBottom: 10, marginTop: 10 },
 
   // Emergency (SOS) styles
   emergencyCard: {

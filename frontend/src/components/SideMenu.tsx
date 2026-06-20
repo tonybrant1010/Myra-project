@@ -144,7 +144,7 @@ export default function SideMenu({ visible, onClose }: Props) {
                         <View style={styles.menuIcon}>
                           <Ionicons name="shield-checkmark-outline" size={18} color={theme.textOnDark} />
                         </View>
-                        <T variant="bodyLg" color={theme.textOnDark} style={styles.menuLabel}>Adminisztráció</T>
+                        <T variant="bodyLg" color={theme.textOnDark} style={styles.menuLabel}>Admin</T>
                       </View>
                       <Ionicons
                         name={adminExpanded ? "chevron-down" : "chevron-forward"}
