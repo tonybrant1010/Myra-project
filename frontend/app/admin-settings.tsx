@@ -26,7 +26,6 @@ type Settings = {
   llm_api_key_set: boolean;
   llm_api_key_preview: string;
   system_prompt: string;
-  kb_text: string;
   global_notice_text: string;
   suggested_models: Record<string, string[]>;
   live_model: string;
@@ -46,30 +45,47 @@ export default function AdminSettingsScreen() {
   const [apiKey, setApiKey] = useState("");
   const [notice, setNotice] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [kb, setKb] = useState("");
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [cacheBuilding, setCacheBuilding] = useState(false);
-  const [cacheMsg, setCacheMsg] = useState<string | null>(null);
-  const [extracting, setExtracting] = useState(false);
-  const [extractMsg, setExtractMsg] = useState<string | null>(null);
   const [showModelDrop, setShowModelDrop] = useState(false);
   const [liveModel, setLiveModel] = useState("");
   const [liveApiKey, setLiveApiKey] = useState("");
 
+  // SOS Emergency states
+  const [maintenance, setMaintenance] = useState(false);
+  const [maintenanceLoading, setMaintenanceLoading] = useState(false);
+  const [diag, setDiag] = useState<any>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
+  const [forceLogoutBusy, setForceLogoutBusy] = useState(false);
+  const [restartBusy, setRestartBusy] = useState(false);
+  const [clearCacheBusy, setClearCacheBusy] = useState(false);
+
   const load = useCallback(async () => {
     setLoading(true);
-    const r = await authedFetch(token, "/api/admin/settings");
-    if (r.ok) {
-      const d: Settings = await r.json();
-      setData(d);
-      setProvider(d.llm_provider);
-      setModel(d.llm_model);
-      setNotice(d.global_notice_text || "");
-      setPrompt(d.system_prompt);
-      setKb(d.kb_text);
-      setLiveModel(d.live_model || "gemini-3.1-flash-live-preview");
+    try {
+      const r = await authedFetch(token, "/api/admin/settings");
+      if (r.ok) {
+        const d: Settings = await r.json();
+        setData(d);
+        setProvider(d.llm_provider);
+        setModel(d.llm_model);
+        setNotice(d.global_notice_text || "");
+        setPrompt(d.system_prompt);
+        setLiveModel(d.live_model || "gemini-3.1-flash-live-preview");
+      }
+
+      // Load maintenance status
+      const mr = await authedFetch(token, "/api/admin/maintenance");
+      if (mr.ok) {
+        const md = await mr.json();
+        setMaintenance(md.maintenance_mode);
+      }
+    } catch (e) {
+      console.error("Failed to load settings:", e);
     }
     setLoading(false);
   }, [token]);
@@ -86,7 +102,6 @@ export default function AdminSettingsScreen() {
         llm_model: model,
         global_notice_text: notice,
         system_prompt: prompt,
-        kb_text: kb,
         live_model: liveModel,
       };
       if (apiKey) body.llm_api_key = apiKey;
@@ -112,40 +127,108 @@ export default function AdminSettingsScreen() {
     }
   };
 
-  const extractKb = async () => {
-    setExtracting(true);
-    setExtractMsg(null);
+  const toggleMaintenance = async () => {
+    setMaintenanceLoading(true);
+    setMsg(null);
+    setErr(null);
     try {
-      const r = await authedFetch(token, "/api/admin/extract-kb", { method: "POST" });
-      const d = await r.json().catch(() => ({}));
+      const r = await authedFetch(token, "/api/admin/maintenance", {
+        method: "POST",
+        body: JSON.stringify({ maintenance_mode: !maintenance }),
+      });
       if (r.ok) {
-        setExtractMsg(`Kész: ${d.pdf_count} PDF, ${d.total_chars?.toLocaleString("hu-HU")} karakter betöltve.`);
-        load();
-      } else {
-        setExtractMsg(`Hiba: ${d?.detail || "Ismeretlen hiba"}`);
+        const d = await r.json();
+        setMaintenance(d.maintenance_mode);
+        setMsg(d.maintenance_mode ? "Karbantartási mód bekapcsolva." : "Karbantartási mód kikapcsolva.");
       }
     } catch (e: any) {
-      setExtractMsg(`Hálózati hiba: ${e?.message}`);
+      setErr(e.message || "Hiba történt.");
     } finally {
-      setExtracting(false);
+      setMaintenanceLoading(false);
     }
   };
 
-  const initCache = async () => {
-    setCacheBuilding(true);
-    setCacheMsg(null);
+  const runDiagnostics = async () => {
+    setDiagLoading(true);
+    setDiag(null);
     try {
-      const r = await authedFetch(token, "/api/admin/init-cache", { method: "POST" });
-      const d = await r.json().catch(() => ({}));
+      const r = await authedFetch(token, "/api/admin/diagnostics");
       if (r.ok) {
-        setCacheMsg(`Cache létrehozva (${d.pdf_count} PDF).`);
+        const d = await r.json();
+        setDiag(d);
       } else {
-        setCacheMsg(`Hiba: ${d?.detail || "Ismeretlen hiba"}`);
+        setDiag({ error: "Nem sikerült lekérni a diagnosztikát." });
       }
     } catch (e: any) {
-      setCacheMsg(`Hálózati hiba: ${e?.message}`);
+      setDiag({ error: e.message || "Hálózati hiba." });
     } finally {
-      setCacheBuilding(false);
+      setDiagLoading(false);
+    }
+  };
+
+  const fetchLogs = async () => {
+    setLogsLoading(true);
+    try {
+      const r = await authedFetch(token, "/api/admin/logs");
+      if (r.ok) {
+        const d = await r.json();
+        setLogs(d.logs || []);
+      }
+    } catch {}
+    setLogsLoading(false);
+  };
+
+  const forceLogoutAll = async () => {
+    setForceLogoutBusy(true);
+    setMsg(null);
+    setErr(null);
+    try {
+      const r = await authedFetch(token, "/api/admin/force-logout-all", { method: "POST" });
+      if (r.ok) {
+        setMsg("Minden nem-admin felhasználó sikeresen kijelentkeztetve.");
+      } else {
+        setErr("Kijelentkeztetés sikertelen.");
+      }
+    } catch (e: any) {
+      setErr(e.message || "Hiba.");
+    } finally {
+      setForceLogoutBusy(false);
+    }
+  };
+
+  const clearGeminiCache = async () => {
+    setClearCacheBusy(true);
+    setMsg(null);
+    setErr(null);
+    try {
+      const r = await authedFetch(token, "/api/admin/clear-cache", { method: "POST" });
+      if (r.ok) {
+        setMsg("Gemini Cache sikeresen törölve.");
+      } else {
+        setErr("Cache törlése sikertelen.");
+      }
+    } catch (e: any) {
+      setErr(e.message || "Hiba.");
+    } finally {
+      setClearCacheBusy(false);
+    }
+  };
+
+  const restartBackend = async () => {
+    setRestartBusy(true);
+    setMsg(null);
+    setErr(null);
+    try {
+      const r = await authedFetch(token, "/api/admin/restart", { method: "POST" });
+      if (r.ok) {
+        setMsg("A szerver leállítása elindult. A Docker konténer hamarosan újraindul (kb. 5-10 mp).");
+      } else {
+        setErr("Újraindítás sikertelen.");
+      }
+    } catch (e: any) {
+      setErr(e.message || "Hiba.");
+    } finally {
+      setRestartBusy(false);
     }
   };
 
@@ -251,7 +334,7 @@ export default function AdminSettingsScreen() {
 
               <Section title="Myra Live beállítások" icon="mic-outline">
                 <T variant="small" color="rgba(247,251,255,0.66)" style={styles.sectionHelp}>
-                  A Myra Live béta hangalapú asszisztens beállításai (Gemini Multimodal Live API).
+                  A Myra Live hangalapú asszisztens beállításai (Gemini Multimodal Live API).
                 </T>
 
                 <FieldLabel text="Live modell neve" />
@@ -290,43 +373,153 @@ export default function AdminSettingsScreen() {
                 />
               </Section>
 
-              <Section title="Tudásanyag" icon="library-outline">
-                <T variant="small" color="rgba(247,251,255,0.66)" style={styles.sectionHelp}>
-                  Kézi szöveg, PDF/TXT feltöltés, vagy szerveren lévő PDF-ek beolvasása.
-                </T>
-                <TextInput
-                  style={[styles.input, styles.textarea, { minHeight: 200 }]}
-                  value={kb}
-                  onChangeText={setKb}
-                  multiline
-                  placeholder="A tudásanyag teljes szövege..."
-                  placeholderTextColor="rgba(247,251,255,0.48)"
-                  testID="kb-input"
-                />
-                <UploadKBButton token={token} onUploaded={(text) => setKb(text)} />
-                <TouchableOpacity style={styles.outlineBtn} onPress={extractKb} disabled={extracting} testID="extract-kb-button">
-                  {extracting ? <ActivityIndicator color={theme.accent} /> : <T variant="label" color={theme.accent}>PDF-ek beolvasása a szerverről</T>}
-                </TouchableOpacity>
-                {extractMsg ? <T variant="small" color="rgba(247,251,255,0.62)" style={{ marginTop: 8 }}>{extractMsg}</T> : null}
-              </Section>
-
-              <Section title="Mentés és karbantartás" icon="save-outline">
+              <Section title="Mentés és Letöltések" icon="save-outline">
                 {msg ? <T variant="small" color={theme.success} style={styles.feedback}>{msg}</T> : null}
                 {err ? <T variant="small" color={theme.danger} style={styles.feedback}>{err}</T> : null}
                 <TouchableOpacity style={styles.saveBtn} onPress={save} disabled={saving} testID="save-button">
-                  {saving ? <ActivityIndicator color={theme.white} /> : <T variant="title" color={theme.white}>Mentés</T>}
+                  {saving ? <ActivityIndicator color={theme.white} /> : <T variant="title" color={theme.white}>Beállítások mentése</T>}
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.outlineBtn} onPress={() => downloadBackup(token)} testID="backup-button">
                   <T variant="label" color={theme.accent}>Adatbázis mentés letöltése</T>
                 </TouchableOpacity>
-                {provider === "gemini" ? (
-                  <>
-                    <TouchableOpacity style={styles.outlineBtn} onPress={initCache} disabled={cacheBuilding} testID="init-cache-button">
-                      {cacheBuilding ? <ActivityIndicator color={theme.accent} /> : <T variant="label" color={theme.accent}>Gemini cache inicializálása</T>}
-                    </TouchableOpacity>
-                    {cacheMsg ? <T variant="small" color="rgba(247,251,255,0.62)" style={{ marginTop: 8 }}>{cacheMsg}</T> : null}
-                  </>
-                ) : null}
+              </Section>
+
+              <Section title="Sürgősségi Eszközök (SOS)" icon="warning-outline">
+                <T variant="small" color="rgba(247,251,255,0.66)" style={styles.sectionHelp}>
+                  Rendszerdiagnosztika, karbantartási mód, munkamenetek törlése és backend újraindítása közvetlenül mobilról.
+                </T>
+
+                {/* Diagnostics Panel */}
+                <View style={styles.emergencyCard}>
+                  <TouchableOpacity style={styles.emergencyRowHeader} onPress={runDiagnostics} disabled={diagLoading}>
+                    <T variant="label" color={theme.accent}>Rendszerdiagnosztika futtatása</T>
+                    {diagLoading ? <ActivityIndicator size="small" color={theme.accent} /> : <Ionicons name="refresh-outline" size={18} color={theme.accent} />}
+                  </TouchableOpacity>
+                  {diag ? (
+                    <View style={styles.diagDetails}>
+                      {diag.error ? (
+                        <T variant="small" color={theme.danger}>{diag.error}</T>
+                      ) : (
+                        <>
+                          <View style={styles.diagLine}>
+                            <T variant="small" color="rgba(247,251,255,0.7)">Adatbázis:</T>
+                            <T variant="small" color={diag.db === "ok" ? theme.success : theme.danger}>
+                              {diag.db === "ok" ? "Kapcsolódva" : diag.db}
+                            </T>
+                          </View>
+                          <View style={styles.diagLine}>
+                            <T variant="small" color="rgba(247,251,255,0.7)">Gemini API kulcs:</T>
+                            <T variant="small" color={diag.gemini_api_key_configured ? theme.success : theme.danger}>
+                              {diag.gemini_api_key_configured ? "Beállítva" : "Hiányzik"}
+                            </T>
+                          </View>
+                          <View style={styles.diagLine}>
+                            <T variant="small" color="rgba(247,251,255,0.7)">TTS motor ({diag.tts_engine}):</T>
+                            <T variant="small" color={diag.tts_status === "ok" ? theme.success : theme.danger}>
+                              {diag.tts_status === "ok" ? "Működik" : diag.tts_status}
+                            </T>
+                          </View>
+                          <View style={styles.diagLine}>
+                            <T variant="small" color="rgba(247,251,255,0.7)">Tudásanyag PDF-ek száma:</T>
+                            <T variant="small" color={diag.pdf_count > 0 ? theme.success : theme.warm}>
+                              {diag.pdf_count} db PDF
+                            </T>
+                          </View>
+                        </>
+                      )}
+                    </View>
+                  ) : null}
+                </View>
+
+                {/* Maintenance Switch */}
+                <TouchableOpacity
+                  style={[styles.emergencyActionBtn, maintenance && { backgroundColor: theme.warm }]}
+                  onPress={toggleMaintenance}
+                  disabled={maintenanceLoading}
+                  testID="sos-maintenance-button"
+                >
+                  {maintenanceLoading ? (
+                    <ActivityIndicator color={theme.white} />
+                  ) : (
+                    <T variant="label" color={theme.white}>
+                      {maintenance ? "Karbantartási mód kikapcsolása" : "Karbantartási mód bekapcsolása"}
+                    </T>
+                  )}
+                </TouchableOpacity>
+
+                {/* Force Logout */}
+                <TouchableOpacity
+                  style={[styles.emergencyActionBtn, { backgroundColor: "#851c1c" }]}
+                  onPress={forceLogoutAll}
+                  disabled={forceLogoutBusy}
+                  testID="sos-force-logout-button"
+                >
+                  {forceLogoutBusy ? (
+                    <ActivityIndicator color={theme.white} />
+                  ) : (
+                    <T variant="label" color={theme.white}>Összes nem-admin kijelentkeztetése</T>
+                  )}
+                </TouchableOpacity>
+
+                {/* Clear Gemini Cache */}
+                <TouchableOpacity
+                  style={styles.emergencyOutlineBtn}
+                  onPress={clearGeminiCache}
+                  disabled={clearCacheBusy}
+                  testID="sos-clear-cache-button"
+                >
+                  {clearCacheBusy ? (
+                    <ActivityIndicator color={theme.accent} />
+                  ) : (
+                    <T variant="label" color={theme.accent}>Gemini Context Cache ürítése</T>
+                  )}
+                </TouchableOpacity>
+
+                {/* Backend Restart */}
+                <TouchableOpacity
+                  style={[styles.emergencyActionBtn, { backgroundColor: theme.danger }]}
+                  onPress={restartBackend}
+                  disabled={restartBusy}
+                  testID="sos-restart-button"
+                >
+                  {restartBusy ? (
+                    <ActivityIndicator color={theme.white} />
+                  ) : (
+                    <T variant="label" color={theme.white}>Backend konténer újraindítása</T>
+                  )}
+                </TouchableOpacity>
+
+                {/* In-Memory Logs */}
+                <View style={[styles.emergencyCard, { marginTop: 12 }]}>
+                  <TouchableOpacity
+                    style={styles.emergencyRowHeader}
+                    onPress={() => {
+                      const next = !showLogs;
+                      setShowLogs(next);
+                      if (next) fetchLogs();
+                    }}
+                    testID="sos-logs-header"
+                  >
+                    <T variant="label" color={theme.accent}>Élő memórialogok</T>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      {logsLoading ? <ActivityIndicator size="small" color={theme.accent} /> : null}
+                      <Ionicons name={showLogs ? "chevron-up" : "chevron-down"} size={18} color={theme.accent} />
+                    </View>
+                  </TouchableOpacity>
+                  {showLogs ? (
+                    <ScrollView style={styles.logScroll} nestedScrollEnabled showsVerticalScrollIndicator>
+                      {logs.length === 0 ? (
+                        <T variant="small" color="rgba(247,251,255,0.4)">Nincsenek elérhető logok.</T>
+                      ) : (
+                        logs.map((l, i) => (
+                          <T key={i} variant="caption" color="#cfd8dc" style={{ fontFamily: "monospace", fontSize: 11, marginBottom: 4 }}>
+                            {l}
+                          </T>
+                        ))
+                      )}
+                    </ScrollView>
+                  ) : null}
+                </View>
               </Section>
             </ScrollView>
           )}
@@ -388,76 +581,6 @@ function downloadBackup(token: string | null) {
       URL.revokeObjectURL(url);
     })
     .catch(() => {});
-}
-
-function UploadKBButton({ token, onUploaded }: { token: string | null; onUploaded: (text: string) => void }) {
-  const [busy, setBusy] = useState(false);
-  const [info, setInfo] = useState<string | null>(null);
-
-  const pick = async () => {
-    if (Platform.OS !== "web") {
-      try {
-        const dp = await import("expo-document-picker");
-        const res: any = await dp.getDocumentAsync({ type: ["application/pdf", "text/plain"], copyToCacheDirectory: true });
-        if (res?.canceled || !res?.assets?.[0]) return;
-        const asset = res.assets[0];
-        const r = await fetch(asset.uri);
-        const blob = await r.blob();
-        await upload(new File([blob], asset.name || "kb.pdf", { type: blob.type }));
-      } catch {
-        setInfo("Telepítsd az expo-document-pickert a mobil feltöltéshez.");
-      }
-      return;
-    }
-
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".pdf,.txt";
-    input.onchange = async (e: any) => {
-      const file = e.target?.files?.[0];
-      if (file) await upload(file);
-    };
-    input.click();
-  };
-
-  const upload = async (file: any) => {
-    setBusy(true);
-    setInfo(null);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const r = await fetch(apiUrl("/api/admin/kb/upload"), {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: fd,
-      });
-      if (!r.ok) {
-        const d = await r.json().catch(() => ({}));
-        setInfo(d?.detail || "Feltöltési hiba");
-      } else {
-        const d = await r.json();
-        setInfo(`Hozzáadva: ${d.added_chars.toLocaleString("hu-HU")} karakter.`);
-        const s = await fetch(apiUrl("/api/admin/settings"), { headers: { Authorization: `Bearer ${token}` } });
-        if (s.ok) {
-          const d2 = await s.json();
-          onUploaded(d2.kb_text || "");
-        }
-      }
-    } catch (e: any) {
-      setInfo(e?.message || "Hiba");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <View style={{ marginTop: 10 }}>
-      <TouchableOpacity style={styles.outlineBtn} onPress={pick} disabled={busy} testID="kb-upload">
-        {busy ? <ActivityIndicator color={theme.accent} /> : <T variant="label" color={theme.accent}>PDF / TXT feltöltése</T>}
-      </TouchableOpacity>
-      {info ? <T variant="small" color="rgba(247,251,255,0.62)" style={{ marginTop: 8 }}>{info}</T> : null}
-    </View>
-  );
 }
 
 const styles = StyleSheet.create({
@@ -536,4 +659,58 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   feedback: { marginBottom: 10 },
+
+  // Emergency (SOS) styles
+  emergencyCard: {
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+    marginTop: 10,
+  },
+  emergencyRowHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  diagDetails: {
+    marginTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255,255,255,0.1)",
+    paddingTop: 8,
+    gap: 4,
+  },
+  diagLine: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 2,
+  },
+  emergencyActionBtn: {
+    marginTop: 8,
+    minHeight: 46,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  emergencyOutlineBtn: {
+    marginTop: 8,
+    borderWidth: 1.5,
+    borderColor: "rgba(87,199,255,0.3)",
+    minHeight: 46,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  logScroll: {
+    marginTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255,255,255,0.1)",
+    paddingTop: 8,
+    maxHeight: 250,
+  },
 });

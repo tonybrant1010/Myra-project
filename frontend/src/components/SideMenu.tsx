@@ -32,6 +32,7 @@ export default function SideMenu({ visible, onClose }: Props) {
   const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [adminExpanded, setAdminExpanded] = useState(false);
 
   const loadSessions = () => {
     if (!token) return;
@@ -132,11 +133,54 @@ export default function SideMenu({ visible, onClose }: Props) {
                 </MenuGroup>
 
                 {user?.is_admin ? (
-                  <MenuGroup title="Admin">
-                    <MenuItem label="Chatbot beállítások" icon="settings-outline" onPress={() => { onClose(); router.push("/admin-settings"); }} testID="menu-admin-settings" />
-                    <MenuItem label="Állapotkódok" icon="keypad-outline" onPress={() => { onClose(); router.push("/admin"); }} testID="menu-admin" />
-                    <MenuItem label="Felhasználók" icon="people-outline" onPress={() => { onClose(); router.push("/admin-users"); }} testID="menu-admin-users" />
-                  </MenuGroup>
+                  <View style={styles.menuGroup}>
+                    <TouchableOpacity
+                      style={styles.collapsibleHeader}
+                      onPress={() => setAdminExpanded(!adminExpanded)}
+                      activeOpacity={0.72}
+                      testID="menu-admin-collapsible"
+                    >
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                        <View style={styles.menuIcon}>
+                          <Ionicons name="shield-checkmark-outline" size={18} color={theme.textOnDark} />
+                        </View>
+                        <T variant="bodyLg" color={theme.textOnDark} style={styles.menuLabel}>Adminisztráció</T>
+                      </View>
+                      <Ionicons
+                        name={adminExpanded ? "chevron-down" : "chevron-forward"}
+                        size={16}
+                        color="rgba(247,251,255,0.60)"
+                      />
+                    </TouchableOpacity>
+                    {adminExpanded ? (
+                      <View style={styles.submenu}>
+                        <MenuItemSub
+                          label="Rendszerbeállítások"
+                          icon="settings-outline"
+                          onPress={() => { onClose(); router.push("/admin-settings"); }}
+                          testID="menu-admin-settings"
+                        />
+                        <MenuItemSub
+                          label="Tudásanyag"
+                          icon="book-outline"
+                          onPress={() => { onClose(); router.push("/admin-kb"); }}
+                          testID="menu-admin-kb"
+                        />
+                        <MenuItemSub
+                          label="Állapotkódok"
+                          icon="keypad-outline"
+                          onPress={() => { onClose(); router.push("/admin"); }}
+                          testID="menu-admin"
+                        />
+                        <MenuItemSub
+                          label="Felhasználók"
+                          icon="people-outline"
+                          onPress={() => { onClose(); router.push("/admin-users"); }}
+                          testID="menu-admin-users"
+                        />
+                      </View>
+                    ) : null}
+                  </View>
                 ) : null}
 
                 <View style={styles.historyBox}>
@@ -247,6 +291,29 @@ function MenuItem({ label, icon, onPress, testID, disabled, subtle, danger }: {
   );
 }
 
+function MenuItemSub({ label, icon, onPress, testID, disabled }: {
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress: () => void;
+  testID?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.menuItem, { paddingLeft: 24 }, disabled && { opacity: 0.4 }]}
+      onPress={onPress}
+      testID={testID}
+      disabled={disabled}
+      activeOpacity={0.72}
+    >
+      <View style={[styles.menuIcon, { backgroundColor: "transparent" }]}>
+        <Ionicons name={icon} size={16} color="rgba(247,251,255,0.85)" />
+      </View>
+      <T variant="body" color="rgba(247,251,255,0.85)" style={styles.menuLabel}>{label}</T>
+    </TouchableOpacity>
+  );
+}
+
 function ConfirmModal({ visible, title, text, confirmLabel, onCancel, onConfirm, busy, danger }: {
   visible: boolean;
   title: string;
@@ -315,6 +382,19 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   menuGroupTitle: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 2 },
+  collapsibleHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  submenu: {
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255,255,255,0.06)",
+    paddingVertical: 4,
+    backgroundColor: "rgba(0,0,0,0.12)",
+  },
   menuItem: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 11, paddingHorizontal: 12 },
   menuIcon: {
     width: 30,

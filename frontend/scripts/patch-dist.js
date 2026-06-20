@@ -61,7 +61,7 @@ const proxyCode = `
 export default async function handler(req, res) {
   const path = req.query.path || '';
   const cleanPath = path.startsWith('api/') ? path : \`api/\${path}\`;
-  const targetUrl = new URL(\`http://91.214.112.96:8001/\${cleanPath}\`);
+  const targetUrl = new URL(\`http://34.172.160.45:8001/\${cleanPath}\`);
   
   for (const [key, value] of Object.entries(req.query)) {
     if (key !== 'path') {

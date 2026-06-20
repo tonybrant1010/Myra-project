@@ -31,7 +31,7 @@ from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr, Field
 from pypdf import PdfReader
 from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey, Integer, String, Text, JSON, func, select, delete,
+    Boolean, Column, DateTime, ForeignKey, Integer, String, Text, JSON, func, select, delete, update,
     text as sql_text,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -78,6 +78,8 @@ if not JWT_SECRET or len(JWT_SECRET) < 32:
 # Ensure data dir
 DB_FILE_DIR = ROOT_DIR / "data"
 DB_FILE_DIR.mkdir(parents=True, exist_ok=True)
+(DB_FILE_DIR / "kb_pdfs").mkdir(parents=True, exist_ok=True)
+
 
 PIPER_BINARY = Path(os.environ.get("PIPER_BINARY", str(ROOT_DIR / "tts" / ("piper.exe" if os.name == "nt" else "piper"))))
 PIPER_MODEL = Path(os.environ.get("PIPER_MODEL", str(DB_FILE_DIR / "tts" / "hu_HU-anna-medium.onnx")))
@@ -97,6 +99,25 @@ _supertonic_tts_lock = threading.Lock()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("myra")
+
+class InMemoryLogHandler(logging.Handler):
+    def __init__(self, capacity=100):
+        super().__init__()
+        self.capacity = capacity
+        self.buffer = []
+
+    def emit(self, record):
+        try:
+            self.buffer.append(self.format(record))
+            if len(self.buffer) > self.capacity:
+                self.buffer.pop(0)
+        except Exception:
+            self.handleError(record)
+
+log_buffer = InMemoryLogHandler()
+log_buffer.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+logging.getLogger("myra").addHandler(log_buffer)
+logging.getLogger().addHandler(log_buffer)
 
 # ---------- DB ----------
 def _normalize_database_url(url: str) -> str:
@@ -454,7 +475,7 @@ def _ensure_knowledge_fts(conn) -> None:
 
 
 def _resolve_pdf_source_dir(source_dir: Optional[str] = None) -> Path:
-    configured = source_dir or os.environ.get("MYRA_KB_SOURCE_DIR") or str(ROOT_DIR / "data")
+    configured = source_dir or os.environ.get("MYRA_KB_SOURCE_DIR") or str(ROOT_DIR / "data" / "kb_pdfs")
     path = Path(configured).expanduser().resolve()
     allowed_roots = [(ROOT_DIR / "data").resolve()]
     env_root = os.environ.get("MYRA_KB_SOURCE_DIR")
@@ -1243,6 +1264,10 @@ def _synthesize_piper_wav(text_value: str) -> Path:
 
 # ---------- Email Helper ----------
 def _send_gmail_reset(to_email: str, token: str):
+    if not GMAIL_USER or not GMAIL_APP_PASSWORD:
+        logger.error("Gmail SMTP credentials are not configured in .env")
+        return False
+
     msg = MIMEText(f"""Kedves Felhasználó!
 
 A Myra-project alkalmazásban jelszó-visszaállítást kértél.
@@ -1251,7 +1276,7 @@ A visszaállításhoz szükséges 6 jegyű biztonsági kódod: {token}
 
 Ez a kód 1 óráig érvényes. Írd be a kódot az alkalmazás felületén az új jelszavad megadásához.
 
-A Myra-project bejelentkezési oldala: https://myra-project.cfd/login
+A Myra-project bejelentkezési oldala: https://www.myra-project.hu/login
 
 Ha nem te kérted a visszaállítást, kérjük, hagyd figyelmen kívül ezt a levelet!
 
@@ -1259,21 +1284,25 @@ Ha nem te kérted a visszaállítást, kérjük, hagyd figyelmen kívül ezt a l
 Myra-project csapat""", "plain", "utf-8")
     
     msg["Subject"] = "Jelszó visszaállítás - Myra-project"
-    msg["From"] = "antalodor@gmail.com"
+    msg["From"] = GMAIL_USER
     msg["To"] = to_email
 
     try:
         with smtplib.SMTP("smtp.gmail.com", 587) as server:
             server.starttls()
-            server.login("antalodor@gmail.com", "yfuaardbujyydzkb")
-            server.sendmail("antalodor@gmail.com", [to_email], msg.as_string())
+            server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+            server.sendmail(GMAIL_USER, [to_email], msg.as_string())
         return True
     except Exception as e:
-        print(f"[!] Gmail küldési hiba: {e}")
+        logger.error(f"Gmail küldési hiba: {e}")
         return False
 
 
 def _send_gmail_security_code(to_email: str, code: str, purpose: str = "login"):
+    if not GMAIL_USER or not GMAIL_APP_PASSWORD:
+        logger.error("Gmail SMTP credentials are not configured in .env")
+        return False
+
     if purpose == "admin_action":
         title = "Admin biztonsági megerősítés"
         lead = "Admin művelet megerősítését kérted a Myra-project alkalmazásban."
@@ -1297,17 +1326,17 @@ Ha nem te kérted ezt a kódot, változtasd meg a jelszavadat, és jelezd az adm
 Myra-project csapat""", "plain", "utf-8")
 
     msg["Subject"] = title
-    msg["From"] = GMAIL_USER or "antalodor@gmail.com"
+    msg["From"] = GMAIL_USER
     msg["To"] = to_email
 
     try:
         with smtplib.SMTP("smtp.gmail.com", 587) as server:
             server.starttls()
-            server.login(GMAIL_USER or "antalodor@gmail.com", GMAIL_APP_PASSWORD or "yfuaardbujyydzkb")
-            server.sendmail(GMAIL_USER or "antalodor@gmail.com", [to_email], msg.as_string())
+            server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+            server.sendmail(GMAIL_USER, [to_email], msg.as_string())
         return True
     except Exception as e:
-        print(f"[!] Gmail biztonsági kód küldési hiba: {e}")
+        logger.error(f"Gmail biztonsági kód küldési hiba: {e}")
         return False
 
 
@@ -2039,6 +2068,15 @@ def _sync_refresh_gemini_cache(api_key: str, cache_name: str) -> bool:
         return False
 
 
+def _sync_delete_gemini_cache(api_key: str, cache_name: str) -> None:
+    try:
+        genai_sdk.configure(api_key=api_key)
+        genai_caching.CachedContent.delete(name=cache_name)
+    except Exception as e:
+        logger.warning(f"Gemini Cache API deletion failed: {e}")
+
+
+
 def _sync_call_gemini_cached(api_key: str, cache_name: str, contents: list) -> str:
     genai_sdk.configure(api_key=api_key)
     cache = genai_caching.CachedContent.get(cache_name)
@@ -2152,6 +2190,9 @@ async def chat_history(
 
 @api.post("/chat/send")
 async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if not user.is_admin and await get_setting(db, "maintenance_mode", "false") == "true":
+        raise HTTPException(status_code=503, detail="A Myra jelenleg tervezett karbantartás miatt nem érhető el. Kérjük, próbáld meg később.")
+
     if not user.state_code:
         raise HTTPException(status_code=400, detail="Először töltsd ki a kérdőívet.")
     
@@ -2318,6 +2359,9 @@ async def create_live_token(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    if not user.is_admin and await get_setting(db, "maintenance_mode", "false") == "true":
+        raise HTTPException(status_code=503, detail="A Myra jelenleg tervezett karbantartás miatt nem érhető el. Kérjük, próbáld meg később.")
+
     if not GOOGLE_GENAI_AVAILABLE:
         raise HTTPException(status_code=503, detail="A Gemini Live kliens nincs telepítve a szerveren.")
     if not user.state_code:
@@ -2565,10 +2609,10 @@ async def admin_upload_kb(request: Request, file: UploadFile = File(...), admin:
 # ---------- Admin: extract KB from server PDFs ----------
 @api.post("/admin/extract-kb")
 async def admin_extract_kb(request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    pdf_dir = ROOT_DIR / "data"
+    pdf_dir = ROOT_DIR / "data" / "kb_pdfs"
     pdf_files = sorted(pdf_dir.glob("*.pdf"))
     if not pdf_files:
-        raise HTTPException(status_code=400, detail="Nem találhatók PDF fájlok a szerveren (/data mappa).")
+        raise HTTPException(status_code=400, detail="Nem találhatók PDF fájlok a szerveren (/data/kb_pdfs mappa).")
     combined = ""
     for pdf_path in pdf_files:
         try:
@@ -2597,10 +2641,10 @@ async def admin_init_cache(request: Request, admin: User = Depends(require_admin
     if not api_key:
         raise HTTPException(status_code=400, detail="Nincs Gemini API kulcs beállítva.")
     system_prompt = await get_setting(db, "system_prompt", DEFAULT_SYSTEM_PROMPT)
-    pdf_dir = ROOT_DIR / "data"
+    pdf_dir = ROOT_DIR / "data" / "kb_pdfs"
     pdf_files = list(pdf_dir.glob("*.pdf"))
     if not pdf_files:
-        raise HTTPException(status_code=400, detail="Nem találhatók PDF fájlok a szerveren (/data mappa).")
+        raise HTTPException(status_code=400, detail="Nem találhatók PDF fájlok a szerveren (/data/kb_pdfs mappa).")
     try:
         cache_name = await asyncio.to_thread(_sync_create_gemini_cache, api_key, system_prompt, pdf_dir)
         _gemini_cache_name = cache_name
@@ -2610,6 +2654,146 @@ async def admin_init_cache(request: Request, admin: User = Depends(require_admin
     except Exception as e:
         logger.exception("Cache init error")
         raise HTTPException(status_code=500, detail="A gyorsítótár (cache) inicializálása sikertelen.")
+
+
+# ---------- Admin: Emergency Tools & KB Files ----------
+
+class MaintenanceModeBody(BaseModel):
+    maintenance_mode: bool
+
+@api.get("/admin/diagnostics")
+async def admin_diagnostics(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    db_status = "ok"
+    try:
+        await db.execute(sql_text("SELECT 1"))
+    except Exception as e:
+        db_status = f"error: {str(e)}"
+
+    api_key = await get_setting(db, "llm_api_key", "")
+    gemini_key_ok = len(api_key.strip()) > 0
+
+    tts_engine = TTS_ENGINE
+    tts_status = "ok"
+    if tts_engine == "piper":
+        if not PIPER_BINARY.exists():
+            tts_status = f"error: binary not found ({PIPER_BINARY})"
+        elif not PIPER_MODEL.exists():
+            tts_status = f"error: Anna model not found ({PIPER_MODEL})"
+    elif tts_engine == "supertonic":
+        if not SUPERTONIC_MODEL_DIR.exists():
+            tts_status = f"error: Supertonic model dir not found ({SUPERTONIC_MODEL_DIR})"
+
+    pdf_dir = ROOT_DIR / "data" / "kb_pdfs"
+    pdf_count = 0
+    if pdf_dir.exists():
+        pdf_count = len(list(pdf_dir.glob("*.pdf")))
+
+    return {
+        "db": db_status,
+        "gemini_api_key_configured": gemini_key_ok,
+        "tts_engine": tts_engine,
+        "tts_status": tts_status,
+        "pdf_count": pdf_count
+    }
+
+@api.get("/admin/maintenance")
+async def admin_get_maintenance(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    m_mode = await get_setting(db, "maintenance_mode", "false")
+    return {"maintenance_mode": m_mode == "true"}
+
+@api.post("/admin/maintenance")
+async def admin_set_maintenance(body: MaintenanceModeBody, request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    val = "true" if body.maintenance_mode else "false"
+    await set_setting(db, "maintenance_mode", val)
+    await db.commit()
+    await _admin_audit(db, admin, request, "admin.maintenance.toggle", f"enabled={val}")
+    return {"ok": True, "maintenance_mode": body.maintenance_mode}
+
+@api.post("/admin/force-logout-all")
+async def admin_force_logout_all(request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    await db.execute(update(User).where(User.is_admin == False).values(token_version=User.token_version + 1))
+    await db.commit()
+    await _admin_audit(db, admin, request, "admin.auth.force_logout_all", "")
+    return {"ok": True}
+
+async def _delayed_restart():
+    await asyncio.sleep(1.0)
+    logger.info("Emergency self-restart triggered via admin API.")
+    os._exit(0)
+
+@api.post("/admin/restart")
+async def admin_restart(request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    await _admin_audit(db, admin, request, "admin.system.restart", "")
+    asyncio.create_task(_delayed_restart())
+    return {"ok": True, "message": "Backend restart scheduled in 1 second."}
+
+@api.get("/admin/logs")
+async def admin_get_logs(admin: User = Depends(require_admin)):
+    return {"logs": log_buffer.buffer}
+
+@api.post("/admin/clear-cache")
+async def admin_clear_cache(request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    global _gemini_cache_name
+    api_key = await get_setting(db, "llm_api_key", "")
+    old_cache = _gemini_cache_name or await get_setting(db, "gemini_cache_name", "")
+    if old_cache and api_key and GENAI_SDK_AVAILABLE:
+        await asyncio.to_thread(_sync_delete_gemini_cache, api_key, old_cache)
+    _gemini_cache_name = None
+    await set_setting(db, "gemini_cache_name", "")
+    await db.commit()
+    await _admin_audit(db, admin, request, "admin.gemini_cache.clear", "")
+    return {"ok": True}
+
+@api.get("/admin/kb/files")
+async def admin_list_kb_files(admin: User = Depends(require_admin)):
+    pdf_dir = ROOT_DIR / "data" / "kb_pdfs"
+    files = []
+    if pdf_dir.exists():
+        for f in sorted(pdf_dir.glob("*.pdf")):
+            stat = f.stat()
+            files.append({
+                "name": f.name,
+                "size": stat.st_size,
+                "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+            })
+    return {"files": files}
+
+@api.delete("/admin/kb/files/{filename}")
+async def admin_delete_kb_file(filename: str, request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    if "/" in filename or "\\" in filename or filename == ".." or not filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Érvénytelen fájlnév.")
+    pdf_path = ROOT_DIR / "data" / "kb_pdfs" / filename
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="A fájl nem található.")
+    try:
+        pdf_path.unlink()
+        await _admin_audit(db, admin, request, "admin.kb.delete_file", f"filename={filename}")
+        return {"ok": True}
+    except Exception as e:
+        logger.exception(f"Failed to delete file: {filename}")
+        raise HTTPException(status_code=500, detail="Fájl törlése sikertelen.")
+
+@api.post("/admin/kb/files/upload")
+async def admin_upload_kb_file(
+    request: Request,
+    file: UploadFile = File(...),
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db)
+):
+    if not file.filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Csak .pdf fájlok tölthetők fel.")
+    filename = os.path.basename(file.filename)
+    pdf_dir = ROOT_DIR / "data" / "kb_pdfs"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = pdf_dir / filename
+    try:
+        content = await file.read()
+        pdf_path.write_bytes(content)
+        await _admin_audit(db, admin, request, "admin.kb.upload_file", f"filename={filename} size={len(content)}")
+        return {"ok": True, "filename": filename, "size": len(content)}
+    except Exception as e:
+        logger.exception(f"Failed to upload file: {filename}")
+        raise HTTPException(status_code=500, detail="Fájl feltöltése sikertelen.")
 
 
 # ---------- Admin: users ----------

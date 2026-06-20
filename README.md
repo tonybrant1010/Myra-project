@@ -16,7 +16,9 @@ Fontos: a Myra nem hivatalos diagnosztikai vagy terápiás eszköz, és nem hely
 - Zenodo-n publikált technikai és jogi megfelelőségi audit jelentés (DOI: 10.5281/zenodo.20698359);
 - PDF-alapú tudásvisszakeresés: Myra az aktuális üzenethez releváns tudásrészleteket kapja meg, nem a teljes tudásanyagot;
 - chat- és mérési előzmények;
-- admin felület felhasználókhoz, mérésekhez, tudásbázishoz és LLM-beállításokhoz;
+- **Egyesített Adminisztráció menü**: Az admin funkciók egyetlen lenyitható (collapsible) menüpont alá csoportosítva;
+- **Tudásanyag Kezelő (`/admin-kb`)**: PDF fájlok feltöltése, listázása és törlése közvetlenül a felületről, egykattintásos indexeléssel és Gemini Context Cache frissítéssel;
+- **Sürgősségi Eszközök (SOS)**: Valós idejű rendszerdiagnosztika, karbantartási mód, token-érvénytelenítés, Gemini cache ürítés és backend Docker konténer-restart közvetlenül mobiltelefonról;
 - modern Aurora Blue / glassmorphism arculat;
 - Vercel webes frontend;
 - Dockerben futó FastAPI backend;
@@ -54,7 +56,6 @@ backend/
   data/
     kb_pdfs/
       *.pdf
-    knowledge_base.txt
     esv_calc.ods
   tests/                 # Backend integrációs és egységtesztek
 
@@ -91,7 +92,7 @@ volumes:
   - ./backend/data:/app/data
 ```
 
-Ez jelenleg főként a PDF tudásanyag és lokális fejlesztési fájlok helye:
+Ez a PDF tudásanyagok és a lokális fejlesztési fájlok helye:
 
 ```text
 backend/data/kb_pdfs/
@@ -112,6 +113,8 @@ DATABASE_URL=postgresql://...
 DATABASE_SSL=true
 DATABASE_SSL_MODE=require
 EXPO_PUBLIC_BACKEND_URL=http://localhost:8001
+GMAIL_USER=myra.project.hu@gmail.com
+GMAIL_APP_PASSWORD=titkos-gmail-alkalmazaskod
 ```
 
 Indítás:
@@ -132,52 +135,35 @@ Várt válasz:
 {"app_name":"Myra-project"}
 ```
 
-## PDF Tudásanyag
+## PDF Tudásanyag Kezelése és SOS Eszközök
 
-Myra tudásanyaga PDF-ekből épített lokális keresőindexet használ. A cél az, hogy a chat ne kapja meg minden üzenetnél a teljes kutatási anyagot, hanem csak az adott beszélgetési pillanathoz illő, rövid PDF-részleteket. Ez csökkenti a tokenhasználatot és pontosabb kontextust ad az LLM-nek.
+A Myra tudásanyaga PDF-ekből épített lokális keresőindexet és Gemini Context Cache-t használ. A PDF-ek közvetlenül kezelhetők a felhasználói felületen keresztül, nincs szükség kézi szerveroldali parancssor használatára.
 
-A PDF-ek helye szerveren:
+### Adminisztrációs felület elérése
+Bejelentkezés után a navigációs menüben lévő **Adminisztráció** collapsible menü alatt négy rész érhető el:
+1. **Rendszerbeállítások**: modell paraméterek, system prompt, globális közlemények konfigurálása, és az SOS gombok.
+2. **Tudásanyag**: a szerveren tárolt `.pdf` fájlok kezelése (feltöltés és törlés), valamint az index és a Gemini gyorsítótár újraépítése.
+3. **Állapotkódok**: ESV kódok profiljainak és címeinek szerkesztése.
+4. **Felhasználók**: felhasználók admin státuszának kezelése, felfüggesztés.
 
-```text
-backend/data/kb_pdfs/
-```
+### Tudásanyag frissítése a felületről (`/admin-kb`):
+1. Navigálj a **Tudásanyag** menüpontra.
+2. Kattints a **PDF Feltöltése** gombra és válassz ki egy `.pdf` dokumentumot (a szerver kizárólag PDF formátumot fogad el a pontosság és a hibamentesség érdekében).
+3. A törlendő fájlok melletti kuka ikonra kattintva eltávolíthatod a dokumentumot (megerősítő ablak után).
+4. Ha végeztél a módosításokkal, kattints a **Tudásanyag Élesítése** gombra. Ez automatikusan lefolytatja a backend szöveg-kinyerést, a PostgreSQL index frissítést és a Gemini Context Cache megújítását.
 
-Google VM-en:
+### Sürgősségi Eszközök (SOS) használata:
+A Rendszerbeállítások oldal alján található **Sürgősségi Eszközök (SOS)** panel segítségével laptop nélkül, akár mobilról is elvégezhetők az alábbi műveletek:
+- **Rendszerdiagnosztika futtatása**: Ellenőrzi a Supabase adatbázis-kapcsolatot, a Gemini API kulcs meglétét, a TTS hanggeneráló motor állapotát, és a PDF fájlok számát.
+- **Karbantartási mód**: Bekapcsolásával a nem-admin felhasználók egy barátságos tájékoztató üzenetet kapnak, a chat és a hangalapú asszisztens ideiglenesen blokkolásra kerül.
+- **Összes nem-admin kijelentkeztetése**: Azonnal érvényteleníti az összes aktív felhasználói munkamenetet (JWT tokenek azonnali elutasítása a token_version növelésével).
+- **Gemini Context Cache ürítése**: Törli az aktív Gemini cache-t.
+- **Backend konténer újraindítása**: Leállítja a backend python folyamatot (`os._exit(0)`). Mivel a Docker konténer `restart: unless-stopped` szabályra van állítva, a Docker azonnal újraindítja a konténert, így a teljes backend tiszta lappal indul újra 5-10 másodperc alatt.
+- **Élő memórialogok**: Megjeleníti a szerver memóriájában tárolt utolsó 100 log sort a gyors hibakereséshez.
 
-```text
-/home/antalodor/myra/backend/data/kb_pdfs/
-```
+---
 
-Rackhoston:
-
-```text
-/root/backend/data/kb_pdfs/
-```
-
-Új vagy módosított PDF-ek után az indexet újra kell építeni:
-
-```bash
-docker compose exec -T backend sh -c 'cd /app && python - <<'"'"'PY'"'"'
-import asyncio
-from server import SessionLocal, rebuild_pdf_knowledge_index
-
-async def main():
-    async with SessionLocal() as db:
-        print(await rebuild_pdf_knowledge_index(db, "/app/data/kb_pdfs"))
-
-asyncio.run(main())
-PY'
-```
-
-Sikeres eredmény például:
-
-```text
-{'ok': True, 'source_dir': '/app/data/kb_pdfs', 'pdf_count': 28, 'indexed_files': 28, 'chunk_count': 247, 'skipped': []}
-```
-
-Az indexelés a tudásindexet építi újra, nem törli a felhasználókat, méréseket vagy chatelőzményeket.
-
-### Frontend
+### Frontend indítása lokálisan
 
 ```bash
 cd frontend
@@ -234,85 +220,11 @@ Supabase EU Postgres
 
 A rendszer Rackhost VPS-en fut, és felépült egy párhuzamos Google Compute Engine VM környezet is. Mindkét backend ugyanarra a Supabase/Postgres adatbázisra csatlakozik, ezért backendváltáskor nem kell SQLite adatbázist mozgatni.
 
-```text
-Vercel frontend
-  /api rewrite
-Rackhost vagy Google VM backend
-  Docker
-  DATABASE_URL -> Supabase/Postgres
-```
-
 Átállás előtt a Google backend külön tesztelendő, az éles Vercel rewrite csak sikeres login, mérés, chat és admin teszt után módosítható.
-
-## Backend Frissítés Adatvesztés Nélkül
-
-Az éles adatbázis nem a backend mappában él. Frissítés előtt ellenőrizd, hogy a konténer valóban Postgresre csatlakozik:
-
-```bash
-docker compose exec -T backend python - <<'PY'
-import asyncio
-from sqlalchemy import text
-from server import SessionLocal, DB_DIALECT
-
-async def main():
-    async with SessionLocal() as db:
-        users = (await db.execute(text("select count(*) from users"))).scalar()
-        messages = (await db.execute(text("select count(*) from chat_messages"))).scalar()
-        print("DB_DIALECT:", DB_DIALECT)
-        print("users:", users)
-        print("chat_messages:", messages)
-
-asyncio.run(main())
-PY
-```
-
-Ezután jöhet a backend frissítése:
-
-```bash
-docker compose up -d --build
-docker ps
-curl http://localhost:8001/api/config
-```
-
-Ha a frissítés új PDF tudásanyagot is tartalmaz, a `backend/data/kb_pdfs` mappa frissítése után futtasd újra a PDF-indexelést a "PDF Tudásanyag" szakasz szerint.
-
-Nem szabad vakon felülírni:
-
-```text
-.env
-backend/data/kb_pdfs/ ellenőrzés nélkül
-```
 
 ## Backup
 
-Az adatbázis mentéseit kizárólag a Supabase/Postgres beépített biztonsági mentési rendszere végzi. A projekt mappájában semmilyen adatbázis-export fájl nem tárolható.
-
-## Hasznos Ellenőrző Parancsok
-
-Backend konténer:
-
-```bash
-docker ps
-docker logs --tail=100 myra-backend
-curl http://localhost:8001/api/config
-```
-
-Erőforrás:
-
-```bash
-docker stats --no-stream myra-backend
-free -h
-df -h
-du -sh ~/myra/backend/data
-```
-
-Frontend build:
-
-```bash
-cd frontend
-npx expo export --platform web
-node scripts/patch-dist.js
-```
+Az adatbázis mentéseit a Supabase/Postgres beépített biztonsági mentési rendszere végzi. A Rendszerbeállítások felületről gombnyomásra letölthető az adatbázis mentés. A projekt mappájában semmilyen adatbázis-export fájl nem tárolható.
 
 ## Git / Repo Higiénia
 
