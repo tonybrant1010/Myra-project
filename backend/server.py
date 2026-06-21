@@ -175,6 +175,9 @@ class User(Base):
     # Új oszlopok a 6 jegyű biztonsági kódhoz
     reset_token = Column(String(10), nullable=True)
     token_expires_at = Column(DateTime(timezone=True), nullable=True)
+    
+    last_login_ip = Column(String(80), nullable=True)
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class StateCode(Base):
@@ -770,6 +773,12 @@ async def _run_startup_migrations() -> None:
             if "nickname" not in _cols:
                 _conn.execute("ALTER TABLE users ADD COLUMN nickname VARCHAR(50)")
                 print("[startup] migráció: users.nickname hozzáadva")
+            if "last_login_ip" not in _cols:
+                _conn.execute("ALTER TABLE users ADD COLUMN last_login_ip VARCHAR(80)")
+                print("[startup] migráció: users.last_login_ip hozzáadva")
+            if "last_login_at" not in _cols:
+                _conn.execute("ALTER TABLE users ADD COLUMN last_login_at TIMESTAMP WITH TIME ZONE")
+                print("[startup] migráció: users.last_login_at hozzáadva")
             _cols2 = {row[1] for row in _conn.execute("PRAGMA table_info(chat_messages)")}
             if "session_id" not in _cols2:
                 _conn.execute("ALTER TABLE chat_messages ADD COLUMN session_id VARCHAR(40)")
@@ -788,6 +797,8 @@ async def _run_startup_migrations() -> None:
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname VARCHAR(50)"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token VARCHAR(10)"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMP WITH TIME ZONE"))
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_ip VARCHAR(80)"))
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP WITH TIME ZONE"))
         await conn.execute(sql_text("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS session_id VARCHAR(40)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_mfa_challenges_user_id ON mfa_challenges (user_id)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_trusted_devices_user_id ON trusted_devices (user_id)"))
@@ -1348,6 +1359,43 @@ Myra-project csapat""", "plain", "utf-8")
         return False
 
 
+def _send_login_alert_email(user_name: str, user_email: str, is_admin: bool, ip: str, user_agent: str, reason: str):
+    if not GMAIL_USER or not GMAIL_APP_PASSWORD:
+        logger.error("Gmail SMTP credentials are not configured in .env")
+        return False
+
+    role_str = "Adminisztrátor" if is_admin else "Felhasználó"
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    msg = MIMEText(f"""Kedves Adminisztrátor!
+
+Riasztás: Új vagy kritikus bejelentkezés történt a Myra-project alkalmazásban.
+
+- Ok: {reason}
+- Felhasználó: {user_name} ({user_email})
+- Szerepkör: {role_str}
+- Időpont: {date_str}
+- IP-cím: {ip}
+- Eszköz (User-Agent): {user_agent}
+
+Üdvözlettel,
+Myra-project biztonsági rendszer""", "plain", "utf-8")
+
+    msg["Subject"] = f"Biztonsági riasztás: Belépés - {role_str} ({user_email})"
+    msg["From"] = GMAIL_USER
+    msg["To"] = GMAIL_USER  # Küldés a saját email címre
+
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+            server.sendmail(GMAIL_USER, [GMAIL_USER], msg.as_string())
+        return True
+    except Exception as e:
+        logger.error(f"Gmail biztonsági riasztás küldési hiba: {e}")
+        return False
+
+
 
 
 def _client_label(request: Request) -> str:
@@ -1471,7 +1519,11 @@ async def auth_register(body: RegisterBody, request: Request, db: AsyncSession =
     # Admin assignment: first user OR in allowlist
     total = (await db.execute(select(func.count()).select_from(User))).scalar_one()
     is_admin = (email in ADMIN_EMAIL_ALLOWLIST) or (total == 0)
-    user = User(email=email, name=body.name.strip(), password_hash=hash_password(body.password), is_admin=is_admin)
+    current_ip = _client_ip(request)
+    user = User(
+        email=email, name=body.name.strip(), password_hash=hash_password(body.password), is_admin=is_admin,
+        last_login_ip=current_ip, last_login_at=_now()
+    )
     db.add(user)
     await db.flush()
     _record_reg(request)
@@ -1500,12 +1552,38 @@ async def auth_login(body: LoginBody, request: Request, background_tasks: Backgr
             "is_admin": user.is_admin,
             "detail": "Biztonsági kódot küldtünk az email címedre.",
         }
+        
+    current_ip = _client_ip(request)
+    ua = request.headers.get("user-agent", "")[:1000]
+    
+    is_new_location = (user.last_login_ip is not None and user.last_login_ip != current_ip)
+    if user.is_admin or is_new_location:
+        reason = "Adminisztrátori belépés" if user.is_admin else "Bejelentkezés ismeretlen/új IP-címről"
+        background_tasks.add_task(
+            _send_login_alert_email,
+            user.name,
+            user.email,
+            user.is_admin,
+            current_ip,
+            ua,
+            reason
+        )
+        
+    user.last_login_ip = current_ip
+    user.last_login_at = _now()
+    await db.flush()
+
     token = create_access_token(user, mfa_verified=needs_mfa)
     return {"access_token": token, "user": _user_out(user)}
 
 
 @api.post("/auth/mfa/verify")
-async def auth_mfa_verify(body: MfaVerifyBody, request: Request, db: AsyncSession = Depends(get_db)):
+async def auth_mfa_verify(
+    body: MfaVerifyBody,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db)
+):
     res = await db.execute(select(MfaChallenge).where(MfaChallenge.id == body.challenge_id.strip()))
     challenge = res.scalar_one_or_none()
     if not challenge:
@@ -1516,6 +1594,27 @@ async def auth_mfa_verify(body: MfaVerifyBody, request: Request, db: AsyncSessio
         raise HTTPException(status_code=401, detail="Felhasználó nem található vagy fel van függesztve.")
     await _consume_mfa_challenge(db, user, body.challenge_id, body.code, "login")
     device_token = await _create_trusted_device(db, user, request) if (body.remember_device and not user.is_admin) else None
+    
+    current_ip = _client_ip(request)
+    ua = request.headers.get("user-agent", "")[:1000]
+    
+    is_new_location = (user.last_login_ip is not None and user.last_login_ip != current_ip)
+    if user.is_admin or is_new_location:
+        reason = "Adminisztrátori belépés (MFA sikeres)" if user.is_admin else "Bejelentkezés ismeretlen/új IP-címről (MFA sikeres)"
+        background_tasks.add_task(
+            _send_login_alert_email,
+            user.name,
+            user.email,
+            user.is_admin,
+            current_ip,
+            ua,
+            reason
+        )
+        
+    user.last_login_ip = current_ip
+    user.last_login_at = _now()
+    await db.flush()
+
     token = create_access_token(user, mfa_verified=True)
     return {"access_token": token, "user": _user_out(user), "device_token": device_token}
 
