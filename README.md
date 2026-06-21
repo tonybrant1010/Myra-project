@@ -116,6 +116,7 @@ EXPO_PUBLIC_BACKEND_URL=http://localhost:8001
 GMAIL_USER=myra.project.hu@gmail.com
 GMAIL_APP_PASSWORD=titkos-gmail-alkalmazaskod
 TRUST_PROXY=true
+TTS_ENGINE=piper
 ```
 
 Indítás:
@@ -161,6 +162,26 @@ A Rendszerbeállítások oldal alján található **Sürgősségi Eszközök (SO
 - **Gemini Context Cache ürítése**: Törli az aktív Gemini cache-t.
 - **Backend konténer újraindítása**: Leállítja a backend python folyamatot (`os._exit(0)`). Mivel a Docker konténer `restart: unless-stopped` szabályra van állítva, a Docker azonnal újraindítja a konténert, így a teljes backend tiszta lappal indul újra 5-10 másodperc alatt.
 - **Élő memórialogok**: Megjeleníti a szerver memóriájában tárolt utolsó 100 log sort a gyors hibakereséshez.
+
+## Text-to-Speech (TTS) Felolvasó Rendszer
+
+A Myra a válaszok felolvasásához a **Piper TTS** rendszert használja. A felesleges függőségek elkerülése és a gyorsabb Docker build érdekében a korábbi kísérleti *Supertonic* motor teljesen eltávolításra került.
+
+### Felépítés és követelmények:
+
+1. **Binárisok (`backend/tts/`):**
+   - Lokális Windows fejlesztéshez a mappának tartalmaznia kell a `piper.exe`, `espeak-ng.dll`, `onnxruntime.dll`, `piper_phonemize.dll` binárisokat és az `espeak-ng-data` könyvtárat.
+   - Linux / Docker környezetben a rendszer a gazdagép vagy a Docker image-be telepített/másolt Linux-specifikus `piper` binárist használja.
+   - *Megjegyzés:* Ez a mappa a mérete és a platformfüggő binárisok miatt alapértelmezetten ki van zárva a Git verziókövetésből (`.gitignore`).
+
+2. **Hangmodell (`backend/data/tts/`):**
+   - A magyar hangot a `hu_HU-anna-medium.onnx` modell és annak `.json` konfigurációs fájlja biztosítja.
+   - A nem használt egyéb hangmodellek (pl. `berta`, `diana`) eltávolításra kerültek a tárhely-optimalizálás érdekében.
+
+3. **Környezeti változók (.env):**
+   - `TTS_ENGINE`: A használni kívánt motor (`piper` a felolvasáshoz, `none` a kikapcsoláshoz).
+   - `PIPER_BINARY`: A Piper futtatható fájl útvonala (opcionális, ha a `backend/tts` alatt van).
+   - `PIPER_MODEL`: A használni kívánt hangmodell útvonala (alapértelmezetten: `backend/data/tts/hu_HU-anna-medium.onnx`).
 
 ---
 

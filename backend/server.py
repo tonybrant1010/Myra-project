@@ -89,13 +89,6 @@ PIPER_CACHE_MAX_AGE_DAYS = int(os.environ.get("PIPER_CACHE_MAX_AGE_DAYS", "1"))
 PIPER_NOISE_SCALE = os.environ.get("PIPER_NOISE_SCALE", "0.667")
 PIPER_NOISE_W = os.environ.get("PIPER_NOISE_W", "0.8")
 TTS_ENGINE = os.environ.get("TTS_ENGINE", "none").strip().lower()
-SUPERTONIC_MODEL_DIR = Path(os.environ.get("SUPERTONIC_MODEL_DIR", str(DB_FILE_DIR / "tts" / "supertonic-3-hu")))
-SUPERTONIC_SID = int(os.environ.get("SUPERTONIC_SID", "0"))
-SUPERTONIC_NUM_STEPS = int(os.environ.get("SUPERTONIC_NUM_STEPS", "8"))
-SUPERTONIC_SPEED = float(os.environ.get("SUPERTONIC_SPEED", "1.0"))
-
-_supertonic_tts = None
-_supertonic_tts_lock = threading.Lock()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("myra")
@@ -1116,114 +1109,12 @@ def _ensure_piper_ready() -> None:
         raise HTTPException(status_code=503, detail="A felolvasó (TTS) szolgáltatás jelenleg nem érhető el.")
 
 
-def _supertonic_model_files() -> list[Path]:
-    return [
-        SUPERTONIC_MODEL_DIR / "duration_predictor.int8.onnx",
-        SUPERTONIC_MODEL_DIR / "text_encoder.int8.onnx",
-        SUPERTONIC_MODEL_DIR / "vector_estimator.int8.onnx",
-        SUPERTONIC_MODEL_DIR / "vocoder.int8.onnx",
-        SUPERTONIC_MODEL_DIR / "tts.json",
-        SUPERTONIC_MODEL_DIR / "unicode_indexer.bin",
-        SUPERTONIC_MODEL_DIR / "voice.bin",
-    ]
-
-
-def _ensure_supertonic_ready() -> None:
-    missing = [str(path) for path in _supertonic_model_files() if not path.exists()]
-    if missing:
-        logger.error(f"Supertonic model files missing: {', '.join(missing)}")
-        raise HTTPException(status_code=503, detail="A felolvasó (TTS) szolgáltatás jelenleg nem érhető el.")
-
-
-def _get_supertonic_tts():
-    global _supertonic_tts
-    if _supertonic_tts is not None:
-        return _supertonic_tts
-
-    with _supertonic_tts_lock:
-        if _supertonic_tts is not None:
-            return _supertonic_tts
-
-        _ensure_supertonic_ready()
-        try:
-            import sherpa_onnx
-        except ImportError:
-            raise HTTPException(status_code=503, detail="A sherpa-onnx TTS csomag nincs telepitve.")
-
-        tts_config = sherpa_onnx.OfflineTtsConfig(
-            model=sherpa_onnx.OfflineTtsModelConfig(
-                supertonic=sherpa_onnx.OfflineTtsSupertonicModelConfig(
-                    duration_predictor=str(SUPERTONIC_MODEL_DIR / "duration_predictor.int8.onnx"),
-                    text_encoder=str(SUPERTONIC_MODEL_DIR / "text_encoder.int8.onnx"),
-                    vector_estimator=str(SUPERTONIC_MODEL_DIR / "vector_estimator.int8.onnx"),
-                    vocoder=str(SUPERTONIC_MODEL_DIR / "vocoder.int8.onnx"),
-                    tts_json=str(SUPERTONIC_MODEL_DIR / "tts.json"),
-                    unicode_indexer=str(SUPERTONIC_MODEL_DIR / "unicode_indexer.bin"),
-                    voice_style=str(SUPERTONIC_MODEL_DIR / "voice.bin"),
-                ),
-                debug=False,
-                num_threads=2,
-                provider="cpu",
-            )
-        )
-        _supertonic_tts = sherpa_onnx.OfflineTts(tts_config)
-        return _supertonic_tts
-
-
-def _synthesize_supertonic_wav(text_value: str) -> Path:
-    _ensure_supertonic_ready()
-    PIPER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cutoff = time.time() - (PIPER_CACHE_MAX_AGE_DAYS * 86400)
-    for cached in PIPER_CACHE_DIR.glob("*.wav"):
-        try:
-            if cached.stat().st_mtime < cutoff:
-                cached.unlink()
-        except OSError:
-            pass
-
-    model_stamp = "|".join(f"{path.name}:{path.stat().st_mtime_ns}" for path in _supertonic_model_files())
-    cache_key = hashlib.sha256(
-        (
-            f"supertonic|{SUPERTONIC_MODEL_DIR.resolve()}|{model_stamp}|"
-            f"{SUPERTONIC_SID}|{SUPERTONIC_NUM_STEPS}|{SUPERTONIC_SPEED}|{text_value}"
-        ).encode("utf-8")
-    ).hexdigest()
-    out_path = PIPER_CACHE_DIR / f"{cache_key}.wav"
-    if out_path.exists() and out_path.stat().st_size > 44:
-        return out_path
-
-    try:
-        import sherpa_onnx
-        import soundfile as sf
-
-        tts = _get_supertonic_tts()
-        gen_config = sherpa_onnx.GenerationConfig()
-        gen_config.sid = SUPERTONIC_SID
-        gen_config.num_steps = SUPERTONIC_NUM_STEPS
-        gen_config.speed = SUPERTONIC_SPEED
-        gen_config.extra["lang"] = "hu"
-        audio = tts.generate(text_value, gen_config)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("Supertonic audio generation failed")
-        raise HTTPException(status_code=500, detail="Supertonic hanggenerálási hiba történt.")
-
-    tmp_path = PIPER_CACHE_DIR / f"{cache_key}.tmp.wav"
-    sf.write(tmp_path, audio.samples, samplerate=audio.sample_rate)
-    if not tmp_path.exists() or tmp_path.stat().st_size <= 44:
-        raise HTTPException(status_code=500, detail="Supertonic hanggeneralasi hiba: ures wav.")
-    tmp_path.replace(out_path)
-    return out_path
-
-
 def _synthesize_tts_wav(text_value: str) -> Path:
     if TTS_ENGINE == "piper":
         return _synthesize_piper_wav(text_value)
-    if TTS_ENGINE == "supertonic":
-        return _synthesize_supertonic_wav(text_value)
     logger.error(f"Unknown TTS engine configured: {TTS_ENGINE}")
     raise HTTPException(status_code=503, detail="A felolvasó motor nincs megfelelően konfigurálva.")
+
 
 
 def _synthesize_piper_wav(text_value: str) -> Path:
@@ -2780,9 +2671,7 @@ async def admin_diagnostics(admin: User = Depends(require_admin), db: AsyncSessi
             tts_status = f"error: binary not found ({PIPER_BINARY})"
         elif not PIPER_MODEL.exists():
             tts_status = f"error: Anna model not found ({PIPER_MODEL})"
-    elif tts_engine == "supertonic":
-        if not SUPERTONIC_MODEL_DIR.exists():
-            tts_status = f"error: Supertonic model dir not found ({SUPERTONIC_MODEL_DIR})"
+
 
     pdf_dir = ROOT_DIR / "data" / "kb_pdfs"
     pdf_count = 0
