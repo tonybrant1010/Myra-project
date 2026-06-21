@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -63,6 +64,7 @@ export default function AdminSettingsScreen() {
   const [forceLogoutBusy, setForceLogoutBusy] = useState(false);
   const [restartBusy, setRestartBusy] = useState(false);
   const [clearCacheBusy, setClearCacheBusy] = useState(false);
+  const [downBusy, setDownBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -232,6 +234,37 @@ export default function AdminSettingsScreen() {
     }
   };
 
+  const dockerComposeDown = async () => {
+    Alert.alert(
+      "Rendszer leállítása",
+      "Biztosan le akarod állítani a rendszert (docker compose down)? Ez a frontendet és a backendet is leállítja, így a szolgáltatás elérhetetlenné válik!",
+      [
+        { text: "Mégse", style: "cancel" },
+        {
+          text: "LEÁLLÍTÁS",
+          style: "destructive",
+          onPress: async () => {
+            setDownBusy(true);
+            setMsg(null);
+            setErr(null);
+            try {
+              const r = await authedFetch(token, "/api/admin/down", { method: "POST" });
+              if (r.ok) {
+                setMsg("Leállítás elindítva. A szerver le fog állni, a konténerek leállnak.");
+              } else {
+                setErr("Leállítás sikertelen.");
+              }
+            } catch (e: any) {
+              setErr(e.message || "Hiba (a szerver valószínűleg már leállt).");
+            } finally {
+              setDownBusy(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
   if (!user?.is_admin) {
     return (
       <SafeAreaView style={styles.safe}>
@@ -389,9 +422,16 @@ export default function AdminSettingsScreen() {
               </Section>
 
               {/* GROUP 3: SÜRGŐSSÉGI ESZKÖZÖK */}
-              <Section title="Sürgősségi Eszközök (SOS)" icon="warning-outline">
-                <T variant="small" color="rgba(247,251,255,0.66)" style={styles.sectionHelp}>
-                  Rendszerdiagnosztika, karbantartási mód, munkamenetek törlése és backend újraindítása közvetlenül mobilról.
+              <View style={styles.sosCard}>
+                <View style={styles.sosHeader}>
+                  <View style={styles.sosIcon}>
+                    <Ionicons name="warning-outline" size={18} color="#ef5350" />
+                  </View>
+                  <T variant="title" color="#ef5350" style={{ flex: 1, fontWeight: "bold" }}>Sürgősségi Eszközök (SOS)</T>
+                </View>
+
+                <T variant="small" color="rgba(255,255,255,0.7)" style={styles.sectionHelp}>
+                  Rendszerdiagnosztika, karbantartási mód, munkamenetek törlése, backend újraindítás és teljes rendszer-leállítás közvetlenül mobilról.
                 </T>
 
                 {/* Diagnostics Panel */}
@@ -494,6 +534,20 @@ export default function AdminSettingsScreen() {
                   )}
                 </TouchableOpacity>
 
+                {/* Docker Compose Down (New!) */}
+                <TouchableOpacity
+                  style={[styles.emergencyActionBtn, { backgroundColor: "#b71c1c", borderWidth: 1, borderColor: "#ffcdd2" }]}
+                  onPress={dockerComposeDown}
+                  disabled={downBusy}
+                  testID="sos-down-button"
+                >
+                  {downBusy ? (
+                    <ActivityIndicator color={theme.white} />
+                  ) : (
+                    <T variant="label" color={theme.white} style={{ fontWeight: "bold" }}>Rendszer leállítása (Docker Compose Down)</T>
+                  )}
+                </TouchableOpacity>
+
                 {/* In-Memory Logs */}
                 <View style={[styles.emergencyCard, { marginTop: 12 }]}>
                   <TouchableOpacity
@@ -525,7 +579,7 @@ export default function AdminSettingsScreen() {
                     </ScrollView>
                   ) : null}
                 </View>
-              </Section>
+              </View>
             </ScrollView>
           )}
         </KeyboardAvoidingView>
@@ -667,6 +721,26 @@ const styles = StyleSheet.create({
   feedback: { marginBottom: 10, marginTop: 10 },
 
   // Emergency (SOS) styles
+  sosCard: {
+    marginBottom: 20,
+    marginTop: 24,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: "rgba(239, 83, 80, 0.4)",
+    backgroundColor: "rgba(239, 83, 80, 0.08)",
+    padding: 18,
+  },
+  sosHeader: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 14 },
+  sosIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(239, 83, 80, 0.2)",
+    borderWidth: 1,
+    borderColor: "rgba(239, 83, 80, 0.3)",
+  },
   emergencyCard: {
     backgroundColor: "rgba(255,255,255,0.05)",
     borderWidth: 1,

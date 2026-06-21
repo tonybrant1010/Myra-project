@@ -20,6 +20,8 @@ services:
       - TRUST_PROXY=${TRUST_PROXY:-true}
     volumes:
       - ./backend/data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/api/config').status==200 else 1)"]
       interval: 30s

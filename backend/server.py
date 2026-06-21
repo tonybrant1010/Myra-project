@@ -2717,6 +2717,34 @@ async def admin_restart(request: Request, admin: User = Depends(require_admin), 
     asyncio.create_task(_delayed_restart())
     return {"ok": True, "message": "Backend restart scheduled in 1 second."}
 
+
+async def _delayed_down():
+    await asyncio.sleep(1.0)
+    logger.info("Emergency system shutdown (docker compose down) triggered via admin API.")
+    try:
+        import socket
+        for container in ["myra-frontend", "myra-backend"]:
+            try:
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.connect("/var/run/docker.sock")
+                req = f"POST /containers/{container}/stop HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+                s.sendall(req.encode("utf-8"))
+                s.recv(1024)
+                s.close()
+            except Exception as e:
+                logger.error(f"Failed to stop container {container} via UNIX socket: {e}")
+    except Exception as e:
+        logger.error(f"UNIX socket shutdown error: {e}")
+    os._exit(0)
+
+
+@api.post("/admin/down")
+async def admin_down(request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    await _admin_audit(db, admin, request, "admin.system.down", "")
+    asyncio.create_task(_delayed_down())
+    return {"ok": True, "message": "Backend and frontend shutdown scheduled in 1 second."}
+
+
 @api.get("/admin/logs")
 async def admin_get_logs(admin: User = Depends(require_admin)):
     return {"logs": log_buffer.buffer}
