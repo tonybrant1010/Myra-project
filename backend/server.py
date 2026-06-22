@@ -2250,8 +2250,10 @@ async def create_live_token(
         raise HTTPException(status_code=400, detail="A felhasználó állapotkódja nem található.")
 
     system_prompt = await get_setting(db, "system_prompt", DEFAULT_SYSTEM_PROMPT)
-    kb_text = await get_setting(db, "kb_text", "")
-    live_system_prompt = _build_system_prompt(system_prompt, kb_text, state_code, user.name)
+    kb_query = f"{state_code.title}\n{state_code.profile}\n{state_code.severity or ''}"
+    retrieved_chunks = await search_pdf_knowledge(db, kb_query, limit=5)
+    retrieved_kb_context = _build_retrieved_kb_context(retrieved_chunks)
+    live_system_prompt = _build_system_prompt(system_prompt, retrieved_kb_context, state_code, user.name)
     live_system_prompt += (
         "\n\n[LIVE BESZÉLGETÉSI KERET]\n"
         "Magyarul, természetes beszélt nyelven válaszolj. Rövid, jól követhető mondatokat használj. "
