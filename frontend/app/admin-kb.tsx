@@ -167,21 +167,14 @@ export default function AdminKbScreen() {
     setStatusMsg(null);
     setStatusErr(null);
     try {
-      // 1. Re-index PDFs
+      // 1. Re-index PDFs and rebuild DB chunk index
       const r1 = await authedFetch(token, "/api/admin/extract-kb", { method: "POST" });
       const d1 = await r1.json().catch(() => ({}));
       if (!r1.ok) {
         throw new Error(d1.detail || "Hiba történt a PDF-ek indexelése során.");
       }
 
-      // 2. Clear & rebuild Gemini cache
-      const r2 = await authedFetch(token, "/api/admin/init-cache", { method: "POST" });
-      const d2 = await r2.json().catch(() => ({}));
-      if (!r2.ok) {
-        throw new Error(d2.detail || "Hiba történt a Gemini gyorsítótár (cache) létrehozása során.");
-      }
-
-      setStatusMsg(`Sikeres élesítés: ${d1.pdf_count} PDF szövege kinyerve és a Gemini cache frissítve.`);
+      setStatusMsg(`Sikeres élesítés: ${d1.pdf_count} PDF szövege kinyerve és indexelve.`);
     } catch (e: any) {
       setStatusErr(e.message || "Hiba az élesítés során.");
     } finally {
@@ -225,7 +218,7 @@ export default function AdminKbScreen() {
         <View style={styles.container}>
           <View style={styles.headerCard}>
             <T variant="small" color="rgba(247,251,255,0.72)" style={{ lineHeight: 20 }}>
-              Itt tudod kezelni a Myra chatbot által használt PDF alapú tudásanyagokat. Tölts fel dokumentumokat, töröld a feleslegeseket, majd nyomd meg a „Tudásanyag Élesítése” gombot a változások életbe lépéséhez és a Gemini cache frissítéséhez.
+              Itt tudod kezelni a Myra chatbot által használt PDF alapú tudásanyagokat. Tölts fel dokumentumokat, töröld a feleslegeseket, majd nyomd meg a „Tudásanyag Élesítése” gombot a változások életbe lépéséhez.
             </T>
           </View>
 

@@ -63,9 +63,7 @@ export default function AdminSettingsScreen() {
   const [showLogs, setShowLogs] = useState(false);
   const [forceLogoutBusy, setForceLogoutBusy] = useState(false);
   const [restartBusy, setRestartBusy] = useState(false);
-  const [clearCacheBusy, setClearCacheBusy] = useState(false);
   const [downBusy, setDownBusy] = useState(false);
-
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -195,24 +193,6 @@ export default function AdminSettingsScreen() {
       setErr(e.message || "Hiba.");
     } finally {
       setForceLogoutBusy(false);
-    }
-  };
-
-  const clearGeminiCache = async () => {
-    setClearCacheBusy(true);
-    setMsg(null);
-    setErr(null);
-    try {
-      const r = await authedFetch(token, "/api/admin/clear-cache", { method: "POST" });
-      if (r.ok) {
-        setMsg("Gemini Cache sikeresen törölve.");
-      } else {
-        setErr("Cache törlése sikertelen.");
-      }
-    } catch (e: any) {
-      setErr(e.message || "Hiba.");
-    } finally {
-      setClearCacheBusy(false);
     }
   };
 
@@ -503,20 +483,6 @@ export default function AdminSettingsScreen() {
                     <ActivityIndicator color={theme.white} />
                   ) : (
                     <T variant="label" color={theme.white}>Összes nem-admin kijelentkeztetése</T>
-                  )}
-                </TouchableOpacity>
-
-                {/* Clear Gemini Cache */}
-                <TouchableOpacity
-                  style={styles.emergencyOutlineBtn}
-                  onPress={clearGeminiCache}
-                  disabled={clearCacheBusy}
-                  testID="sos-clear-cache-button"
-                >
-                  {clearCacheBusy ? (
-                    <ActivityIndicator color={theme.accent} />
-                  ) : (
-                    <T variant="label" color={theme.accent}>Gemini Context Cache ürítése</T>
                   )}
                 </TouchableOpacity>
 

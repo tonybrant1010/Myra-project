@@ -54,8 +54,6 @@ try:
 except ImportError:
     GOOGLE_GENAI_AVAILABLE = False
 
-_gemini_cache_name: Optional[str] = None
-
 # ---------- Config ----------
 JWT_SECRET = os.environ.get("JWT_SECRET", "")
 JWT_ALG = os.environ.get("JWT_ALG", "HS256")
@@ -2027,55 +2025,6 @@ def _build_system_prompt(
     return "\n".join(parts)
 
 
-# ---------- Gemini Context Cache helpers (sync → asyncio.to_thread) ----------
-def _sync_create_gemini_cache(api_key: str, system_prompt: str, pdf_dir: Path) -> str:
-    genai_sdk.configure(api_key=api_key)
-    uploaded = []
-    for pdf_path in sorted(pdf_dir.glob("*.pdf")):
-        logger.info(f"Uploading {pdf_path.name} to Gemini File API...")
-        f = genai_sdk.upload_file(path=str(pdf_path), mime_type="application/pdf")
-        uploaded.append(f)
-    if not uploaded:
-        raise ValueError("Nem találhatók PDF fájlok az adatkönyvtárban.")
-    logger.info("Creating Gemini Context Cache...")
-    cache = genai_caching.CachedContent.create(
-        model="models/gemini-2.5-flash",
-        display_name="myra_kb_cache",
-        system_instruction=system_prompt,
-        contents=uploaded,
-        ttl=timedelta(hours=1),
-    )
-    logger.info(f"Cache created: {cache.name}")
-    return cache.name
-
-
-def _sync_refresh_gemini_cache(api_key: str, cache_name: str) -> bool:
-    try:
-        genai_sdk.configure(api_key=api_key)
-        cache = genai_caching.CachedContent.get(cache_name)
-        cache.update(ttl=timedelta(hours=1))
-        return True
-    except Exception as e:
-        logger.warning(f"Cache refresh failed: {e}")
-        return False
-
-
-def _sync_delete_gemini_cache(api_key: str, cache_name: str) -> None:
-    try:
-        genai_sdk.configure(api_key=api_key)
-        genai_caching.CachedContent.delete(name=cache_name)
-    except Exception as e:
-        logger.warning(f"Gemini Cache API deletion failed: {e}")
-
-
-
-def _sync_call_gemini_cached(api_key: str, cache_name: str, contents: list) -> str:
-    genai_sdk.configure(api_key=api_key)
-    cache = genai_caching.CachedContent.get(cache_name)
-    model = genai_sdk.GenerativeModel.from_cached_content(cached_content=cache)
-    response = model.generate_content(contents=contents)
-    return response.text
-
 
 async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str, history: List[dict], user_message: str) -> str:
     if not api_key:
@@ -2254,84 +2203,16 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
 
     reply: Optional[str] = None
 
-    # --- Gemini Context Cache útvonal ---
-    if provider == "gemini" and GENAI_SDK_AVAILABLE:
-        global _gemini_cache_name
-        cache_name = _gemini_cache_name or await get_setting(db, "gemini_cache_name", "")
-        if cache_name:
-            refreshed = await asyncio.to_thread(_sync_refresh_gemini_cache, api_key, cache_name)
-            if refreshed:
-                _gemini_cache_name = cache_name
-                state_block = _build_state_block(sc, user.name)
-                
-                # Dynamic time context for cache
-                months = ["január", "február", "március", "április", "május", "június",
-                          "július", "augusztus", "szeptember", "október", "november", "december"]
-                weekdays = ["hétfő", "kedd", "szerda", "csütörtök", "péntek", "szombat", "vasárnap"]
-                now_cache = _now()
-                m_name = months[now_cache.month - 1]
-                w_name = weekdays[now_cache.weekday()]
-                time_block_cache = f"Aktuális időpont: {now_cache.year}. {m_name} {now_cache.day}., {w_name}, {now_cache.strftime('%H:%M')}\n"
-                
-                if user.code_verified_at:
-                    if user.code_verified_at.tzinfo is None:
-                        age = now_cache.replace(tzinfo=None) - user.code_verified_at
-                    else:
-                        age = now_cache - user.code_verified_at
-                    v_m_name = months[user.code_verified_at.month - 1]
-                    time_block_cache += (
-                        f"Felhasználó stresszfelmérése (mérése): {age.days} napja történt ({user.code_verified_at.year}. {v_m_name} {user.code_verified_at.day}.)\n"
-                        f"Mérési kód érvényessége: még {max(0, 30 - age.days)} napig aktív (a 30 napos ciklusból)\n"
-                    )
-                time_block_cache += (
-                    "FONTOS: A beszélgetés előzményeiben szereplő üzenetek időbélyeggel vannak ellátva (pl. [2026.06.18 09:00]). "
-                    "A saját válaszaid elejére vagy szövegébe SOHA NE tegyél időbélyeget, egyszerűen csak küldd el a tiszta válaszodat."
-                )
-
-                cached_contents = [
-                    {"role": "user", "parts": [{"text": f"[BELSŐ KONTEXTUS – soha ne idézd a felhasználónak]\n{state_block}"}]},
-                    {"role": "model", "parts": [{"text": "Megértettem."}]},
-                    {"role": "user", "parts": [{"text": f"[IDŐ KONTEXTUS]\n{time_block_cache}"}]},
-                    {"role": "model", "parts": [{"text": "Megértettem, figyelembe veszem a dátumot, az eltelt időt és a mérés korát."}]},
-                ]
-                if crisis_context:
-                    cached_contents.extend([
-                        {"role": "user", "parts": [{"text": f"[BIZTONSÁGI KONTEXTUS]\n{crisis_context}"}]},
-                        {"role": "model", "parts": [{"text": "Megértettem, a biztonsági keretet elsőbbségben tartom."}]},
-                    ])
-                if retrieved_kb_context:
-                    cached_contents.extend([
-                        {"role": "user", "parts": [{"text": f"[AKTUÁLISAN RELEVÁNS PDF-TUDÁS]\n{retrieved_kb_context}"}]},
-                        {"role": "model", "parts": [{"text": "Megértettem."}]},
-                    ])
-                for m in history:
-                    cached_contents.append({
-                        "role": "user" if m["role"] == "user" else "model",
-                        "parts": [{"text": m["text"]}],
-                    })
-                now_ts_str = now_cache.strftime("%Y.%m.%d %H:%M")
-                cached_contents.append({"role": "user", "parts": [{"text": f"[{now_ts_str}] {text}"}]})
-                try:
-                    reply = await asyncio.to_thread(_sync_call_gemini_cached, api_key, cache_name, cached_contents)
-                except Exception as e:
-                    logger.warning(f"Cached Gemini call failed, falling back to direct API: {e}")
-                    _gemini_cache_name = None
-                    reply = None
-            else:
-                _gemini_cache_name = None
-
-    # --- Hagyományos útvonal (fallback) ---
-    if reply is None:
-        effective_kb = "\n\n".join(part for part in [kb_text.strip(), crisis_context, retrieved_kb_context] if part)
-        sys_prompt = _build_system_prompt(sys_prompt_base, effective_kb, sc, user.name, user.code_verified_at)
-        try:
-            now_ts_str = _now().strftime("%Y.%m.%d %H:%M")
-            reply = await _call_llm(provider, model, api_key, sys_prompt, history, f"[{now_ts_str}] {text}")
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.exception("LLM error")
-            raise HTTPException(status_code=502, detail="Váratlan hiba történt a válaszadás során.")
+    effective_kb = "\n\n".join(part for part in [crisis_context, retrieved_kb_context] if part)
+    sys_prompt = _build_system_prompt(sys_prompt_base, effective_kb, sc, user.name, user.code_verified_at)
+    try:
+        now_ts_str = _now().strftime("%Y.%m.%d %H:%M")
+        reply = await _call_llm(provider, model, api_key, sys_prompt, history, f"[{now_ts_str}] {text}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("LLM error")
+        raise HTTPException(status_code=502, detail="Váratlan hiba történt a válaszadás során.")
 
     ai_msg = ChatMessage(id=str(uuid.uuid4()), user_id=user.id, state_code=user.state_code,
                          session_id=active_session_id, role="assistant", text=str(reply))
@@ -2619,33 +2500,9 @@ async def admin_extract_kb(request: Request, admin: User = Depends(require_admin
     if not combined:
         raise HTTPException(status_code=400, detail="Egyik PDF-ből sem sikerült szöveget kinyerni.")
     await set_setting(db, "kb_text", combined)
+    await rebuild_pdf_knowledge_index(db)
     await _admin_audit(db, admin, request, "admin.kb.extract", f"pdf_count={len(pdf_files)} total_chars={len(combined)}")
     return {"ok": True, "pdf_count": len(pdf_files), "total_chars": len(combined)}
-
-
-# ---------- Admin: Gemini cache ----------
-@api.post("/admin/init-cache")
-async def admin_init_cache(request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    global _gemini_cache_name
-    if not GENAI_SDK_AVAILABLE:
-        raise HTTPException(status_code=400, detail="google-generativeai csomag nincs telepítve a szerveren.")
-    api_key = await get_setting(db, "llm_api_key", "")
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Nincs Gemini API kulcs beállítva.")
-    system_prompt = await get_setting(db, "system_prompt", DEFAULT_SYSTEM_PROMPT)
-    pdf_dir = ROOT_DIR / "data" / "kb_pdfs"
-    pdf_files = list(pdf_dir.glob("*.pdf"))
-    if not pdf_files:
-        raise HTTPException(status_code=400, detail="Nem találhatók PDF fájlok a szerveren (/data/kb_pdfs mappa).")
-    try:
-        cache_name = await asyncio.to_thread(_sync_create_gemini_cache, api_key, system_prompt, pdf_dir)
-        _gemini_cache_name = cache_name
-        await set_setting(db, "gemini_cache_name", cache_name)
-        await _admin_audit(db, admin, request, "admin.gemini_cache.init", f"pdf_count={len(pdf_files)}")
-        return {"ok": True, "cache_name": cache_name, "pdf_count": len(pdf_files)}
-    except Exception as e:
-        logger.exception("Cache init error")
-        raise HTTPException(status_code=500, detail="A gyorsítótár (cache) inicializálása sikertelen.")
 
 
 # ---------- Admin: Emergency Tools & KB Files ----------
@@ -2748,19 +2605,6 @@ async def admin_down(request: Request, admin: User = Depends(require_admin), db:
 @api.get("/admin/logs")
 async def admin_get_logs(admin: User = Depends(require_admin)):
     return {"logs": log_buffer.buffer}
-
-@api.post("/admin/clear-cache")
-async def admin_clear_cache(request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    global _gemini_cache_name
-    api_key = await get_setting(db, "llm_api_key", "")
-    old_cache = _gemini_cache_name or await get_setting(db, "gemini_cache_name", "")
-    if old_cache and api_key and GENAI_SDK_AVAILABLE:
-        await asyncio.to_thread(_sync_delete_gemini_cache, api_key, old_cache)
-    _gemini_cache_name = None
-    await set_setting(db, "gemini_cache_name", "")
-    await db.commit()
-    await _admin_audit(db, admin, request, "admin.gemini_cache.clear", "")
-    return {"ok": True}
 
 @api.get("/admin/kb/files")
 async def admin_list_kb_files(admin: User = Depends(require_admin)):
