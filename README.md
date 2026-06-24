@@ -1,29 +1,50 @@
 # Myra Project
 
-Magyar nyelvű mentálhigiénés önismereti webapp. A rendszer ESV-modell alapú mérést végez, állapotkódot számol, majd a mérés eredményére építve indít beszélgetést a Myra chatfelületen.
+Magyar nyelvu mentalhigienes onismereti webapp. A rendszer ESV-modell alapu merest vegez, allapotkodot szamol, majd a meres eredmenyere epitve indit beszelgetest a Myra chatfeluleten.
 
-Fontos: a Myra nem hivatalos diagnosztikai vagy terápiás eszköz, és nem helyettesít szakembert.
+Fontos: a Myra nem hivatalos diagnosztikai vagy terapias eszkoz, es nem helyettesit szakembert.
 
-## Fő Funkciók
+## Eles Architektura
 
-- felhasználói regisztráció és bejelentkezés;
-- ESV-modell alapú kérdőív;
-- 256 állapotkód kezelése;
-- mérési eredményoldal;
-- méréshez kötött Myra chat;
-- felhasználó kifejezett adatvédelmi hozzájárulását kezelő indító kártya a mérés megkezdése előtt;
-- fix önismereti tájékoztatók és disclaimerek a mérés, a chat és a Live beszélgetések felületén;
-- Zenodo-n publikált technikai és jogi megfelelőségi audit jelentés (DOI: 10.5281/zenodo.20698359);
-- PDF-alapú tudásvisszakeresés: Myra az aktuális üzenethez releváns tudásrészleteket kapja meg, nem a teljes tudásanyagot;
-- chat- és mérési előzmények;
-- **Egyesített Adminisztráció menü**: Az admin funkciók egyetlen lenyitható (collapsible) menüpont alá csoportosítva;
-- **Tudásanyag Kezelő (`/admin-kb`)**: PDF fájlok feltöltése, listázása és törlése közvetlenül a felületről, egykattintásos indexeléssel és Gemini Context Cache frissítéssel;
-- **Sürgősségi Eszközök (SOS)**: Valós idejű rendszerdiagnosztika, karbantartási mód, token-érvénytelenítés, Gemini cache ürítés és backend Docker konténer-restart közvetlenül mobiltelefonról;
-- modern Aurora Blue / glassmorphism arculat;
-- Vercel webes frontend;
-- Dockerben futó FastAPI backend;
-- EU régiós Supabase/Postgres adatbázis érzékeny felhasználói adatokhoz;
-- 30 napos mérési érvényességi ciklus és automatikus beszélgetés-archiválás (lock & gate) rendszer.
+```text
+Felhasznalo bongeszoje
+  |
+  v
+Vercel frontend
+  - Expo web export
+  - /api utvonalak Vercel Function proxyn keresztul
+  - X-Myra-Proxy-Secret header hozzaadasa
+  |
+  v
+Google Cloud VM backend
+  - Docker Compose
+  - FastAPI / Uvicorn
+  - PDF fajlok: /app/data/kb_pdfs
+  |
+  v
+Supabase EU Postgres
+  - felhasznalok
+  - meresi adatok
+  - chat elozmenyek
+  - knowledge_chunks + pgvector embedding_384
+```
+
+A frontend Vercelen fut. A backend Google Cloud VM-en fut Docker kontenerben. Az adatbazis helye Supabase/Postgres. A VM-en nem fut frontend kontener.
+
+## Fo Funkciok
+
+- felhasznaloi regisztracio, bejelentkezes es MFA email kod;
+- ESV-modell alapu kerdoiv es allapotkod-szamitas;
+- meresi eredmenyoldal;
+- mereshez kotott Myra chat;
+- chat- es meresi elozmenyek;
+- bovitett chat kontextus ugyanazon meresi szalon belul;
+- TXT beszelgetes-export a chat feluletrol;
+- PDF-alapu RAG tudasvisszakereses;
+- admin tudasanyag-kezeles PDF feltoltessel, torlessel es hatterben futo elesitessel;
+- admin rendszerbeallitasok, karbantartasi mod es SOS eszkozok;
+- 30 napos meresi ervenyessegi ciklus es archivalt olvashato beszelgetesek;
+- Vercel frontend, VM backend, Supabase adatbazis.
 
 ## Stack
 
@@ -32,11 +53,15 @@ Fontos: a Myra nem hivatalos diagnosztikai vagy terápiás eszköz, és nem hely
 - Python 3.11
 - FastAPI
 - SQLAlchemy async
-- Supabase/Postgres / `asyncpg` (kizárólagos adatbázis mind lokális, mind éles környezetben)
-- PDF-alapú tudásindex Postgres kompatibilis kereséssel
+- asyncpg
+- Supabase/Postgres
+- pgvector
+- FastEmbed 384 dimenzios lokalis embedding
+- pypdf PDF szovegkinyeres
 - JWT auth
+- Gmail SMTP MFA kodokhoz
 - Docker / Docker Compose
-- LLM provider: admin felületen konfigurálható, jelenleg főként Gemini használatra optimalizálva
+- LLM provider admin feluletrol konfiguralva
 
 ### Frontend
 
@@ -46,18 +71,138 @@ Fontos: a Myra nem hivatalos diagnosztikai vagy terápiás eszköz, és nem hely
 - Vercel deploy
 - Expo web export
 
-## Mappa Struktúra
+## Fontos Mukodesi Reszletek
+
+### Vercel API proxy
+
+A bongeszobol indulo API hivasok `/api/...` utvonalra mennek. Vercelen ezt a `dist/api/proxy.js` Vercel Function kezeli, amely:
+
+- tovabbitja a kerest a VM backend fele;
+- hozzaadja a `X-Myra-Proxy-Secret` headert;
+- megakadalyozza, hogy a backend publikus originje kozvetlenul hasznalhato legyen.
+
+Emiatt a bongeszoben gyakran ilyen utvonal latszik:
+
+```text
+/api/api/auth/login
+```
+
+Ez szandekos. Az elso `/api` a Vercel proxy utvonala, a masodik `/api` a FastAPI backend prefixe.
+
+### Backend origin vedelem
+
+A backend csak akkor fogad el eles kulso kerest, ha a keresben szerepel a helyes:
+
+```text
+X-Myra-Proxy-Secret
+```
+
+Ha ez hianyzik vagy rossz, a backend valasza:
+
+```json
+{"detail":"Direct access to origin is forbidden."}
+```
+
+A VM `.env` es a Vercel project env ugyanazt a `MYRA_PROXY_SECRET` erteket kell hasznalja.
+
+### Supabase IP allowlist
+
+Ha a Google VM kulso IP-je megvaltozik, a Supabase Database Network Restrictions / allowlist alatt frissiteni kell az IP-t:
+
+```text
+<VM_EXTERNAL_IP>/32
+```
+
+A Vercel IP valtozasa ezt nem erinti, mert a Supabase adatbazishoz a backend VM csatlakozik.
+
+## RAG / Tudasanyag
+
+A tudasanyag PDF-ekbol epul:
+
+```text
+backend/data/kb_pdfs/*.pdf
+```
+
+A backend a PDF-ekbol szoveget nyer ki, chunkokra bontja, FastEmbed embeddinget keszit, majd Supabase-ben tarolja:
+
+```text
+knowledge_chunks.embedding_384 vector(384)
+```
+
+Az aktiv oszlop:
+
+```text
+embedding_384
+```
+
+A regi 768 dimenzios `embedding` oszlop mar nem hasznalatos.
+
+### Supabase elvart ellenorzes
+
+```sql
+select
+  count(*) as chunks,
+  count(embedding_384) as embedded_384
+from knowledge_chunks;
+
+select
+  source_name,
+  count(*) as chunks,
+  count(embedding_384) as embedded
+from knowledge_chunks
+group by source_name
+order by source_name;
+```
+
+Jo allapotban:
+
+- `chunks = embedded_384`;
+- fajlonkent `chunks = embedded`;
+- jelenlegi teljes tudasanyag: 31 PDF, 271 chunk.
+
+### Tudasanyag elesitese
+
+Az admin feluleten a **Tudasanyag elesitese** gomb hatterfolyamatot indit. A folyamat:
+
+1. beolvassa a PDF-eket;
+2. frissiti a `kb_text` beallitast;
+3. ujraepiti a `knowledge_chunks` tablat;
+4. minden chunkhoz `embedding_384` vektort keszit.
+
+Fontos: rebuild kozben a tabla atmenetileg kiurulhet. Ez normalis, amig a chunk szam utana ujra novekszik.
+
+## Chat
+
+A chat az aktualis meresi sessionhoz kotodik. A backend a beszelgetes korabbi uzeneteibol kontrollalt meretu kontextust ad at az LLM-nek.
+
+Hangolhato env valtozok:
+
+```env
+CHAT_HISTORY_MAX_MESSAGES=120
+CHAT_HISTORY_MAX_CHARS=45000
+```
+
+Ha a valaszadas tul lassu, ezeket kisebb ertekre lehet venni, peldaul:
+
+```env
+CHAT_HISTORY_MAX_MESSAGES=60
+CHAT_HISTORY_MAX_CHARS=25000
+```
+
+A chat feluleten a betoltott beszelgetes TXT fajlkent letoltheto.
+
+## Mappa Struktura
 
 ```text
 backend/
   server.py
   requirements.txt
   Dockerfile
+  .dockerignore
   data/
     kb_pdfs/
       *.pdf
     esv_calc.ods
-  tests/                 # Backend integrációs és egységtesztek
 
 frontend/
   app/
@@ -68,124 +213,77 @@ frontend/
   package.json
 
 publication/
-  self_audit_report.docx # Hitelesített önértékelési jelentés
-  myra_data_flow_map.png # Adatfolyam és architektúra térkép
-
 tests/
-  __init__.py            # Root tesztelési modul
-
 docker-compose.yml
 README.md
 ```
 
-## Adatkezelés
+## Backend Uzemeltetes VM-en
 
-Az éles és a lokális fejlesztési adatok kizárólag EU régiós Supabase/Postgres adatbázisban élnek. A backend a `DATABASE_URL`, `DATABASE_SSL` és `DATABASE_SSL_MODE` környezeti változókból olvassa a kapcsolatot.
+Frissites tipikus menete, ha `.tgz` csomag kerul fel a VM home mappajaba:
 
-> [!IMPORTANT]
-> A projektben szigorúan tilos bármilyen SQLite `.db` fájl vagy egyéb lokális adatbázis-fájl használata, generálása és commitolása a repóba. A rendszer kizárólagos adatbázisa a Supabase/PostgreSQL.
-
-A backend konténerben az adatkönyvtár továbbra is bind mounttal van bekötve:
-
-```yaml
-volumes:
-  - ./backend/data:/app/data
+```bash
+mv ~/backend-update.tgz ~/myra/
+cd ~/myra
+tar -xzvf backend-update.tgz -C ~/myra/
+docker compose build backend
+docker compose up -d backend
 ```
 
-Ez a PDF tudásanyagok és a lokális fejlesztési fájlok helye:
+Ellenorzes:
 
-```text
-backend/data/kb_pdfs/
+```bash
+cd ~/myra
+docker ps -a
+docker logs --tail 80 myra-backend
+docker stats myra-backend --no-stream
 ```
 
-Backend frissítéskor a konténer újraépíthető; az éles adatbázis ettől nem sérül, mert nem a konténerben és nem a VM fájlrendszerén tárolódik. A PDF tudásindex a Postgres adatbázis `knowledge_chunks` táblájában épül újra a `backend/data/kb_pdfs` PDF-jeiből.
+Targyhely ellenorzes:
 
-## Lokális Fejlesztés
-
-### Backend Dockerrel
-
-Gyökérben hozz létre egy `.env` fájlt:
-
-```env
-JWT_SECRET=legalabb-32-karakteres-titok
-ADMIN_EMAIL_ALLOWLIST=admin@email.hu
-DATABASE_URL=postgresql://...
-DATABASE_SSL=true
-DATABASE_SSL_MODE=require
-EXPO_PUBLIC_BACKEND_URL=http://localhost:8001
-GMAIL_USER=myra.project.hu@gmail.com
-GMAIL_APP_PASSWORD=titkos-gmail-alkalmazaskod
-TRUST_PROXY=true
-TTS_ENGINE=piper
+```bash
+df -h /
+docker system df
 ```
 
-Indítás:
+Build cache biztonsagos takaritasa:
+
+```bash
+docker builder prune -f
+```
+
+## Frontend Deploy
+
+A frontend deploy a `frontend` mappabol tortenik:
+
+```bash
+cd frontend
+npm run deploy
+```
+
+Windows CMD:
+
+```cmd
+cd /d C:\Users\TonyBrant\Desktop\Myra-Project-App\Myra-project-main\frontend && npm run deploy
+```
+
+A deploy folyamat:
+
+1. Expo web export keszul.
+2. `scripts/patch-dist.js` javitja a `dist` kimenetet.
+3. Letrejon a Vercel proxy function.
+4. Frissul a `dist/vercel.json`.
+5. Vercel production deploy fut.
+
+## Lokalis Fejlesztes
+
+Backend:
 
 ```bash
 docker compose up -d --build
 ```
 
-Backend ellenőrzés:
-
-```bash
-curl http://localhost:8001/api/config
-```
-
-Várt válasz:
-
-```json
-{"app_name":"Myra-project"}
-```
-
-## PDF Tudásanyag Kezelése és SOS Eszközök
-
-A Myra tudásanyaga PDF-ekből épített lokális keresőindexet és Gemini Context Cache-t használ. A PDF-ek közvetlenül kezelhetők a felhasználói felületen keresztül, nincs szükség kézi szerveroldali parancssor használatára.
-
-### Adminisztrációs felület elérése
-Bejelentkezés után a navigációs menüben lévő **Adminisztráció** collapsible menü alatt négy rész érhető el:
-1. **Rendszerbeállítások**: modell paraméterek, system prompt, globális közlemények konfigurálása, és az SOS gombok.
-2. **Tudásanyag**: a szerveren tárolt `.pdf` fájlok kezelése (feltöltés és törlés), valamint az index és a Gemini gyorsítótár újraépítése.
-3. **Állapotkódok**: ESV kódok profiljainak és címeinek szerkesztése.
-4. **Felhasználók**: felhasználók admin státuszának kezelése, felfüggesztés.
-
-### Tudásanyag frissítése a felületről (`/admin-kb`):
-1. Navigálj a **Tudásanyag** menüpontra.
-2. Kattints a **PDF Feltöltése** gombra és válassz ki egy `.pdf` dokumentumot (a szerver kizárólag PDF formátumot fogad el a pontosság és a hibamentesség érdekében).
-3. A törlendő fájlok melletti kuka ikonra kattintva eltávolíthatod a dokumentumot (megerősítő ablak után).
-4. Ha végeztél a módosításokkal, kattints a **Tudásanyag Élesítése** gombra. Ez automatikusan lefolytatja a backend szöveg-kinyerést, a PostgreSQL index frissítést és a Gemini Context Cache megújítását.
-
-### Sürgősségi Eszközök (SOS) használata:
-A Rendszerbeállítások oldal alján található **Sürgősségi Eszközök (SOS)** panel segítségével laptop nélkül, akár mobilról is elvégezhetők az alábbi műveletek:
-- **Rendszerdiagnosztika futtatása**: Ellenőrzi a Supabase adatbázis-kapcsolatot, a Gemini API kulcs meglétét, a TTS hanggeneráló motor állapotát, és a PDF fájlok számát.
-- **Karbantartási mód**: Bekapcsolásával a nem-admin felhasználók egy barátságos tájékoztató üzenetet kapnak, a chat és a hangalapú asszisztens ideiglenesen blokkolásra kerül.
-- **Összes nem-admin kijelentkeztetése**: Azonnal érvényteleníti az összes aktív felhasználói munkamenetet (JWT tokenek azonnali elutasítása a token_version növelésével).
-- **Gemini Context Cache ürítése**: Törli az aktív Gemini cache-t.
-- **Backend konténer újraindítása**: Leállítja a backend python folyamatot (`os._exit(0)`). Mivel a Docker konténer `restart: unless-stopped` szabályra van állítva, a Docker azonnal újraindítja a konténert, így a teljes backend tiszta lappal indul újra 5-10 másodperc alatt.
-- **Élő memórialogok**: Megjeleníti a szerver memóriájában tárolt utolsó 100 log sort a gyors hibakereséshez.
-
-## Text-to-Speech (TTS) Felolvasó Rendszer
-
-A Myra a válaszok felolvasásához a **Piper TTS** rendszert használja. A felesleges függőségek elkerülése és a gyorsabb Docker build érdekében a korábbi kísérleti *Supertonic* motor teljesen eltávolításra került.
-
-### Felépítés és követelmények:
-
-1. **Binárisok (`backend/tts/`):**
-   - Lokális Windows fejlesztéshez a mappának tartalmaznia kell a `piper.exe`, `espeak-ng.dll`, `onnxruntime.dll`, `piper_phonemize.dll` binárisokat és az `espeak-ng-data` könyvtárat.
-   - Linux / Docker környezetben a rendszer a gazdagép vagy a Docker image-be telepített/másolt Linux-specifikus `piper` binárist használja.
-   - *Megjegyzés:* Ez a mappa a mérete és a platformfüggő binárisok miatt alapértelmezetten ki van zárva a Git verziókövetésből (`.gitignore`).
-
-2. **Hangmodell (`backend/data/tts/`):**
-   - A magyar hangot a `hu_HU-anna-medium.onnx` modell és annak `.json` konfigurációs fájlja biztosítja.
-   - A nem használt egyéb hangmodellek (pl. `berta`, `diana`) eltávolításra kerültek a tárhely-optimalizálás érdekében.
-
-3. **Környezeti változók (.env):**
-   - `TTS_ENGINE`: A használni kívánt motor (`piper` a felolvasáshoz, `none` a kikapcsoláshoz).
-   - `PIPER_BINARY`: A Piper futtatható fájl útvonala (opcionális, ha a `backend/tts` alatt van).
-   - `PIPER_MODEL`: A használni kívánt hangmodell útvonala (alapértelmezetten: `backend/data/tts/hu_HU-anna-medium.onnx`).
-
----
-
-### Frontend indítása lokálisan
+Frontend:
 
 ```bash
 cd frontend
@@ -194,63 +292,33 @@ set EXPO_PUBLIC_BACKEND_URL=http://localhost:8001
 npx expo start --web
 ```
 
-Windows CMD-ben egy parancsban:
+## Kotelezo Env Valtozok
 
-```cmd
-set EXPO_PUBLIC_BACKEND_URL=http://localhost:8001&& npx expo start --web
+Backend / VM:
+
+```env
+JWT_SECRET=...
+DATABASE_URL=postgresql://...
+DATABASE_SSL=true
+DATABASE_SSL_MODE=require
+MYRA_PROXY_SECRET=...
+GMAIL_USER=...
+GMAIL_APP_PASSWORD=...
+TRUST_PROXY=true
+TTS_ENGINE=piper
 ```
 
-## Vercel Deploy
+Vercel:
 
-A frontend deploy a `frontend` mappából történik:
-
-```bash
-cd frontend
-npm run deploy
+```env
+MYRA_PROXY_SECRET=...
+MYRA_BACKEND_ORIGIN=http://<VM_EXTERNAL_IP>:8001
+EXPO_PUBLIC_BACKEND_URL=/api
 ```
 
-A deploy folyamat:
+## Git / Repo Higienia
 
-1. Expo web export készül.
-2. `scripts/patch-dist.js` átmásolja és javítja a webes ikon/font asseteket.
-3. Frissül a `dist/vercel.json`.
-4. Vercel production deploy fut.
-
-Fontos routing sajátosság:
-
-- a frontend API-hívásai `/api/...` útvonalra mennek;
-- Vercelen az `/api/:path*` rewrite továbbítja ezeket a backendhez;
-- ezért a böngészőben a végső kérés gyakran `/api/api/...` formában jelenik meg;
-- ezt nem szabad automatikusan "egyszerűsíteni", mert a jelenlegi Vercel rewrite logika erre épül.
-
-## Backend Üzemeltetés
-
-Jelenlegi backend modell:
-
-```text
-Vercel frontend
-  /api rewrite
-Linux VM backend
-  Docker Compose / FastAPI
-  backend/data/kb_pdfs/*.pdf
-Supabase EU Postgres
-  user adatok
-  mérések
-  chat előzmények
-  PDF tudásindex
-```
-
-A rendszer Rackhost VPS-en fut, és felépült egy párhuzamos Google Compute Engine VM környezet is. Mindkét backend ugyanarra a Supabase/Postgres adatbázisra csatlakozik, ezért backendváltáskor nem kell SQLite adatbázist mozgatni.
-
-Átállás előtt a Google backend külön tesztelendő, az éles Vercel rewrite csak sikeres login, mérés, chat és admin teszt után módosítható.
-
-## Backup
-
-Az adatbázis mentéseit a Supabase/Postgres beépített biztonsági mentési rendszere végzi. A Rendszerbeállítások felületről gombnyomásra letölthető az adatbázis mentés. A projekt mappájában semmilyen adatbázis-export fájl nem tárolható.
-
-## Git / Repo Higiénia
-
-Ne kerüljön GitHubra:
+Ne keruljon GitHubra:
 
 ```text
 .env
@@ -267,20 +335,17 @@ live-db-backups/
 backend/data/myra.db
 ```
 
-A nagy mappák normálisak fejlesztés közben:
+A kovetkezo lokalis segedanyagok nem reszei az eles forraskodnak:
 
 ```text
-backend/.venv        Python virtuális környezet
-frontend/node_modules Node függőségek
-frontend/dist        web build kimenet
-frontend/.metro-cache Expo/Metro cache
+backend-search.py
+search-details.py
+backend/rag/
 ```
 
-Ezek újratelepíthetők, ezért nem részei a forráskód-mentésnek.
+## Biztonsagi Megjegyzesek
 
-## Biztonsági Megjegyzések
-
-- API kulcsot és `.env` fájlt ne commitolj.
-- Éles adatbázis-exportot, SQLite mentést vagy felhasználói adatot tartalmazó fájlt ne commitolj.
-- Privát repo esetén is érdemes úgy kezelni a titkokat, mintha később auditálni kellene.
-- Felhasználói törlés esetén az app működési elve szerint a kapcsolódó felhasználói adatok is törlendők.
+- API kulcsot es `.env` fajlt ne commitolj.
+- Eles adatbazis-exportot vagy felhasznaloi adatot tartalmazo fajlt ne commitolj.
+- Supabase IP allowlist valtozas utan mindig ellenorizd a login, meres, chat es admin tudasanyag folyamatot.
+- Backend restart utan az elso RAG kereses FastEmbed cold start miatt lassabb lehet.
