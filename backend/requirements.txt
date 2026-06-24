@@ -25,7 +25,8 @@ email-validator==2.3.0
 # PDF
 pypdf==6.11.0
 
+# Local embeddings (ONNX Runtime, no PyTorch)
+fastembed==0.8.0
 
-# Gemini SDK (Context Caching, opcionális)
-google-generativeai==0.8.6
+# Gemini SDK
 google-genai>=2.2.0,<3

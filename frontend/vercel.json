@@ -4,7 +4,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "http://34.172.160.45:8001/:path*"
+      "destination": "http://35.253.246.219:8001/:path*"
     },
     {
       "source": "/assets/:path*",

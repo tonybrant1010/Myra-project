@@ -40,14 +40,6 @@ from sqlalchemy.orm import DeclarativeBase
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-# Gemini SDK (Context Caching)
-try:
-    import google.generativeai as genai_sdk
-    from google.generativeai import caching as genai_caching
-    GENAI_SDK_AVAILABLE = True
-except ImportError:
-    GENAI_SDK_AVAILABLE = False
-
 try:
     from google import genai as google_genai
     GOOGLE_GENAI_AVAILABLE = True
@@ -138,8 +130,62 @@ if DB_DIALECT == "postgresql" and os.environ.get("DATABASE_SSL", "true").lower()
     else:
         engine_connect_args["ssl"] = True
 
-engine = create_async_engine(DATABASE_URL, future=True, echo=False, connect_args=engine_connect_args)
+engine_kwargs = {
+    "future": True,
+    "echo": False,
+    "connect_args": engine_connect_args,
+}
+if DB_DIALECT == "postgresql":
+    engine_kwargs.update({"pool_pre_ping": True, "pool_recycle": 60})
+engine = create_async_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
+
+from sqlalchemy.types import UserDefinedType
+
+def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(min_value, min(max_value, value))
+
+
+CHAT_HISTORY_MAX_MESSAGES = _env_int("CHAT_HISTORY_MAX_MESSAGES", 120, 20, 300)
+CHAT_HISTORY_MAX_CHARS = _env_int("CHAT_HISTORY_MAX_CHARS", 45000, 8000, 120000)
+
+
+class pgvector_type(UserDefinedType):
+    """Custom SQLAlchemy type for PostgreSQL pgvector columns."""
+    def __init__(self, dim: int = 384):
+        self.dim = dim
+
+    def get_col_spec(self, **kw):
+        if DB_DIALECT == "sqlite":
+            return "TEXT"
+        return f"vector({self.dim})"
+
+    def bind_processor(self, dialect):
+        def process(value):
+            if value is None:
+                return None
+            if isinstance(value, str):
+                return value
+            # Convert list of floats/numbers to '[0.123, -0.456, ...]' string
+            return "[" + ",".join(str(f) for f in value) + "]"
+        return process
+
+    def result_processor(self, dialect, coltype):
+        def process(value):
+            if value is None:
+                return None
+            if isinstance(value, list):
+                return value
+            # Convert '[0.123, -0.456, ...]' string to list of floats
+            clean = value.strip("[]").strip()
+            if not clean:
+                return []
+            return [float(x) for x in clean.split(",") if x.strip()]
+        return process
 
 
 class Base(DeclarativeBase):
@@ -223,6 +269,7 @@ class KnowledgeChunk(Base):
     chunk_index = Column(Integer, nullable=False)
     title = Column(String(260), nullable=False, default="")
     content = Column(Text, nullable=False)
+    embedding_384 = Column(pgvector_type(384), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
@@ -593,18 +640,24 @@ def _expand_knowledge_query(query: str) -> str:
     return " ".join([*expansions, query]).strip()
 
 
-async def rebuild_pdf_knowledge_index(db: AsyncSession, source_dir: Optional[str] = None) -> dict:
+async def rebuild_pdf_knowledge_index(db: AsyncSession, source_dir: Optional[str] = None, progress_cb=None) -> dict:
     pdf_dir = _resolve_pdf_source_dir(source_dir)
     pdf_files = sorted(pdf_dir.glob("*.pdf"))
     if not pdf_files:
         raise HTTPException(status_code=400, detail=f"Nincs PDF ebben a mappában: {pdf_dir}")
 
+    if DB_DIALECT != "sqlite":
+        await _get_fastembed_embedding("warmup")
+
     await db.execute(delete(KnowledgeChunk))
-    await db.flush()
+    await db.commit()
 
     indexed_files = 0
     chunk_count = 0
+    batch_size = 1
     skipped: list[str] = []
+    if progress_cb:
+        progress_cb(phase="indexing", pdf_count=len(pdf_files), indexed_files=0, chunk_count=0, embedded_chunks=0, skipped=[])
     for pdf_path in pdf_files:
         try:
             text = _extract_pdf_text(pdf_path)
@@ -614,7 +667,15 @@ async def rebuild_pdf_knowledge_index(db: AsyncSession, source_dir: Optional[str
                 continue
             file_hash = _file_sha256(pdf_path)
             title = _knowledge_title_from_file(pdf_path)
+            pending = 0
+            file_chunk_count = 0
             for idx, chunk in enumerate(chunks):
+                emb = None
+                if DB_DIALECT != "sqlite":
+                    try:
+                        emb = await _get_fastembed_embedding(chunk)
+                    except Exception as e:
+                        logger.warning(f"Nem sikerült az embedding lekérése a chunkhoz ({pdf_path.name} #{idx}): {e}")
                 db.add(KnowledgeChunk(
                     source_name=pdf_path.name,
                     source_path=str(pdf_path),
@@ -622,14 +683,28 @@ async def rebuild_pdf_knowledge_index(db: AsyncSession, source_dir: Optional[str
                     chunk_index=idx,
                     title=title,
                     content=chunk,
+                    embedding_384=emb,
                 ))
+                pending += 1
+                file_chunk_count += 1
+                if pending >= batch_size:
+                    await db.commit()
+                    pending = 0
+                    if progress_cb:
+                        progress_cb(embedded_chunks=chunk_count + file_chunk_count)
+            if pending:
+                await db.commit()
             indexed_files += 1
-            chunk_count += len(chunks)
+            chunk_count += file_chunk_count
+            if progress_cb:
+                progress_cb(indexed_files=indexed_files, chunk_count=chunk_count, embedded_chunks=chunk_count, skipped=skipped)
         except Exception as e:
+            await db.rollback()
             logger.warning(f"PDF indexelési hiba ({pdf_path}): {e}")
             skipped.append(pdf_path.name)
+            if progress_cb:
+                progress_cb(skipped=skipped)
 
-    await db.commit()
     if DB_DIALECT == "sqlite":
         await db.execute(sql_text("INSERT INTO knowledge_chunks_fts(knowledge_chunks_fts) VALUES ('rebuild')"))
         await db.commit()
@@ -672,6 +747,35 @@ async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> 
             )
             for row in rows
         ]
+
+    if DB_DIALECT != "sqlite":
+        try:
+            query_emb = await _get_fastembed_embedding(query)
+            query_vector_str = "[" + ",".join(str(f) for f in query_emb) + "]"
+            stmt = sql_text("""
+                SELECT id, source_name, source_path, source_hash, chunk_index, title, content
+                FROM knowledge_chunks
+                WHERE embedding_384 IS NOT NULL
+                ORDER BY embedding_384 <=> CAST(:query_vector AS vector)
+                LIMIT :limit
+            """)
+            res = await db.execute(stmt, {"query_vector": query_vector_str, "limit": limit})
+            rows = res.mappings().all()
+            if rows:
+                return [
+                    KnowledgeChunk(
+                        id=row["id"],
+                        source_name=row["source_name"],
+                        source_path=row["source_path"],
+                        source_hash=row["source_hash"],
+                        chunk_index=row["chunk_index"],
+                        title=row["title"],
+                        content=row["content"],
+                    )
+                    for row in rows
+                ]
+        except Exception as e:
+            logger.warning(f"pgvector keresési hiba, visszaváltás kulcsszavas keresésre: {e}")
 
     terms = _knowledge_terms(expanded_query)
     if not terms:
@@ -782,6 +886,18 @@ async def _run_startup_migrations() -> None:
         return
 
     async with engine.begin() as conn:
+        try:
+            await conn.execute(sql_text("CREATE EXTENSION IF NOT EXISTS vector"))
+        except Exception as _e:
+            print(f"[startup] postgresql vector extension warning: {_e}")
+        try:
+            await conn.execute(sql_text("ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS embedding_384 vector(384)"))
+        except Exception as _e:
+            print(f"[startup] postgresql ADD COLUMN embedding_384 warning: {_e}")
+        try:
+            await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_embedding_384 ON knowledge_chunks USING hnsw (embedding_384 vector_cosine_ops)"))
+        except Exception as _e:
+            print(f"[startup] postgresql embedding_384 index warning: {_e}")
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_suspended BOOLEAN NOT NULL DEFAULT false"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN NOT NULL DEFAULT false"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0"))
@@ -1078,6 +1194,25 @@ class SettingsIn(BaseModel):
 
 class ReindexPdfKnowledgeBody(BaseModel):
     source_dir: Optional[str] = None
+
+
+_kb_reindex_state = {
+    "running": False,
+    "ok": None,
+    "phase": "idle",
+    "started_at": None,
+    "finished_at": None,
+    "indexed_files": 0,
+    "chunk_count": 0,
+    "embedded_chunks": 0,
+    "pdf_count": 0,
+    "skipped": [],
+    "error": None,
+}
+
+
+def _set_kb_reindex_state(**updates):
+    _kb_reindex_state.update(updates)
 
 
 class TtsSpeakBody(BaseModel):
@@ -2025,6 +2160,66 @@ def _build_system_prompt(
     return "\n".join(parts)
 
 
+FASTEMBED_MODEL_NAME = os.environ.get("FASTEMBED_MODEL_NAME", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+_fastembed_model = None
+_fastembed_lock = threading.Lock()
+
+
+def _sync_get_fastembed_embedding(text: str) -> list[float]:
+    global _fastembed_model
+    with _fastembed_lock:
+        if _fastembed_model is None:
+            from fastembed import TextEmbedding
+            _fastembed_model = TextEmbedding(model_name=FASTEMBED_MODEL_NAME)
+    embedding = next(_fastembed_model.embed([text]))
+    values = embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
+    if len(values) != 384:
+        raise ValueError(f"Invalid FastEmbed dimension: {len(values)}")
+    return [float(x) for x in values]
+
+
+async def _get_fastembed_embedding(text: str) -> list[float]:
+    return await asyncio.to_thread(_sync_get_fastembed_embedding, text)
+
+
+
+async def _unused_external_embedding(api_key: str, text: str) -> list[float]:
+    if not api_key:
+        raise ValueError("API kulcs hiányzik az embedding generáláshoz.")
+    url = ""
+    payload = {
+        "content": {
+            "parts": [{"text": text}]
+        },
+        "output_dimensionality": 768,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key,
+    }
+    max_retries = 3
+    last_err = ""
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.post(url, headers=headers, json=payload)
+            if r.status_code == 200:
+                data = r.json()
+                values = []
+                if isinstance(data.get("embedding"), dict):
+                    values = data["embedding"].get("values", [])
+                elif isinstance(data.get("embeddings"), list) and data["embeddings"]:
+                    values = data["embeddings"][0].get("values", [])
+                if len(values) == 768:
+                    return [float(x) for x in values]
+                raise ValueError("Üres embedding érkezett a Gemini API-tól.")
+            last_err = f"status={r.status_code} response={r.text[:200]}"
+        except Exception as e:
+            last_err = str(e)
+        if attempt < max_retries - 1:
+            await asyncio.sleep(2 ** attempt)
+    raise RuntimeError(f"Nem sikerült az embedding lekérése a Gemini-től: {last_err}")
+
 
 async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str, history: List[dict], user_message: str) -> str:
     if not api_key:
@@ -2110,6 +2305,23 @@ async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str,
     raise HTTPException(status_code=400, detail=f"Ismeretlen LLM provider: {provider}")
 
 
+def _format_chat_history_for_llm(messages: list[ChatMessage]) -> list[dict]:
+    formatted: list[dict] = []
+    used_chars = 0
+    selected = list(messages[-CHAT_HISTORY_MAX_MESSAGES:])
+    for m in reversed(selected):
+        ts_str = m.created_at.strftime("%Y.%m.%d %H:%M") if m.created_at else ""
+        prefix = f"[{ts_str}] " if ts_str else ""
+        text = f"{prefix}{m.text}"
+        message_cost = len(text) + 24
+        if formatted and used_chars + message_cost > CHAT_HISTORY_MAX_CHARS:
+            break
+        formatted.append({"role": m.role, "text": text})
+        used_chars += message_cost
+    formatted.reverse()
+    return formatted
+
+
 @api.get("/chat/history")
 async def chat_history(
     session_id: Optional[str] = Query(None),
@@ -2189,12 +2401,7 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
     recent_user_text = "\n".join(m.text for m in db_history[-6:] if m.role == "user")
     crisis_context = _build_crisis_safety_context() if _is_crisis_message(f"{recent_user_text}\n{text}") else ""
 
-    # Format history with timestamps for the LLM
-    history = []
-    for m in db_history[-20:]:
-        ts_str = m.created_at.strftime("%Y.%m.%d %H:%M") if m.created_at else ""
-        prefix = f"[{ts_str}] " if ts_str else ""
-        history.append({"role": m.role, "text": f"{prefix}{m.text}"})
+    history = _format_chat_history_for_llm(db_history)
 
     user_msg = ChatMessage(id=str(uuid.uuid4()), user_id=user.id, state_code=user.state_code,
                            session_id=active_session_id, role="user", text=text)
@@ -2427,9 +2634,29 @@ async def admin_reindex_pdf_knowledge(
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await rebuild_pdf_knowledge_index(db, body.source_dir)
-    await _admin_audit(db, admin, request, "admin.kb.reindex", f"pdf_count={result.get('pdf_count')} chunks={result.get('chunk_count')}")
-    return result
+    if _kb_reindex_state.get("running"):
+        return {"ok": False, "status": "already_running", **_kb_reindex_state}
+    _set_kb_reindex_state(
+        running=True,
+        ok=None,
+        phase="queued",
+        started_at=_now().isoformat(),
+        finished_at=None,
+        indexed_files=0,
+        chunk_count=0,
+        embedded_chunks=0,
+        pdf_count=0,
+        skipped=[],
+        error=None,
+    )
+    asyncio.create_task(_run_pdf_reindex_job(body.source_dir))
+    await _admin_audit(db, admin, request, "admin.kb.reindex.started", "")
+    return {"ok": True, "status": "started", **_kb_reindex_state}
+
+
+@api.get("/admin/kb/reindex-status")
+async def admin_reindex_pdf_knowledge_status(_: User = Depends(require_admin)):
+    return dict(_kb_reindex_state)
 
 
 @api.get("/admin/kb/search")
@@ -2482,8 +2709,77 @@ async def admin_upload_kb(request: Request, file: UploadFile = File(...), admin:
 
 
 # ---------- Admin: extract KB from server PDFs ----------
+async def _run_pdf_reindex_job(source_dir: Optional[str] = None) -> None:
+    try:
+        async with SessionLocal() as job_db:
+            result = await rebuild_pdf_knowledge_index(job_db, source_dir, progress_cb=_set_kb_reindex_state)
+            _set_kb_reindex_state(
+                running=False,
+                ok=True,
+                phase="done",
+                finished_at=_now().isoformat(),
+                indexed_files=result.get("indexed_files", 0),
+                chunk_count=result.get("chunk_count", 0),
+                embedded_chunks=result.get("chunk_count", 0),
+                pdf_count=result.get("pdf_count", 0),
+                skipped=result.get("skipped", []),
+                error=None,
+            )
+    except Exception as e:
+        logger.exception("PDF reindex background job failed")
+        _set_kb_reindex_state(running=False, ok=False, phase="error", finished_at=_now().isoformat(), error=str(e))
+
+
+async def _run_extract_kb_job() -> None:
+    try:
+        _set_kb_reindex_state(phase="extracting")
+        pdf_dir = ROOT_DIR / "data" / "kb_pdfs"
+        pdf_files = sorted(pdf_dir.glob("*.pdf"))
+        if not pdf_files:
+            raise RuntimeError("No PDF files found in /data/kb_pdfs.")
+        combined = ""
+        for pdf_path in pdf_files:
+            try:
+                raw = pdf_path.read_bytes()
+                r = PdfReader(io.BytesIO(raw))
+                text = "\n".join((p.extract_text() or "") for p in r.pages).strip()
+                if text:
+                    combined += f"\n\n===== {pdf_path.name} =====\n\n{text}"
+            except Exception as e:
+                logger.warning(f"PDF olvasĂˇsi hiba ({pdf_path.name}): {e}")
+        combined = combined.strip()
+        if not combined:
+            raise RuntimeError("No text could be extracted from the PDF files.")
+        async with SessionLocal() as job_db:
+            await set_setting(job_db, "kb_text", combined)
+            await job_db.commit()
+        await _run_pdf_reindex_job()
+    except Exception as e:
+        logger.exception("PDF extract background job failed")
+        _set_kb_reindex_state(running=False, ok=False, phase="error", finished_at=_now().isoformat(), error=str(e))
+
+
 @api.post("/admin/extract-kb")
 async def admin_extract_kb(request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    if _kb_reindex_state.get("running"):
+        return {"ok": False, "status": "already_running", **_kb_reindex_state}
+    _set_kb_reindex_state(
+        running=True,
+        ok=None,
+        phase="queued",
+        started_at=_now().isoformat(),
+        finished_at=None,
+        indexed_files=0,
+        chunk_count=0,
+        embedded_chunks=0,
+        pdf_count=0,
+        skipped=[],
+        error=None,
+    )
+    asyncio.create_task(_run_extract_kb_job())
+    await _admin_audit(db, admin, request, "admin.kb.extract.started", "")
+    return {"ok": True, "status": "started", **_kb_reindex_state}
+
     pdf_dir = ROOT_DIR / "data" / "kb_pdfs"
     pdf_files = sorted(pdf_dir.glob("*.pdf"))
     if not pdf_files:
@@ -2502,6 +2798,7 @@ async def admin_extract_kb(request: Request, admin: User = Depends(require_admin
     if not combined:
         raise HTTPException(status_code=400, detail="Egyik PDF-ből sem sikerült szöveget kinyerni.")
     await set_setting(db, "kb_text", combined)
+    await db.commit()
     await rebuild_pdf_knowledge_index(db)
     await _admin_audit(db, admin, request, "admin.kb.extract", f"pdf_count={len(pdf_files)} total_chars={len(combined)}")
     return {"ok": True, "pdf_count": len(pdf_files), "total_chars": len(combined)}

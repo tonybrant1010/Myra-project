@@ -46,6 +46,39 @@ function formatMessageTime(value: string): string {
   return d.toLocaleTimeString("hu-HU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Budapest" });
 }
 
+function formatExportDate(value: string): string {
+  const normalized = value.endsWith("Z") || value.includes("+") ? value : value + "Z";
+  const d = new Date(normalized);
+  if (Number.isNaN(d.getTime())) return value || "";
+  return d.toLocaleString("hu-HU", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Europe/Budapest",
+  });
+}
+
+function buildChatTranscript(messages: Msg[], sessionId: string | null, stateCode: string | null | undefined): string {
+  const lines = [
+    "Myra Project - beszelgetes export",
+    `Letoltes ideje: ${new Date().toLocaleString("hu-HU", { timeZone: "Europe/Budapest" })}`,
+    `Session: ${sessionId || "-"}`,
+    `Allapotkod: ${stateCode || "-"}`,
+    "",
+  ];
+
+  for (const msg of messages) {
+    const role = msg.role === "user" ? "Felhasznalo" : "Myra";
+    lines.push(`[${formatExportDate(msg.created_at)}] ${role}`);
+    lines.push(msg.text);
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
 function renderInlineMarkdown(text: string, keyPrefix: string) {
   const parts: React.ReactNode[] = [];
   const pattern = /(\*\*[^*]+\*\*|\*[^*\n]+\*)/g;
@@ -160,6 +193,22 @@ export default function ChatScreen() {
   const revealTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const revealActiveRef = useRef<{ id: string; text: string } | null>(null);
   const animatedMessageIdsRef = useRef<Set<string>>(new Set());
+
+  const downloadTranscript = useCallback(() => {
+    if (Platform.OS !== "web" || messages.length === 0) return;
+    const transcript = buildChatTranscript(messages, viewSessionId || activeSessionId, user?.state_code);
+    const blob = new Blob([transcript], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const safeSession = (viewSessionId || activeSessionId || "chat").replace(/[^a-zA-Z0-9_-]/g, "-");
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `myra-beszelgetes-${safeSession}-${stamp}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }, [activeSessionId, messages, user?.state_code, viewSessionId]);
 
   const scrollToBottom = useCallback((animated = false) => {
     requestAnimationFrame(() => {
@@ -427,6 +476,20 @@ export default function ChatScreen() {
       <TopBar title="Myra Project" rightLabel={user?.state_code || undefined} />
       <ContentBackground>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={Platform.OS === "ios" ? 60 : 0}>
+          {messages.length > 0 ? (
+            <View style={styles.exportBar}>
+              <TouchableOpacity
+                onPress={downloadTranscript}
+                style={styles.exportBtn}
+                disabled={Platform.OS !== "web"}
+                activeOpacity={0.8}
+                testID="chat-download-transcript-button"
+              >
+                <Ionicons name="download-outline" size={16} color="rgba(247,251,255,0.78)" />
+                <T variant="small" color="rgba(247,251,255,0.78)">TXT letoltes</T>
+              </TouchableOpacity>
+            </View>
+          ) : null}
           {!isReadOnly && user?.code_days_remaining !== undefined && user.code_days_remaining <= 2 && user.code_days_remaining > 0 ? (
             <View style={styles.warningBanner}>
               <T variant="small" color={theme.white} align="center" style={{ fontWeight: "600" }}>
@@ -583,6 +646,18 @@ function Bubble({ msg, displayText, onSpeak, speaking }: { msg: Msg; displayText
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: theme.primaryDark },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
+  exportBar: { alignItems: "flex-end", paddingHorizontal: 18, paddingTop: 10 },
+  exportBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+    backgroundColor: "rgba(6,19,32,0.42)",
+  },
   emptyWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 36 },
   emptyAvatarRing: {
     width: 120,

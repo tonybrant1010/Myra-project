@@ -58,10 +58,12 @@ if (!fs.existsSync(apiDir)) {
 }
 
 const proxyCode = `
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   const path = req.query.path || '';
   const cleanPath = path.startsWith('api/') ? path : \`api/\${path}\`;
-  const targetUrl = new URL(\`http://34.172.160.45:8001/\${cleanPath}\`);
+  let backendOrigin = (process.env.MYRA_BACKEND_ORIGIN || process.env.BACKEND_URL || "http://35.253.246.219:8001").trim();
+  while (backendOrigin.endsWith('/')) backendOrigin = backendOrigin.slice(0, -1);
+  const targetUrl = new URL(\`\${backendOrigin}/\${cleanPath}\`);
   
   for (const [key, value] of Object.entries(req.query)) {
     if (key !== 'path') {

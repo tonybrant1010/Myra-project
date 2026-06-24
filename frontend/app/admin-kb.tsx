@@ -24,6 +24,18 @@ type KBFile = {
   modified_at: string;
 };
 
+type ReindexStatus = {
+  running?: boolean;
+  ok?: boolean | null;
+  phase?: string;
+  indexed_files?: number;
+  chunk_count?: number;
+  embedded_chunks?: number;
+  pdf_count?: number;
+  skipped?: string[];
+  error?: string | null;
+};
+
 export default function AdminKbScreen() {
   useAuthGuard();
   const { token, user } = useAuth();
@@ -182,6 +194,54 @@ export default function AdminKbScreen() {
     }
   };
 
+  const handleActivateKnowledgeWithPolling = async () => {
+    setReindexing(true);
+    setStatusMsg(null);
+    setStatusErr(null);
+    try {
+      const startResponse = await authedFetch(token, "/api/admin/extract-kb", { method: "POST" });
+      const started = await startResponse.json().catch(() => ({}));
+      if (!startResponse.ok) {
+        throw new Error(started.detail || "Hiba tortent a PDF-ek indexelese soran.");
+      }
+
+      setStatusMsg(
+        started.status === "already_running"
+          ? "A tudasanyag elesitese mar fut. Figyelem az allapotat..."
+          : "Tudasanyag elesitese elindult. A folyamat a hatterben fut..."
+      );
+
+      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      let latest: ReindexStatus = started;
+      for (let i = 0; i < 720; i += 1) {
+        await sleep(2500);
+        const statusResponse = await authedFetch(token, "/api/admin/kb/reindex-status");
+        latest = await statusResponse.json().catch(() => ({}));
+        if (!statusResponse.ok) {
+          throw new Error("Nem sikerult lekerdezni az elesites allapotat.");
+        }
+        setStatusMsg(
+          `Elesites folyamatban: ${latest.phase || "fut"}, PDF: ${latest.indexed_files || 0}/${latest.pdf_count || "?"}, chunk: ${latest.embedded_chunks || 0}/${latest.chunk_count || 0}`
+        );
+        if (!latest.running) {
+          break;
+        }
+      }
+
+      if (latest.running) {
+        throw new Error("Az elesites meg fut. Kesobb frissitsd az allapotot.");
+      }
+      if (latest.ok === false) {
+        throw new Error(latest.error || "Hiba tortent a tudasanyag elesitese soran.");
+      }
+      setStatusMsg(`Sikeres elesites: ${latest.pdf_count || 0} PDF, ${latest.embedded_chunks || latest.chunk_count || 0} chunk indexelve.`);
+    } catch (e: any) {
+      setStatusErr(e.message || "Hiba az elesites soran.");
+    } finally {
+      setReindexing(false);
+    }
+  };
+
   const formatSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
     const kb = bytes / 1024;
@@ -234,7 +294,7 @@ export default function AdminKbScreen() {
               )}
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.reindexBtn} onPress={handleActivateKnowledge} disabled={busy || reindexing || files.length === 0} testID="kb-reindex-button">
+            <TouchableOpacity style={styles.reindexBtn} onPress={handleActivateKnowledgeWithPolling} disabled={busy || reindexing || files.length === 0} testID="kb-reindex-button">
               {reindexing ? (
                 <ActivityIndicator color={theme.white} />
               ) : (
