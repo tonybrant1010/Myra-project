@@ -22,6 +22,8 @@ Magyarországon sürgős veszély esetén hívható a 112. Lelki krízis esetén
 4. Mesterséges intelligencia használatából eredő korlátok
 A Myra válaszait részben mesterséges intelligencia alapú rendszer állítja elő. Az AI-válaszok pontossága, teljessége, időszerűsége vagy megfelelősége nem garantálható. Előfordulhat téves, hiányos, félreérthető vagy a felhasználó helyzetéhez nem megfelelő válasz.
 
+A válaszadás során a rendszer az aktuális üzenet mellett a beszélgetés korábbi részleteit, a mérési állapotkódhoz kapcsolódó kontextust és a PDF alapú tudásanyagból visszakeresett releváns részleteket is felhasználhatja. Ez a beszélgetés folytonosságát szolgálja, de nem jelent diagnózist, szakvéleményt vagy terápiás döntést.
+
 A felhasználó tudomásul veszi, hogy a Myra nem dönt helyette, nem vállal felelősséget a felhasználó döntéseiért, és nem alkalmas önálló egészségügyi, jogi, pénzügyi vagy egyéb nagy kockázatú döntéshozatalra.
 
 5. A felhasználó életkora és felelőssége

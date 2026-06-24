@@ -28,6 +28,7 @@ Az alkalmazás az alábbi adatokat kezelheti:
 - belső állapotkód és mérési eredmények,
 - chat üzenetek tartalma,
 - chatbot-válaszok,
+- a beszélgetéshez kapcsolódó, az alkalmazás által visszakeresett tudásanyag-részletek technikai felhasználása,
 - felhasználói aktivitási adatok az alkalmazás működtetéséhez szükséges mértékben,
 - technikai naplóadatok, például hibák, hozzáférési próbálkozások, IP-cím vagy eszköz-/böngészőinformáció, ha ez biztonsági vagy működtetési okból szükséges.
 
@@ -48,8 +49,14 @@ A felhasználói adatbázis (Supabase) európai uniós régióban (Frankfurt) m�
 
 A rendszer kialakítása törekszik arra, hogy a backend és az adatbázis elkülönítetten működjön, és a kliensoldali felület ne tartalmazzon AI API-kulcsot vagy közvetlen adatbázis-hozzáférést. A jelszavak egyirányú hash formában kerülnek tárolásra. Az adatkezelő törekszik a hozzáférések korlátozására, az érzékeny adatok védelmére, a technikai naplók és admin funkciók ésszerű korlátozására, valamint arra, hogy az adatokhoz csak indokolt esetben legyen hozzáférés.
 
+A PDF alapú tudásanyag indexelése technikai keresési célt szolgál. A rendszer a tudásanyagból vektoros kereséshez szükséges embeddingeket tárolhat a Supabase adatbázisban. Ezek a felhasználói beszélgetésektől elkülönített technikai keresési adatok.
+
+A beszélgetés TXT exportja a felhasználó kifejezett műveletére, a böngészőben készül el a már betöltött üzenetekből. Az alkalmazás külön szerveroldali exportfájlt nem hoz létre és nem tárol.
+
 7. Külső szolgáltatók és adattovábbítás
 A chatbot és az élő hangalapú asszisztens működéséhez a felhasználó üzeneteinek tartalma és bemeneti hanganyaga külső mesterséges intelligencia szolgáltatókhoz (különösen: Google Gemini, OpenAI, Anthropic) továbbítódik a válaszok és hanganyagok generálása céljából.
+
+A chatbot-válasz generálásakor az aktuális üzenet mellett a beszélgetés korábbi, az alkalmazás működéséhez szükséges részletei, a felhasználó aktuális állapotkódjához kapcsolódó információk, valamint a PDF alapú tudásanyagból visszakeresett releváns részletek is bekerülhetnek a mesterséges intelligencia szolgáltatónak küldött kontextusba. Ez a beszélgetés folytonosságát és a válasz szakmai illeszkedését szolgálja.
 
 Ez az adattovábbítás kizárólag a szolgáltatás működéséhez szükséges mértékben történik. A továbbítás az adott szolgáltatók hivatalos fejlesztői (Enterprise/API) felületein keresztül zajlik, amelyek szerződéses feltételei kifejezetten garantálják, hogy a Myra által beküldött adatokat és üzeneteket a szolgáltatók bizalmasan kezelik, és nem használják fel saját modelljeik tanítására vagy fejlesztésére.
 
