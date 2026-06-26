@@ -38,16 +38,10 @@ for (const f of iconFiles) {
   }
 }
 
-// 1. Vercel rewrites.
-const vercelJson = {
-  rewrites: [
-    { source: "/api/:path((?!proxy(?:/|$)).*)", destination: "/api/proxy?path=:path" },
-    { source: "/assets/:path*", destination: "/assets/:path*" },
-    { source: "/vendor-assets/:path*", destination: "/vendor-assets/:path*" },
-    { source: "/_expo/:path*", destination: "/_expo/:path*" },
-    { source: "/((?!api/|assets/|vendor-assets/|_expo/|favicon.ico|favicon-32x32.png|favicon-16x16.png|site.webmanifest|apple-touch-icon.png|android-chrome-192x192.png|android-chrome-512x512.png).*)", destination: "/index.html" },
-  ],
-};
+// 1. Vercel routing source of truth is frontend/vercel.json.
+const vercelJson = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "../vercel.json"), "utf8"),
+);
 fs.writeFileSync(path.join(distDir, "vercel.json"), JSON.stringify(vercelJson, null, 2));
 console.log("OK dist/vercel.json patched");
 

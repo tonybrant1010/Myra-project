@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   backend:
     build:
@@ -18,6 +16,9 @@ services:
       - DATABASE_SSL_MODE=${DATABASE_SSL_MODE:-require}
       - ADMIN_EMAIL_ALLOWLIST=${ADMIN_EMAIL_ALLOWLIST:-}
       - TRUST_PROXY=${TRUST_PROXY:-true}
+      - MYRA_PROXY_SECRET=${MYRA_PROXY_SECRET:?set in .env}
+      - GMAIL_USER=${GMAIL_USER:-}
+      - GMAIL_APP_PASSWORD=${GMAIL_APP_PASSWORD:-}
     volumes:
       - ./backend/data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
@@ -27,19 +28,3 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-
-  frontend:
-    image: node:20-alpine
-    container_name: myra-frontend
-    restart: unless-stopped
-    working_dir: /app
-    command: sh -c "yarn install && yarn start --web"
-    environment:
-      - EXPO_PUBLIC_BACKEND_URL=${EXPO_PUBLIC_BACKEND_URL:-http://localhost:8001}
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    depends_on:
-      - backend

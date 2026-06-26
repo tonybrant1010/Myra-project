@@ -3,8 +3,8 @@
   "trailingSlash": false,
   "rewrites": [
     {
-      "source": "/api/:path*",
-      "destination": "http://35.253.246.219:8001/:path*"
+      "source": "/api/:path((?!proxy(?:/|$)).*)",
+      "destination": "/api/proxy?path=:path"
     },
     {
       "source": "/assets/:path*",
@@ -19,11 +19,7 @@
       "destination": "/_expo/:path*"
     },
     {
-      "source": "/reset-password",
-      "destination": "/reset-password.html"
-    },
-    {
-      "source": "/((?!api/|assets/|vendor-assets/|_expo/|favicon.ico|site.webmanifest|apple-touch-icon.png|android-chrome-192x192.png|android-chrome-512x512.png).*)",
+      "source": "/((?!api/|assets/|vendor-assets/|_expo/|favicon.ico|favicon-32x32.png|favicon-16x16.png|site.webmanifest|apple-touch-icon.png|android-chrome-192x192.png|android-chrome-512x512.png).*)",
       "destination": "/index.html"
     }
   ]
