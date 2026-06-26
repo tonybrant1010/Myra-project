@@ -40,6 +40,7 @@ A frontend Vercelen fut. A backend Google Cloud VM-en fut Docker konténerben. A
 - chat- és mérési előzmények;
 - bővített chat kontextus ugyanazon mérési szálon belül;
 - TXT beszélgetés-export a chat felületről;
+- Gemini Live beszélgetés az aktuális kapcsolat idejére korlátozott kontextussal;
 - PDF-alapú RAG tudásvisszakeresés;
 - admin tudásanyag-kezelés PDF feltöltéssel, törléssel és háttérben futó élesítéssel;
 - admin rendszerbeállítások, karbantartási mód és SOS eszközök;
@@ -190,6 +191,22 @@ CHAT_HISTORY_MAX_CHARS=25000
 ```
 
 A chat felületen a betöltött beszélgetés TXT fájlként letölthető.
+
+## Live Beszélgetés
+
+A Live kapcsolat közvetlenül a Google Gemini Live API-val kommunikál. A backend csak
+rövid élettartamú Live tokent ad ki; a böngésző mikrofonhangja és a generált hang a
+Live kapcsolatban halad. A kapcsolatról nem készül leirat és bezárás után nem marad
+felhasználói Live-előzmény.
+
+A Live indításakor a backend technikai kontextusként átadja az aktuális
+`Europe/Budapest` időpontot. Ez nem módosítja az admin felületen tárolt Myra-promptot.
+
+Backend újraindítás után a RAG modell előmelegítése az alkalmazás indulásakor fut le,
+egyetlen próba-embeddinggel és egy csak olvasó kereséssel. Emiatt a konténer csak a
+modell betöltése után lesz kész, de az első chat- vagy Live-felhasználónak nem kell
+megvárnia a FastEmbed/Hugging Face cold startot. Ez nem indít tudásanyag-élesítést és
+nem ír át `knowledge_chunks` rekordot.
 
 ## Mappa Struktúra
 

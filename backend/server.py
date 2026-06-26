@@ -1026,6 +1026,20 @@ async def set_setting(db: AsyncSession, key: str, value: str) -> None:
         db.add(AppSetting(key=key, value=value))
 
 
+async def _warmup_rag_runtime() -> None:
+    if DB_DIALECT == "sqlite" or os.environ.get("DISABLE_RAG_STARTUP_WARMUP", "").lower() in {"1", "true", "yes"}:
+        return
+    started = time.perf_counter()
+    try:
+        print("[startup] RAG warmup indul")
+        await _get_fastembed_embedding("warmup")
+        async with SessionLocal() as db:
+            await search_pdf_knowledge(db, "testi feszültség stressz szomatikus lezárás", limit=1)
+        print(f"[startup] RAG warmup kész: {time.perf_counter() - started:.1f}s")
+    except Exception as e:
+        print(f"[startup] RAG warmup figyelmeztetés: {e}")
+
+
 # ---------- App ----------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -1067,6 +1081,7 @@ async def lifespan(app: FastAPI):
                         print(f"[startup] default_kb.pdf betöltve: {len(kb_text)} karakter")
                 except Exception as e:
                     print(f"[startup] Figyelmeztetés: default_kb.pdf nem tölthető be: {e}")
+    await _warmup_rag_runtime()
     yield
     # Shutdown
     await engine.dispose()
@@ -2461,8 +2476,10 @@ async def create_live_token(
     retrieved_chunks = await search_pdf_knowledge(db, kb_query, limit=5)
     retrieved_kb_context = _build_retrieved_kb_context(retrieved_chunks)
     live_system_prompt = _build_system_prompt(system_prompt, retrieved_kb_context, state_code, user.name)
+    now_ts_str = _now().strftime("%Y.%m.%d %H:%M")
     live_system_prompt += (
         "\n\n[LIVE BESZÉLGETÉSI KERET]\n"
+        f"A Live kapcsolat indításának aktuális ideje: {now_ts_str} (Europe/Budapest). "
         "Magyarul, természetes beszélt nyelven válaszolj. Rövid, jól követhető mondatokat használj. "
         "Ne sorolj fel hosszú listákat, hacsak a felhasználó kifejezetten nem kéri. "
         "A felhasználót ne szakítsd félbe. A válasz legyen kapcsolódó, nyugodt és tömör. "

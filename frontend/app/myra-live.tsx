@@ -22,6 +22,7 @@ import { shadow, theme } from "@/src/theme";
 const MYRA_AVATAR = require("@/assets/images/myra-avatar.png");
 const INPUT_RATE = 16000;
 const OUTPUT_RATE = 24000;
+const OUTPUT_GAIN = 2.2;
 
 type LivePhase = "idle" | "connecting" | "listening" | "thinking" | "speaking" | "error";
 
@@ -91,12 +92,14 @@ export default function MyraLiveScreen() {
   const streamRef = useRef<MediaStream | null>(null);
   const inputContextRef = useRef<AudioContext | null>(null);
   const outputContextRef = useRef<AudioContext | null>(null);
+  const outputGainRef = useRef<GainNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const nextPlaybackTimeRef = useRef(0);
   const playingSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const mountedRef = useRef(true);
   const closingRef = useRef(false);
+  const wakeLockRef = useRef<any>(null);
 
   const isActive = phase !== "idle" && phase !== "error";
   const isSpeaking = phase === "speaking";
@@ -111,6 +114,27 @@ export default function MyraLiveScreen() {
     nextPlaybackTimeRef.current = 0;
   }, []);
 
+  const releaseWakeLock = useCallback(() => {
+    const wakeLock = wakeLockRef.current;
+    wakeLockRef.current = null;
+    if (wakeLock) {
+      void wakeLock.release?.().catch?.(() => {});
+    }
+  }, []);
+
+  const requestWakeLock = useCallback(async () => {
+    if (Platform.OS !== "web" || wakeLockRef.current) return;
+    const wakeLockApi = (globalThis.navigator as any)?.wakeLock;
+    if (!wakeLockApi?.request) return;
+    try {
+      const wakeLock = await wakeLockApi.request("screen");
+      wakeLockRef.current = wakeLock;
+      wakeLock.addEventListener?.("release", () => {
+        if (wakeLockRef.current === wakeLock) wakeLockRef.current = null;
+      });
+    } catch {}
+  }, []);
+
   const closeSession = useCallback(() => {
     closingRef.current = true;
     processorRef.current?.disconnect();
@@ -121,6 +145,7 @@ export default function MyraLiveScreen() {
     void inputContextRef.current?.close();
     void outputContextRef.current?.close();
     stopPlayback();
+    releaseWakeLock();
 
     processorRef.current = null;
     sourceRef.current = null;
@@ -128,11 +153,12 @@ export default function MyraLiveScreen() {
     sessionRef.current = null;
     inputContextRef.current = null;
     outputContextRef.current = null;
+    outputGainRef.current = null;
     if (mountedRef.current) {
       setPhase("idle");
       setStatus("Érintsd meg a mikrofont a beszélgetéshez.");
     }
-  }, [stopPlayback]);
+  }, [releaseWakeLock, stopPlayback]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -166,12 +192,33 @@ export default function MyraLiveScreen() {
     return () => animation.stop();
   }, [isActive, isSpeaking, pulse]);
 
+  useEffect(() => {
+    if (!isActive) {
+      releaseWakeLock();
+      return;
+    }
+    void requestWakeLock();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") void requestWakeLock();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [isActive, releaseWakeLock, requestWakeLock]);
+
   const playAudioChunk = useCallback(async (base64Audio: string) => {
     const AudioContextCtor = (globalThis as any).AudioContext || (globalThis as any).webkitAudioContext;
     if (!AudioContextCtor) return;
     if (!outputContextRef.current) outputContextRef.current = new AudioContextCtor({ sampleRate: OUTPUT_RATE });
     const context: AudioContext = outputContextRef.current!;
     if (context.state === "suspended") await context.resume();
+    if (!outputGainRef.current) {
+      const gain = context.createGain();
+      gain.gain.value = OUTPUT_GAIN;
+      gain.connect(context.destination);
+      outputGainRef.current = gain;
+    }
 
     const bytes = base64ToBytes(base64Audio);
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -182,7 +229,7 @@ export default function MyraLiveScreen() {
 
     const source = context.createBufferSource();
     source.buffer = buffer;
-    source.connect(context.destination);
+    source.connect(outputGainRef.current);
     const startAt = Math.max(context.currentTime + 0.025, nextPlaybackTimeRef.current);
     nextPlaybackTimeRef.current = startAt + buffer.duration;
     playingSourcesRef.current.add(source);
@@ -506,6 +553,13 @@ export default function MyraLiveScreen() {
             <T variant="small" color="rgba(247,251,255,0.62)" align="center">
               {isActive ? "A leállításhoz érintsd meg újra." : "A mikrofon engedélyezése után rögtön beszélhetsz."}
             </T>
+
+            <View style={styles.memoryNotice}>
+              <Ionicons name="information-circle-outline" size={16} color="rgba(247,251,255,0.64)" />
+              <T variant="small" color="rgba(247,251,255,0.66)" align="center" style={styles.memoryNoticeText}>
+                A Live csak az aktuális kapcsolat ideje alatt követi a beszélgetést. Lezárás után nem készül leirat, és a következő Live nem emlékszik erre.
+              </T>
+            </View>
           </View>
 
 
@@ -557,6 +611,23 @@ const styles = StyleSheet.create({
     ...shadow.glow,
   },
   micButtonActive: { backgroundColor: theme.danger },
+  memoryNotice: {
+    maxWidth: 380,
+    marginTop: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(6,19,32,0.42)",
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+  },
+  memoryNoticeText: {
+    flex: 1,
+    lineHeight: 18,
+  },
   transcriptPanel: {
     width: "100%",
     maxWidth: 680,
