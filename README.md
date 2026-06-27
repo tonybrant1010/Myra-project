@@ -396,3 +396,5 @@ backend/rag/
 - Backend restart után az első RAG keresés FastEmbed cold start miatt lassabb lehet.
 - A jelszó-visszaállító 6 jegyű kód a felhasználónak továbbra is emailben megy ki, de a backend a DB-ben csak hash formában tárolja.
 - A jelszó-reset frontend hívás a központi `apiUrl()` útvonalat használja, nem fix domainre küld érzékeny adatot.
+- A backend és a Vercel frontend alap biztonsági HTTP fejléceket ad: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, éles HTTPS alatt `Strict-Transport-Security`.
+- Szigorú Content-Security-Policy jelenleg nincs bekapcsolva, mert a Gemini Live/WebSocket és Expo web bundle miatt külön, célzott tesztelést igényelne.

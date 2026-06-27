@@ -1150,6 +1150,24 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Myra API", lifespan=lifespan)
 
 MYRA_PROXY_SECRET = os.environ.get("MYRA_PROXY_SECRET", "")
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "geolocation=(), camera=(), payment=(), usb=(), magnetometer=(), gyroscope=()",
+    "Cross-Origin-Resource-Policy": "same-site",
+}
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    for key, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(key, value)
+    if request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip() == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
+
 
 @app.middleware("http")
 async def verify_vercel_proxy(request: Request, call_next):

@@ -52,6 +52,14 @@ if (!fs.existsSync(apiDir)) {
 }
 
 const proxyCode = `
+const securityHeaders = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Permissions-Policy': 'geolocation=(), camera=(), payment=(), usb=(), magnetometer=(), gyroscope=()',
+  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+};
+
 module.exports = async function handler(req, res) {
   const path = req.query.path || '';
   const cleanPath = path.startsWith('api/') ? path : \`api/\${path}\`;
@@ -105,11 +113,17 @@ module.exports = async function handler(req, res) {
     response.headers.forEach((value, key) => {
       res.setHeader(key, value);
     });
+    for (const [key, value] of Object.entries(securityHeaders)) {
+      res.setHeader(key, value);
+    }
 
     const responseBody = await response.arrayBuffer();
     res.send(Buffer.from(responseBody));
   } catch (error) {
     console.error("Proxy error:", error);
+    for (const [key, value] of Object.entries(securityHeaders)) {
+      res.setHeader(key, value);
+    }
     res.status(502).json({ detail: "Proxy error connecting to origin." });
   }
 }
