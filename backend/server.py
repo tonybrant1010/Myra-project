@@ -105,7 +105,11 @@ class SecretRedactionFilter(logging.Filter):
         return True
 
 
-logging.getLogger().addFilter(SecretRedactionFilter())
+secret_redaction_filter = SecretRedactionFilter()
+root_logger = logging.getLogger()
+root_logger.addFilter(secret_redaction_filter)
+for _handler in root_logger.handlers:
+    _handler.addFilter(secret_redaction_filter)
 
 
 class InMemoryLogHandler(logging.Handler):
@@ -124,8 +128,9 @@ class InMemoryLogHandler(logging.Handler):
 
 log_buffer = InMemoryLogHandler()
 log_buffer.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+log_buffer.addFilter(secret_redaction_filter)
 logging.getLogger("myra").addHandler(log_buffer)
-logging.getLogger().addHandler(log_buffer)
+root_logger.addHandler(log_buffer)
 
 # ---------- DB ----------
 def _normalize_database_url(url: str) -> str:

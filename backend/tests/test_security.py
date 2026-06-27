@@ -1,6 +1,7 @@
 import pytest
 import os
 import logging
+import io
 from fastapi import Request
 from unittest.mock import Mock, patch
 from server import (
@@ -120,6 +121,22 @@ def test_secret_redaction_filter_masks_log_record_before_handlers():
     rendered = record.getMessage()
     assert "AIzaSyDrxRwZqITYSLSvOWCQKMep6yIzTUmPV8w" not in rendered
     assert "[redacted]" in rendered
+
+
+def test_secret_redaction_filter_masks_handler_output():
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.addFilter(SecretRedactionFilter())
+    logger = logging.getLogger("test-secret-redaction")
+    logger.handlers = [handler]
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+
+    logger.info("POST https://example.test/api?key=%s", "AIzaSyDrxRwZqITYSLSvOWCQKMep6yIzTUmPV8w")
+    output = stream.getvalue()
+
+    assert "AIzaSyDrxRwZqITYSLSvOWCQKMep6yIzTUmPV8w" not in output
+    assert "[redacted]" in output
 
 @pytest.mark.anyio
 @patch("httpx.AsyncClient.post")
