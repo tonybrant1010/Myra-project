@@ -2,7 +2,15 @@ import pytest
 import os
 from fastapi import Request
 from unittest.mock import Mock, patch
-from server import _client_ip, _call_llm, _hash_reset_token, _safe_upload_filename, _validate_pdf_bytes, HTTPException
+from server import (
+    _client_ip,
+    _call_llm,
+    _hash_reset_token,
+    _safe_upload_filename,
+    _sanitize_log_line,
+    _validate_pdf_bytes,
+    HTTPException,
+)
 
 # Tell pytest to use anyio for async tests
 @pytest.fixture
@@ -79,6 +87,20 @@ def test_validate_pdf_bytes_checks_magic_header():
         _validate_pdf_bytes(b"not really a pdf")
 
     assert exc_info.value.status_code == 400
+
+
+def test_sanitize_log_line_masks_api_credentials():
+    line = (
+        "POST https://generativelanguage.googleapis.com/v1beta/models/x:generateContent"
+        "?key=AIzaSyDrxRwZqITYSLSvOWCQKMep6yIzTUmPV8w "
+        "headers={'Authorization': 'Bearer sk-proj-secret1234567890', 'x-api-key': 'secret-value'}"
+    )
+    sanitized = _sanitize_log_line(line)
+
+    assert "AIzaSyDrxRwZqITYSLSvOWCQKMep6yIzTUmPV8w" not in sanitized
+    assert "sk-proj-secret1234567890" not in sanitized
+    assert "secret-value" not in sanitized
+    assert "[redacted]" in sanitized
 
 @pytest.mark.anyio
 @patch("httpx.AsyncClient.post")

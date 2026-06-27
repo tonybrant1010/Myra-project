@@ -83,6 +83,15 @@ TTS_ENGINE = os.environ.get("TTS_ENGINE", "none").strip().lower()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("myra")
 
+
+def _sanitize_log_line(line: str) -> str:
+    line = re.sub(r"([?&](?:key|api_key|access_token|token)=)[^&\s\"']+", r"\1[redacted]", line, flags=re.IGNORECASE)
+    line = re.sub(r"((?:authorization|x-api-key|api-key)[\"']?\s*[:=]\s*[\"']?)(Bearer\s+)?[^,\s\"'}]+", r"\1\2[redacted]", line, flags=re.IGNORECASE)
+    line = re.sub(r"(sk-[A-Za-z0-9_\-]{12,})", "[redacted]", line)
+    line = re.sub(r"(AIza[0-9A-Za-z_\-]{20,})", "[redacted]", line)
+    return line
+
+
 class InMemoryLogHandler(logging.Handler):
     def __init__(self, capacity=100):
         super().__init__()
@@ -91,7 +100,7 @@ class InMemoryLogHandler(logging.Handler):
 
     def emit(self, record):
         try:
-            self.buffer.append(self.format(record))
+            self.buffer.append(_sanitize_log_line(self.format(record)))
             if len(self.buffer) > self.capacity:
                 self.buffer.pop(0)
         except Exception:
@@ -3048,7 +3057,7 @@ async def admin_down(request: Request, admin: User = Depends(require_admin), db:
 
 @api.get("/admin/logs")
 async def admin_get_logs(admin: User = Depends(require_admin)):
-    return {"logs": log_buffer.buffer}
+    return {"logs": [_sanitize_log_line(line) for line in log_buffer.buffer]}
 
 @api.get("/admin/kb/files")
 async def admin_list_kb_files(admin: User = Depends(require_admin)):
