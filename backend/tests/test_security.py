@@ -2,7 +2,7 @@ import pytest
 import os
 from fastapi import Request
 from unittest.mock import Mock, patch
-from server import _client_ip, _call_llm, HTTPException
+from server import _client_ip, _call_llm, _hash_reset_token, HTTPException
 
 # Tell pytest to use anyio for async tests
 @pytest.fixture
@@ -47,6 +47,16 @@ def test_client_ip_with_trust_proxy_false():
         assert _client_ip(mock_request) == "127.0.0.1"
     finally:
         del os.environ["TRUST_PROXY"]
+
+
+def test_reset_token_hash_does_not_store_plain_code():
+    code = "123456"
+    hashed = _hash_reset_token(code)
+
+    assert hashed != code
+    assert len(hashed) == 64
+    assert _hash_reset_token(code) == hashed
+    assert _hash_reset_token("654321") != hashed
 
 @pytest.mark.anyio
 @patch("httpx.AsyncClient.post")
@@ -149,5 +159,4 @@ def test_verify_vercel_proxy_middleware():
         else:
             os.environ.pop("ENVIRONMENT", None)
         server.MYRA_PROXY_SECRET = orig_secret
-
 

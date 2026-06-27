@@ -209,8 +209,8 @@ class User(Base):
     
     nickname = Column(String(50), nullable=True)
     
-    # Új oszlopok a 6 jegyű biztonsági kódhoz
-    reset_token = Column(String(10), nullable=True)
+    # Jelszó-visszaállító kód hash-e, nem a felhasználónak kiküldött plaintext kód.
+    reset_token = Column(String(80), nullable=True)
     token_expires_at = Column(DateTime(timezone=True), nullable=True)
     
     last_login_ip = Column(String(80), nullable=True)
@@ -344,6 +344,20 @@ def _hash_secret(value: str) -> str:
 
 def _hash_mfa_code(challenge_id: str, code: str) -> str:
     return _hash_secret(f"mfa:{challenge_id}:{code.strip()}")
+
+
+def _hash_reset_token(token: str) -> str:
+    return _hash_secret(f"reset:{token.strip()}")[:64]
+
+
+async def _create_unique_reset_token(db: AsyncSession) -> tuple[str, str]:
+    for _ in range(10):
+        token = f"{secrets.randbelow(1_000_000):06d}"
+        token_hash = _hash_reset_token(token)
+        existing = (await db.execute(select(User.id).where(User.reset_token == token_hash).limit(1))).scalar_one_or_none()
+        if existing is None:
+            return token, token_hash
+    raise HTTPException(status_code=503, detail="Nem sikerült biztonsági kódot előállítani. Próbáld újra később.")
 
 
 def create_access_token(user: User, *, mfa_verified: bool = False) -> str:
@@ -902,7 +916,8 @@ async def _run_startup_migrations() -> None:
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN NOT NULL DEFAULT false"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname VARCHAR(50)"))
-        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token VARCHAR(10)"))
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token VARCHAR(80)"))
+        await conn.execute(sql_text("ALTER TABLE users ALTER COLUMN reset_token TYPE VARCHAR(80)"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMP WITH TIME ZONE"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_ip VARCHAR(80)"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP WITH TIME ZONE"))
@@ -1691,8 +1706,8 @@ async def auth_forgot_password(body: ForgotPasswordBody, request: Request, backg
     user = res.scalar_one_or_none()
 
     if user and user.is_active:
-        token = f"{secrets.randbelow(1_000_000):06d}"
-        user.reset_token = token
+        token, token_hash = await _create_unique_reset_token(db)
+        user.reset_token = token_hash
         user.token_expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
         await db.flush()
         background_tasks.add_task(_send_gmail_reset, user.email, token)
@@ -1704,8 +1719,10 @@ async def auth_forgot_password(body: ForgotPasswordBody, request: Request, backg
 async def auth_reset_password(body: ResetPasswordBody, request: Request, db: AsyncSession = Depends(get_db)):
     _check_reset_throttle(request)
     token_str = body.token.strip()
+    token_hash = _hash_reset_token(token_str)
     
-    res = await db.execute(select(User).where(User.reset_token == token_str))
+    # The plaintext fallback only keeps already-issued codes usable during a rolling deploy.
+    res = await db.execute(select(User).where(User.reset_token.in_([token_hash, token_str])))
     user = res.scalar_one_or_none()
     
     if not user:

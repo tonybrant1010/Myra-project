@@ -386,3 +386,5 @@ backend/rag/
 - Éles adatbázis-exportot vagy felhasználói adatot tartalmazó fájlt ne commitolj.
 - Supabase IP allowlist változás után mindig ellenőrizd a login, mérés, chat és admin tudásanyag folyamatot.
 - Backend restart után az első RAG keresés FastEmbed cold start miatt lassabb lehet.
+- A jelszó-visszaállító 6 jegyű kód a felhasználónak továbbra is emailben megy ki, de a backend a DB-ben csak hash formában tárolja.
+- A jelszó-reset frontend hívás a központi `apiUrl()` útvonalat használja, nem fix domainre küld érzékeny adatot.

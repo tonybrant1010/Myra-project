@@ -6,6 +6,7 @@ import { theme } from "@/src/theme";
 import { T } from "@/src/components/Typography";
 import PasswordInput from "@/src/components/PasswordInput";
 import ContentBackground from "@/src/components/ContentBackground";
+import { apiUrl } from "@/src/auth/AuthContext";
 
 export default function ResetPasswordScreen() {
   const router = useRouter();
@@ -37,8 +38,7 @@ export default function ResetPasswordScreen() {
 
     setBusy(true);
     try {
-      // Hívás a te Rackhost backended felé
-      const response = await fetch("https://myra-project.cfd/api/auth/reset-password", {
+      const response = await fetch(apiUrl("/api/auth/reset-password"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, new_password: password }),
