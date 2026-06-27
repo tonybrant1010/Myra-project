@@ -59,6 +59,14 @@ const securityHeaders = {
   'Permissions-Policy': 'geolocation=(), camera=(), payment=(), usb=(), magnetometer=(), gyroscope=()',
   'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
 };
+const normalRequestMaxBytes = Number(process.env.API_REQUEST_MAX_BYTES || 1024 * 1024);
+const uploadRequestMaxBytes = Number(process.env.KB_PDF_UPLOAD_MAX_BYTES || 25 * 1024 * 1024);
+
+function requestBodyLimit(cleanPath) {
+  return cleanPath === 'api/admin/kb/files/upload' || cleanPath === 'api/admin/kb/upload'
+    ? uploadRequestMaxBytes
+    : normalRequestMaxBytes;
+}
 
 module.exports = async function handler(req, res) {
   const path = req.query.path || '';
@@ -91,13 +99,29 @@ module.exports = async function handler(req, res) {
     }
   }
   headers['X-Myra-Proxy-Secret'] = process.env.MYRA_PROXY_SECRET || '';
+  const bodyLimit = requestBodyLimit(cleanPath);
+  const declaredLength = Number(req.headers['content-length'] || 0);
+  if (declaredLength && declaredLength > bodyLimit) {
+    res.status(413).json({ detail: 'A kérés túl nagy.' });
+    return;
+  }
 
   let body = undefined;
   if (req.method !== 'GET' && req.method !== 'HEAD') {
-    body = await new Promise((resolve) => {
+    body = await new Promise((resolve, reject) => {
       let chunks = [];
-      req.on('data', (chunk) => chunks.push(chunk));
+      let total = 0;
+      req.on('data', (chunk) => {
+        total += chunk.length;
+        if (total > bodyLimit) {
+          reject(new Error('REQUEST_TOO_LARGE'));
+          req.destroy();
+          return;
+        }
+        chunks.push(chunk);
+      });
       req.on('end', () => resolve(Buffer.concat(chunks)));
+      req.on('error', reject);
     });
   }
 
@@ -123,6 +147,10 @@ module.exports = async function handler(req, res) {
     console.error("Proxy error:", error);
     for (const [key, value] of Object.entries(securityHeaders)) {
       res.setHeader(key, value);
+    }
+    if (error && error.message === 'REQUEST_TOO_LARGE') {
+      res.status(413).json({ detail: 'A kérés túl nagy.' });
+      return;
     }
     res.status(502).json({ detail: "Proxy error connecting to origin." });
   }

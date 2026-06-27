@@ -11,6 +11,7 @@ from server import (
     _safe_upload_filename,
     _sanitize_log_line,
     SecretRedactionFilter,
+    _request_body_limit,
     _should_no_store_response,
     _validate_pdf_bytes,
     ChatSendBody,
@@ -148,6 +149,11 @@ def test_should_no_store_response_only_for_sensitive_api_paths():
     assert _should_no_store_response("/api/live/token") is True
     assert _should_no_store_response("/api/config") is False
     assert _should_no_store_response("/assets/app.js") is False
+
+
+def test_request_body_limit_allows_larger_kb_uploads():
+    assert _request_body_limit("/api/admin/kb/files/upload") > _request_body_limit("/api/chat/send")
+    assert _request_body_limit("/api/admin/kb/upload") > _request_body_limit("/api/auth/login")
 
 
 def test_chat_send_body_rejects_oversized_message():

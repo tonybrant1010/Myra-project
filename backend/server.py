@@ -183,6 +183,7 @@ def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
 CHAT_HISTORY_MAX_MESSAGES = _env_int("CHAT_HISTORY_MAX_MESSAGES", 120, 20, 300)
 CHAT_HISTORY_MAX_CHARS = _env_int("CHAT_HISTORY_MAX_CHARS", 45000, 8000, 120000)
 CHAT_MESSAGE_MAX_CHARS = _env_int("CHAT_MESSAGE_MAX_CHARS", 8000, 500, 20000)
+API_REQUEST_MAX_BYTES = _env_int("API_REQUEST_MAX_BYTES", 1 * 1024 * 1024, 64 * 1024, 10 * 1024 * 1024)
 KB_PDF_UPLOAD_MAX_BYTES = _env_int("KB_PDF_UPLOAD_MAX_BYTES", 25 * 1024 * 1024, 1 * 1024 * 1024, 100 * 1024 * 1024)
 KB_TEXT_UPLOAD_MAX_BYTES = _env_int("KB_TEXT_UPLOAD_MAX_BYTES", 2 * 1024 * 1024, 64 * 1024, 10 * 1024 * 1024)
 
@@ -1202,6 +1203,25 @@ NO_STORE_API_PREFIXES = (
 
 def _should_no_store_response(path: str) -> bool:
     return any(path.startswith(prefix) for prefix in NO_STORE_API_PREFIXES)
+
+
+def _request_body_limit(path: str) -> int:
+    if path in {"/api/admin/kb/files/upload", "/api/admin/kb/upload"}:
+        return max(KB_PDF_UPLOAD_MAX_BYTES, KB_TEXT_UPLOAD_MAX_BYTES)
+    return API_REQUEST_MAX_BYTES
+
+
+@app.middleware("http")
+async def enforce_request_size_limit(request: Request, call_next):
+    if request.method in {"POST", "PUT", "PATCH"} and request.url.path.startswith("/api/"):
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > _request_body_limit(request.url.path):
+                    return JSONResponse(status_code=413, content={"detail": "A kérés túl nagy."})
+            except ValueError:
+                return JSONResponse(status_code=400, content={"detail": "Érvénytelen Content-Length fejléc."})
+    return await call_next(request)
 
 
 @app.middleware("http")

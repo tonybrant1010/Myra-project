@@ -188,6 +188,7 @@ A chat az aktuális mérési sessionhöz kötődik. A backend a beszélgetés ko
 Hangolható env változók:
 
 ```env
+API_REQUEST_MAX_BYTES=1048576
 CHAT_MESSAGE_MAX_CHARS=8000
 CHAT_HISTORY_MAX_MESSAGES=120
 CHAT_HISTORY_MAX_CHARS=45000
