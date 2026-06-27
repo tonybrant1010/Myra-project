@@ -13,6 +13,7 @@ from server import (
     SecretRedactionFilter,
     _should_no_store_response,
     _validate_pdf_bytes,
+    ChatSendBody,
     HTTPException,
 )
 
@@ -147,6 +148,12 @@ def test_should_no_store_response_only_for_sensitive_api_paths():
     assert _should_no_store_response("/api/live/token") is True
     assert _should_no_store_response("/api/config") is False
     assert _should_no_store_response("/assets/app.js") is False
+
+
+def test_chat_send_body_rejects_oversized_message():
+    ChatSendBody(message="a" * 8000)
+    with pytest.raises(Exception):
+        ChatSendBody(message="a" * 8001)
 
 @pytest.mark.anyio
 @patch("httpx.AsyncClient.post")

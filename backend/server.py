@@ -182,6 +182,7 @@ def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
 
 CHAT_HISTORY_MAX_MESSAGES = _env_int("CHAT_HISTORY_MAX_MESSAGES", 120, 20, 300)
 CHAT_HISTORY_MAX_CHARS = _env_int("CHAT_HISTORY_MAX_CHARS", 45000, 8000, 120000)
+CHAT_MESSAGE_MAX_CHARS = _env_int("CHAT_MESSAGE_MAX_CHARS", 8000, 500, 20000)
 KB_PDF_UPLOAD_MAX_BYTES = _env_int("KB_PDF_UPLOAD_MAX_BYTES", 25 * 1024 * 1024, 1 * 1024 * 1024, 100 * 1024 * 1024)
 KB_TEXT_UPLOAD_MAX_BYTES = _env_int("KB_TEXT_UPLOAD_MAX_BYTES", 2 * 1024 * 1024, 64 * 1024, 10 * 1024 * 1024)
 
@@ -1306,7 +1307,7 @@ class QuizSubmitBody(BaseModel):
 
 
 class ChatSendBody(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=CHAT_MESSAGE_MAX_CHARS)
     session_id: Optional[str] = None
 
 

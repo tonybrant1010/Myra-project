@@ -23,6 +23,7 @@ import TopBar from "@/src/components/TopBar";
 import { T } from "@/src/components/Typography";
 
 const MYRA_AVATAR = require("@/assets/images/myra-avatar.png");
+const CHAT_MESSAGE_MAX_CHARS = 8000;
 
 type Msg = { id: string; role: "user" | "assistant"; text: string; created_at: string; state_code?: string | null };
 type ListItem = { kind: "msg"; msg: Msg } | { kind: "hint"; id: string; code: string };
@@ -584,6 +585,7 @@ export default function ChatScreen() {
                 placeholderTextColor="rgba(247,251,255,0.48)"
                 value={input}
                 onChangeText={setInput}
+                maxLength={CHAT_MESSAGE_MAX_CHARS}
                 multiline
                 testID="chat-input"
                 editable={!sending}
