@@ -125,6 +125,14 @@ A tudásanyag PDF-ekből épül:
 backend/data/kb_pdfs/*.pdf
 ```
 
+A PDF feltöltés backend oldalon méretkorlátot és PDF tartalomellenőrzést kap. Az alapértelmezett
+limit 25 MB/fájl, env-ből hangolható:
+
+```env
+KB_PDF_UPLOAD_MAX_BYTES=26214400
+KB_TEXT_UPLOAD_MAX_BYTES=2097152
+```
+
 A backend a PDF-ekből szöveget nyer ki, chunkokra bontja, FastEmbed embeddinget készít, majd Supabase-ben tárolja:
 
 ```text

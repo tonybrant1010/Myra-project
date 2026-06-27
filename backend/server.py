@@ -152,6 +152,8 @@ def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
 
 CHAT_HISTORY_MAX_MESSAGES = _env_int("CHAT_HISTORY_MAX_MESSAGES", 120, 20, 300)
 CHAT_HISTORY_MAX_CHARS = _env_int("CHAT_HISTORY_MAX_CHARS", 45000, 8000, 120000)
+KB_PDF_UPLOAD_MAX_BYTES = _env_int("KB_PDF_UPLOAD_MAX_BYTES", 25 * 1024 * 1024, 1 * 1024 * 1024, 100 * 1024 * 1024)
+KB_TEXT_UPLOAD_MAX_BYTES = _env_int("KB_TEXT_UPLOAD_MAX_BYTES", 2 * 1024 * 1024, 64 * 1024, 10 * 1024 * 1024)
 
 
 class pgvector_type(UserDefinedType):
@@ -501,6 +503,38 @@ def _record_reset_failure(request: Request) -> None:
     if s["failed"] >= RESET_MAX:
         s["blocked_until"] = now + RESET_WINDOW_S
     _reset_attempts[ip] = s
+
+
+def _safe_upload_filename(filename: Optional[str], allowed_suffixes: tuple[str, ...]) -> str:
+    raw_name = (filename or "").strip()
+    if not raw_name or "/" in raw_name or "\\" in raw_name:
+        raise HTTPException(status_code=400, detail="Érvénytelen fájlnév.")
+    safe_name = os.path.basename(raw_name)
+    if safe_name in {"", ".", ".."} or safe_name.startswith("."):
+        raise HTTPException(status_code=400, detail="Érvénytelen fájlnév.")
+    if not safe_name.lower().endswith(allowed_suffixes):
+        allowed = ", ".join(allowed_suffixes)
+        raise HTTPException(status_code=400, detail=f"Csak {allowed} fájl tölthető fel.")
+    return safe_name
+
+
+async def _read_upload_with_limit(file: UploadFile, max_bytes: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(status_code=413, detail=f"A feltöltött fájl túl nagy. Maximum: {max_bytes // (1024 * 1024)} MB.")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _validate_pdf_bytes(content: bytes) -> None:
+    if not content.startswith(b"%PDF-"):
+        raise HTTPException(status_code=400, detail="A fájl kiterjesztése .pdf, de a tartalma nem PDF.")
 
 
 
@@ -2776,10 +2810,12 @@ async def admin_search_pdf_knowledge(
 
 @api.post("/admin/kb/upload")
 async def admin_upload_kb(request: Request, file: UploadFile = File(...), admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    raw = await file.read()
-    name = (file.filename or "feltöltés").strip()
+    name = _safe_upload_filename(file.filename or "feltoltes.txt", (".pdf", ".txt"))
+    max_bytes = KB_PDF_UPLOAD_MAX_BYTES if name.lower().endswith(".pdf") else KB_TEXT_UPLOAD_MAX_BYTES
+    raw = await _read_upload_with_limit(file, max_bytes)
     text = ""
     if name.lower().endswith(".pdf"):
+        _validate_pdf_bytes(raw)
         try:
             r = PdfReader(io.BytesIO(raw))
             text = "\n".join((p.extract_text() or "") for p in r.pages).strip()
@@ -3032,14 +3068,13 @@ async def admin_upload_kb_file(
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db)
 ):
-    if not file.filename.endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Csak .pdf fájlok tölthetők fel.")
-    filename = os.path.basename(file.filename)
+    filename = _safe_upload_filename(file.filename, (".pdf",))
     pdf_dir = ROOT_DIR / "data" / "kb_pdfs"
     pdf_dir.mkdir(parents=True, exist_ok=True)
     pdf_path = pdf_dir / filename
     try:
-        content = await file.read()
+        content = await _read_upload_with_limit(file, KB_PDF_UPLOAD_MAX_BYTES)
+        _validate_pdf_bytes(content)
         pdf_path.write_bytes(content)
         await _admin_audit(db, admin, request, "admin.kb.upload_file", f"filename={filename} size={len(content)}")
         return {"ok": True, "filename": filename, "size": len(content)}

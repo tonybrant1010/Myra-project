@@ -36,6 +36,8 @@ type ReindexStatus = {
   error?: string | null;
 };
 
+const KB_PDF_UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+
 export default function AdminKbScreen() {
   useAuthGuard();
   const { token, user } = useAuth();
@@ -149,6 +151,11 @@ export default function AdminKbScreen() {
   const uploadFile = async (file: File) => {
     if (!file.name.endsWith(".pdf")) {
       setStatusErr("Kizárólag .pdf formátumú fájl tölthető fel.");
+      setBusy(false);
+      return;
+    }
+    if (file.size > KB_PDF_UPLOAD_MAX_BYTES) {
+      setStatusErr("A PDF túl nagy. Maximum 25 MB tölthető fel egyszerre.");
       setBusy(false);
       return;
     }

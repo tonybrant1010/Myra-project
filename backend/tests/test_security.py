@@ -2,7 +2,7 @@ import pytest
 import os
 from fastapi import Request
 from unittest.mock import Mock, patch
-from server import _client_ip, _call_llm, _hash_reset_token, HTTPException
+from server import _client_ip, _call_llm, _hash_reset_token, _safe_upload_filename, _validate_pdf_bytes, HTTPException
 
 # Tell pytest to use anyio for async tests
 @pytest.fixture
@@ -57,6 +57,28 @@ def test_reset_token_hash_does_not_store_plain_code():
     assert len(hashed) == 64
     assert _hash_reset_token(code) == hashed
     assert _hash_reset_token("654321") != hashed
+
+
+def test_safe_upload_filename_rejects_path_traversal():
+    with pytest.raises(HTTPException) as exc_info:
+        _safe_upload_filename("../evil.pdf", (".pdf",))
+
+    assert exc_info.value.status_code == 400
+
+
+def test_safe_upload_filename_rejects_wrong_extension():
+    with pytest.raises(HTTPException) as exc_info:
+        _safe_upload_filename("notes.exe", (".pdf", ".txt"))
+
+    assert exc_info.value.status_code == 400
+
+
+def test_validate_pdf_bytes_checks_magic_header():
+    _validate_pdf_bytes(b"%PDF-1.7\n%...")
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_pdf_bytes(b"not really a pdf")
+
+    assert exc_info.value.status_code == 400
 
 @pytest.mark.anyio
 @patch("httpx.AsyncClient.post")
@@ -159,4 +181,3 @@ def test_verify_vercel_proxy_middleware():
         else:
             os.environ.pop("ENVIRONMENT", None)
         server.MYRA_PROXY_SECRET = orig_secret
-
