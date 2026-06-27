@@ -395,7 +395,7 @@ export default function AdminSettingsScreen() {
                   {saving ? <ActivityIndicator color={theme.white} /> : <T variant="title" color={theme.white}>Beállítások mentése</T>}
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.outlineBtn} onPress={() => downloadBackup(token)} testID="backup-button">
+                <TouchableOpacity style={styles.outlineBtn} onPress={() => downloadBackup(token, setErr)} testID="backup-button">
                   <Ionicons name="download-outline" size={16} color={theme.accent} style={{ marginRight: 6 }} />
                   <T variant="label" color={theme.accent}>Adatbázis mentés letöltése</T>
                 </TouchableOpacity>
@@ -590,11 +590,15 @@ function providerHelp(provider: Provider) {
   return "aistudio.google.com/apikey";
 }
 
-function downloadBackup(token: string | null) {
+function downloadBackup(token: string | null, setErr: (message: string) => void) {
   if (Platform.OS !== "web") return;
   fetch(apiUrl("/api/admin/backup"), { headers: { Authorization: `Bearer ${token || ""}` } })
     .then(async (r) => {
-      if (!r.ok) return;
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        setErr(data.detail || "Adatbázis mentés nem érhető el ezen a környezeten.");
+        return;
+      }
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -605,7 +609,7 @@ function downloadBackup(token: string | null) {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     })
-    .catch(() => {});
+    .catch(() => setErr("Nem sikerült elindítani az adatbázis mentést."));
 }
 
 const styles = StyleSheet.create({

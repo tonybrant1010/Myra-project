@@ -3346,12 +3346,16 @@ async def admin_delete_user(user_id: int, request: Request, admin: User = Depend
 @api.get("/admin/backup")
 async def admin_backup_db(request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     if DB_DIALECT != "sqlite":
+        await _admin_audit(db, admin, request, "admin.backup.denied", f"db_dialect={DB_DIALECT}")
+        await db.commit()
         raise HTTPException(
             status_code=501,
             detail="Postgres/Supabase adatbázisnál a backupot pg_dump vagy Supabase backup kezeli.",
         )
     db_path = str(DATABASE_URL).replace("sqlite+aiosqlite:///", "")
     if not os.path.exists(db_path):
+        await _admin_audit(db, admin, request, "admin.backup.missing", "")
+        await db.commit()
         raise HTTPException(status_code=404, detail="Az adatbázis fájl nem található.")
     await _admin_audit(db, admin, request, "admin.backup.download")
     filename = f"myra_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
