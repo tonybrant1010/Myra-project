@@ -911,6 +911,10 @@ async def _run_startup_migrations() -> None:
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_trusted_devices_user_id ON trusted_devices (user_id)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_admin_audit_logs_admin_user_id ON admin_audit_logs (admin_user_id)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_chat_messages_session_id ON chat_messages (session_id)"))
+        await conn.execute(sql_text(
+            "CREATE INDEX IF NOT EXISTS ix_chat_messages_user_session_created_at "
+            "ON chat_messages (user_id, session_id, created_at DESC)"
+        ))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_chat_messages_state_code ON chat_messages (state_code)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_source_name ON knowledge_chunks (source_name)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_source_hash ON knowledge_chunks (source_hash)"))
@@ -1014,6 +1018,13 @@ async def get_setting(db: AsyncSession, key: str, default: str = "") -> str:
     res = await db.execute(select(AppSetting).where(AppSetting.key == key))
     s = res.scalar_one_or_none()
     return s.value if (s and s.value is not None) else default
+
+
+async def get_settings(db: AsyncSession, defaults: dict[str, str]) -> dict[str, str]:
+    """Fetch related settings in one round trip on Supabase."""
+    res = await db.execute(select(AppSetting).where(AppSetting.key.in_(defaults)))
+    values = {row.key: row.value for row in res.scalars() if row.value is not None}
+    return {key: values.get(key, default) for key, default in defaults.items()}
 
 
 async def set_setting(db: AsyncSession, key: str, value: str) -> None:
@@ -2358,6 +2369,12 @@ async def chat_history(
 
 @api.post("/chat/send")
 async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    request_started = time.perf_counter()
+    timings: dict[str, float] = {}
+
+    def mark_timing(name: str, started: float) -> None:
+        timings[name] = time.perf_counter() - started
+
     if not user.is_admin and await get_setting(db, "maintenance_mode", "false") == "true":
         raise HTTPException(status_code=503, detail="A Myra jelenleg tervezett karbantartás miatt nem érhető el. Kérjük, próbáld meg később.")
 
@@ -2396,27 +2413,42 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
     if body.session_id and body.session_id != active_session_id:
         raise HTTPException(status_code=403, detail="Ez a mérési session már lezárt, csak olvasható.")
 
-    provider = await get_setting(db, "llm_provider", "gemini")
-    model = await get_setting(db, "llm_model", "gemini-2.5-flash")
-    api_key = await get_setting(db, "llm_api_key", "")
-    sys_prompt_base = await get_setting(db, "system_prompt", DEFAULT_SYSTEM_PROMPT)
-    kb_text = await get_setting(db, "kb_text", "")
+    phase_started = time.perf_counter()
+    settings = await get_settings(db, {
+        "llm_provider": "gemini",
+        "llm_model": "gemini-2.5-flash",
+        "llm_api_key": "",
+        "system_prompt": DEFAULT_SYSTEM_PROMPT,
+    })
+    provider = settings["llm_provider"]
+    model = settings["llm_model"]
+    api_key = settings["llm_api_key"]
+    sys_prompt_base = settings["system_prompt"]
+    mark_timing("settings", phase_started)
+
     kb_query = f"{text}\n{sc.title}\n{sc.profile}\n{sc.severity or ''}"
+    phase_started = time.perf_counter()
     retrieved_chunks = await search_pdf_knowledge(db, kb_query, limit=5)
+    mark_timing("rag", phase_started)
     retrieved_kb_context = _build_retrieved_kb_context(retrieved_chunks)
 
+    phase_started = time.perf_counter()
     res = await db.execute(
         select(ChatMessage)
         .where(ChatMessage.user_id == user.id, ChatMessage.session_id == active_session_id)
-        .order_by(ChatMessage.created_at.asc(), ChatMessage.role.desc())
+        .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
+        .limit(CHAT_HISTORY_MAX_MESSAGES)
     )
-    db_history = res.scalars().all()
+    db_history = list(reversed(res.scalars().all()))
+    mark_timing("history_db", phase_started)
     
     # Keep raw text for crisis check
     recent_user_text = "\n".join(m.text for m in db_history[-6:] if m.role == "user")
     crisis_context = _build_crisis_safety_context() if _is_crisis_message(f"{recent_user_text}\n{text}") else ""
 
+    phase_started = time.perf_counter()
     history = _format_chat_history_for_llm(db_history)
+    mark_timing("history_format", phase_started)
 
     user_msg = ChatMessage(id=str(uuid.uuid4()), user_id=user.id, state_code=user.state_code,
                            session_id=active_session_id, role="user", text=text)
@@ -2429,7 +2461,9 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
     sys_prompt = _build_system_prompt(sys_prompt_base, effective_kb, sc, user.name, user.code_verified_at)
     try:
         now_ts_str = _now().strftime("%Y.%m.%d %H:%M")
+        phase_started = time.perf_counter()
         reply = await _call_llm(provider, model, api_key, sys_prompt, history, f"[{now_ts_str}] {text}")
+        mark_timing("llm", phase_started)
     except HTTPException:
         raise
     except Exception as e:
@@ -2439,7 +2473,30 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
     ai_msg = ChatMessage(id=str(uuid.uuid4()), user_id=user.id, state_code=user.state_code,
                          session_id=active_session_id, role="assistant", text=str(reply))
     db.add(ai_msg)
+    phase_started = time.perf_counter()
     await db.flush()
+    mark_timing("reply_db", phase_started)
+
+    history_chars = sum(len(item["text"]) for item in history)
+    logger.info(
+        "chat_timing provider=%s model=%s total=%.2fs settings=%.2fs rag=%.2fs "
+        "history_db=%.2fs history_format=%.2fs llm=%.2fs reply_db=%.2fs "
+        "history_messages=%d history_chars=%d rag_chunks=%d prompt_chars=%d reply_chars=%d",
+        provider,
+        model,
+        time.perf_counter() - request_started,
+        timings.get("settings", 0),
+        timings.get("rag", 0),
+        timings.get("history_db", 0),
+        timings.get("history_format", 0),
+        timings.get("llm", 0),
+        timings.get("reply_db", 0),
+        len(history),
+        history_chars,
+        len(retrieved_chunks),
+        len(sys_prompt),
+        len(str(reply)),
+    )
 
     def _out(m: ChatMessage) -> dict:
         return {"id": m.id, "role": m.role, "text": m.text,

@@ -80,6 +80,7 @@ A böngészőből induló API hívások `/api/...` útvonalra mennek. Vercelen e
 
 - továbbítja a kérést a VM backend felé;
 - hozzáadja a `X-Myra-Proxy-Secret` headert;
+- kiszűri a hop-by-hop HTTP headereket, például `transfer-encoding` és `content-length`, hogy a POST kérések ne akadjanak el a Vercel Function proxyban;
 - megakadályozza, hogy a backend publikus originje közvetlenül használható legyen.
 
 Emiatt a böngészőben gyakran ilyen útvonal látszik:
@@ -191,6 +192,25 @@ CHAT_HISTORY_MAX_CHARS=25000
 ```
 
 A chat felületen a betöltött beszélgetés TXT fájlként letölthető.
+
+### Chat teljesítmény
+
+A backend a chat válaszadásnál `chat_timing` logsort ír. Ez külön méri a fő lépéseket:
+
+```text
+settings, rag, history_db, history_format, llm, reply_db
+```
+
+Ebből látható, hogy a lassulást a beállítások lekérése, a RAG keresés, az előzmények olvasása,
+az LLM hívás vagy a válasz mentése okozza-e. A chat előzmény lekéréséhez külön Postgres index
+van:
+
+```text
+ix_chat_messages_user_session_created_at
+```
+
+Ez az aktuális mérési session üzeneteit időrend szerint, limitált mennyiségben tölti vissza, hogy
+a beszélgetés folyamatát kövesse, de ne húzza be feleslegesen a teljes régi előzményt.
 
 ## Live Beszélgetés
 

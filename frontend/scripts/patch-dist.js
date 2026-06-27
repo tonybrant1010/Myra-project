@@ -66,8 +66,19 @@ module.exports = async function handler(req, res) {
   }
 
   const headers = {};
+  const hopByHopHeaders = new Set([
+    'host',
+    'connection',
+    'keep-alive',
+    'proxy-connection',
+    'te',
+    'trailer',
+    'transfer-encoding',
+    'upgrade',
+    'content-length',
+  ]);
   for (const [key, value] of Object.entries(req.headers)) {
-    if (key.toLowerCase() !== 'host') {
+    if (!hopByHopHeaders.has(key.toLowerCase())) {
       headers[key] = value;
     }
   }
