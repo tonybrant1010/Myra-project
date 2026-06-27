@@ -1,5 +1,6 @@
 import pytest
 import os
+import logging
 from fastapi import Request
 from unittest.mock import Mock, patch
 from server import (
@@ -8,6 +9,7 @@ from server import (
     _hash_reset_token,
     _safe_upload_filename,
     _sanitize_log_line,
+    SecretRedactionFilter,
     _validate_pdf_bytes,
     HTTPException,
 )
@@ -101,6 +103,23 @@ def test_sanitize_log_line_masks_api_credentials():
     assert "sk-proj-secret1234567890" not in sanitized
     assert "secret-value" not in sanitized
     assert "[redacted]" in sanitized
+
+
+def test_secret_redaction_filter_masks_log_record_before_handlers():
+    record = logging.LogRecord(
+        name="httpx",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="GET https://example.test/api?key=%s",
+        args=("AIzaSyDrxRwZqITYSLSvOWCQKMep6yIzTUmPV8w",),
+        exc_info=None,
+    )
+
+    assert SecretRedactionFilter().filter(record) is True
+    rendered = record.getMessage()
+    assert "AIzaSyDrxRwZqITYSLSvOWCQKMep6yIzTUmPV8w" not in rendered
+    assert "[redacted]" in rendered
 
 @pytest.mark.anyio
 @patch("httpx.AsyncClient.post")

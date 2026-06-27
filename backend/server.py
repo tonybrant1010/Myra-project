@@ -92,6 +92,22 @@ def _sanitize_log_line(line: str) -> str:
     return line
 
 
+class SecretRedactionFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            rendered = record.getMessage()
+            redacted = _sanitize_log_line(rendered)
+            if redacted != rendered:
+                record.msg = redacted
+                record.args = ()
+        except Exception:
+            pass
+        return True
+
+
+logging.getLogger().addFilter(SecretRedactionFilter())
+
+
 class InMemoryLogHandler(logging.Handler):
     def __init__(self, capacity=100):
         super().__init__()
