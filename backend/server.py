@@ -1187,6 +1187,20 @@ SECURITY_HEADERS = {
     "Permissions-Policy": "geolocation=(), camera=(), payment=(), usb=(), magnetometer=(), gyroscope=()",
     "Cross-Origin-Resource-Policy": "same-site",
 }
+NO_STORE_API_PREFIXES = (
+    "/api/auth",
+    "/api/admin",
+    "/api/chat",
+    "/api/live",
+    "/api/quiz",
+    "/api/codes",
+    "/api/user",
+    "/api/tts",
+)
+
+
+def _should_no_store_response(path: str) -> bool:
+    return any(path.startswith(prefix) for prefix in NO_STORE_API_PREFIXES)
 
 
 @app.middleware("http")
@@ -1196,6 +1210,9 @@ async def add_security_headers(request: Request, call_next):
         response.headers.setdefault(key, value)
     if request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip() == "https":
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    if _should_no_store_response(request.url.path):
+        response.headers.setdefault("Cache-Control", "no-store")
+        response.headers.setdefault("Pragma", "no-cache")
     return response
 
 

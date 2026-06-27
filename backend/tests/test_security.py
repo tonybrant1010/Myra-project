@@ -11,6 +11,7 @@ from server import (
     _safe_upload_filename,
     _sanitize_log_line,
     SecretRedactionFilter,
+    _should_no_store_response,
     _validate_pdf_bytes,
     HTTPException,
 )
@@ -137,6 +138,15 @@ def test_secret_redaction_filter_masks_handler_output():
 
     assert "AIzaSyDrxRwZqITYSLSvOWCQKMep6yIzTUmPV8w" not in output
     assert "[redacted]" in output
+
+
+def test_should_no_store_response_only_for_sensitive_api_paths():
+    assert _should_no_store_response("/api/auth/me") is True
+    assert _should_no_store_response("/api/admin/logs") is True
+    assert _should_no_store_response("/api/chat/send") is True
+    assert _should_no_store_response("/api/live/token") is True
+    assert _should_no_store_response("/api/config") is False
+    assert _should_no_store_response("/assets/app.js") is False
 
 @pytest.mark.anyio
 @patch("httpx.AsyncClient.post")
