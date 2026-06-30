@@ -197,6 +197,8 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     marginBottom: spacing.md,
     backgroundColor: "rgba(255,255,255,0.03)",
+    borderWidth: 1,
+    borderColor: "rgba(79,209,197,0.18)",
   },
   cardGradient: {
     padding: spacing.md,

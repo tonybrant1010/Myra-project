@@ -13,7 +13,7 @@ MIKOR ÉRDEMES ÚJ MÉRÉST CSINÁLNI?
 Az állapotkód egy adott pillanatot tükröz. Ha úgy érzed, hogy sokat változott az állapotod — jobb vagy rosszabb lett —, érdemes új mérést végezni. Ezt a Menüből tudod elindítani az "Új mérés" gombbal. A korábbi mérések és a hozzájuk tartozó beszélgetések megmaradnak, visszanézheted őket.
 
 LÁTHATJA MÁS AZ ADATAIMAT?
-Nem. A chat üzeneteid és a mérési eredményeid csak te látod. Az adminisztrátor (az app fejlesztője) technikai okokból hozzáférhet az adatokhoz az alkalmazás biztonságos üzemeltetéséhez, de azokat harmadik féllel nem osztja meg. A chat TXT letöltése a saját böngésződben készül el a már betöltött beszélgetésből. Ha törölni szeretnéd az összes adatodat, a Menüből a Beállítások alatt a "Fiók törlése" gombbal ezt bármikor megteheted, ekkor minden adatod véglegesen és helyreállíthatatlanul törlődik.
+Nem. A chat üzeneteid és a mérési eredményeid csak te látod. Az adminisztrátor (az app fejlesztője) technikai okokból hozzáférhet az adatokhoz az alkalmazás biztonságos üzemeltetéséhez, de azokat harmadik féllel nem osztja meg. A chat TXT letöltése a saját böngésződben készül el a már betöltött beszélgetésből, de a teljes profilodat és a mérési/beszélgetési adataidat is letöltheted strukturált JSON formátumban a Beállítások menüpont alatt található "Adatok letöltése" gombbal. Ha törölni szeretnéd az összes adatodat, a Menüből a Beállítások alatt a "Fiók törlése" gombbal ezt bármikor megteheted, ekkor minden adatod véglegesen és helyreállíthatatlanul törlődik.
 
 FONTOS TUDNIVALÓ
 A Myra nem orvos, nem pszichológus, nem orvostechnikai eszköz és nem diagnosztikai rendszer. Ha úgy érzed, hogy szakemberre van szükséged, kérlek, keress fel egyet. Az app ezt nem tudja és nem is akarja helyettesíteni.

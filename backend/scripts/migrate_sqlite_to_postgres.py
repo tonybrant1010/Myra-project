@@ -40,9 +40,23 @@ def bool_value(value):
     return bool(int(value or 0))
 
 
+TABLE_SELECTS = {
+    "users": "SELECT * FROM users",
+    "state_codes": "SELECT * FROM state_codes",
+    "quiz_submissions": "SELECT * FROM quiz_submissions",
+    "chat_messages": "SELECT * FROM chat_messages",
+    "app_settings": "SELECT * FROM app_settings",
+    "knowledge_chunks": "SELECT * FROM knowledge_chunks",
+}
+
+
 def rows(conn, table):
+    try:
+        query = TABLE_SELECTS[table]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported SQLite table for migration: {table}") from exc
     conn.row_factory = sqlite3.Row
-    return [dict(row) for row in conn.execute(f"SELECT * FROM {table}")]
+    return [dict(row) for row in conn.execute(query)]
 
 
 def prepare_server_import(target_url):
@@ -91,6 +105,9 @@ async def migrate(source_sqlite, target_url, wipe_target=False):
                 created_at=parse_dt(row.get("created_at")),
                 reset_token=row.get("reset_token"),
                 token_expires_at=parse_dt(row.get("token_expires_at")),
+                terms_version=row.get("terms_version"),
+                privacy_version=row.get("privacy_version"),
+                terms_accepted_at=parse_dt(row.get("terms_accepted_at")),
             ))
 
         for row in rows(source, "state_codes"):

@@ -1,146 +1,124 @@
 {
   "project_name": "Myra Project",
+  "design_system_version": "2026-06-27",
+  "source_of_truth": {
+    "theme_file": "frontend/src/theme.ts",
+    "primary_screens": [
+      "frontend/app/login.tsx",
+      "frontend/app/welcome.tsx",
+      "frontend/app/chat.tsx",
+      "frontend/app/myra-live.tsx",
+      "frontend/app/quiz.tsx",
+      "frontend/app/quiz-result.tsx"
+    ],
+    "principle": "Design decisions must follow the existing Aurora Blue product UI unless the owner explicitly approves a redesign."
+  },
   "theme_and_archetype": {
-    "theme": "Light",
-    "archetype": "Archetype 1: Organic & Earthy",
-    "vibe": "Quiet luxury, premium psychology paper, Scandinavian minimal, clinical yet warm, Headspace x editorial.",
-    "rationale": "Patients need warmth, calm, and trust. A highly professional 'editorial' aesthetic instills confidence, while natural earthy tones provide psychological safety."
+    "theme": "Aurora Blue dark calm",
+    "archetype": "Minimal, therapeutic, focused, high-trust web app",
+    "vibe": "Quiet digital therapy room: deep navy, soft cyan light, glass layers, calm motion, low visual noise.",
+    "rationale": "Myra needs to feel private, steady, and technically reliable. The interface should support deep conversation without turning into a dashboard or marketing page."
   },
   "colors": {
     "background": {
-      "name": "Paper-Cream",
-      "hex": "#F7F5F0",
-      "tailwind": "bg-[#F7F5F0]",
-      "usage": "Primary app background. Gives a tactile, physical paper feel instead of harsh digital white."
+      "name": "Primary Dark",
+      "hex": "#05111F",
+      "usage": "Page shell, safe areas, dark app frame."
     },
-    "surface": {
-      "name": "Soft White",
-      "hex": "#FFFFFF",
-      "tailwind": "bg-white",
-      "usage": "Card backgrounds, AI chat bubbles, and elevated containers."
+    "gradient_base": {
+      "name": "Aurora Background",
+      "stops": ["#04101D", "#08223B", "#123E66", "#EAF7FF"],
+      "usage": "Main content background via ContentBackground."
     },
     "primary": {
-      "name": "Deep Moss",
-      "hex": "#2B3A30",
-      "tailwind": "bg-[#2B3A30] text-[#2B3A30] border-[#2B3A30]",
-      "usage": "Primary buttons, user chat bubbles, major headings, and the 4-digit hero code. Replaces the old sage for higher contrast and luxury feel."
+      "name": "Deep Navy",
+      "hex": "#0A2340",
+      "usage": "Primary brand surfaces and strong actions."
     },
-    "secondary": {
-      "name": "Sage Green",
-      "hex": "#6B7D70",
-      "tailwind": "bg-[#6B7D70] text-[#6B7D70]",
-      "usage": "Inactive states, borders, subtle separators, and secondary UI elements."
+    "primary_soft": {
+      "name": "Soft Navy",
+      "hex": "#123A62",
+      "usage": "Button gradients and secondary dark surfaces."
     },
     "accent": {
-      "name": "Terracotta",
-      "hex": "#C07C66",
-      "tailwind": "bg-[#C07C66] text-[#C07C66]",
-      "usage": "Active states (e.g., selected Likert button), severity tags, and primary CTAs needing urgent visual weight."
+      "name": "Aurora Cyan",
+      "hex": "#57C7FF",
+      "usage": "Focus accents, dividers, glows, status light."
+    },
+    "accent_deep": {
+      "name": "Action Blue",
+      "hex": "#1D8ED8",
+      "usage": "Primary action gradient start and active call controls."
+    },
+    "accent_soft": {
+      "name": "Ice Blue",
+      "hex": "#DDF5FF",
+      "usage": "Text on dark badges, subtle highlights."
+    },
+    "danger": {
+      "name": "Calm Danger",
+      "hex": "#D95F72",
+      "usage": "Stop, destructive, and urgent states without aggressive red."
     },
     "text": {
+      "on_dark": {
+        "hex": "#F7FBFF",
+        "usage": "Primary text on dark surfaces."
+      },
       "primary": {
-        "name": "Graphite",
-        "hex": "#1E2420",
-        "tailwind": "text-[#1E2420]",
-        "usage": "Main body text. Never use pure black."
+        "hex": "#10243A",
+        "usage": "Primary text on light surfaces."
       },
       "secondary": {
-        "name": "Muted Moss",
-        "hex": "#5C6B61",
-        "tailwind": "text-[#5C6B61]",
-        "usage": "Subtitles, meta text, timestamps."
+        "hex": "#60758A",
+        "usage": "Secondary text and metadata."
       }
     }
   },
   "typography": {
-    "fonts": {
-      "display": {
-        "family": "Cormorant Garamond",
-        "fallback": "serif",
-        "usage": "Hero 4-digit code, massive titles, and quiet luxury moments. Excellent Hungarian diacritic support."
-      },
-      "body": {
-        "family": "Manrope",
-        "fallback": "sans-serif",
-        "usage": "UI elements, chat bubbles, buttons, quiz questions. Highly readable, geometric yet warm."
-      }
+    "display": {
+      "family": "Manrope_700Bold",
+      "usage": "Main product names and strong screen titles."
     },
-    "scale": {
-      "hero_code": "text-5xl sm:text-6xl tracking-widest font-serif font-medium",
-      "h1": "text-3xl font-serif font-medium leading-tight",
-      "h2": "text-2xl font-serif font-medium",
-      "body_lg": "text-lg font-sans font-normal leading-relaxed",
-      "body": "text-base font-sans font-normal leading-relaxed",
-      "caption": "text-sm font-sans font-medium uppercase tracking-widest"
-    }
+    "body": {
+      "family": "Manrope_400Regular",
+      "usage": "All readable app text, chat, forms, explanations."
+    },
+    "rule": "Keep type calm and legible. Do not use viewport-scaled text. Letter spacing must never be negative."
   },
-  "media": {
-    "esv_logo": {
-      "url": "/app/frontend/assets/images/esv-logo.png",
-      "type": "local_asset",
-      "usage": "Login screen hero, onboarding."
-    },
-    "myra_avatar": {
-      "url": "https://static.prod-images.emergentagent.com/jobs/0ff43180-0fdd-4eb7-a3a2-f49a414159e8/images/c2361cac27aa33024a1e3565b890aba4eee3c69fcb87ca173b544f7ee8aa67d2.png",
-      "type": "remote_image",
-      "usage": "Myra (AI) avatar in chat bubbles and side drawer."
-    },
-    "result_hero_bg": {
-      "url": "https://static.prod-images.emergentagent.com/jobs/0ff43180-0fdd-4eb7-a3a2-f49a414159e8/images/8177347f2d5512a27dc0af04ed126ce500bb6cdacb283eeee78621e67e0b7dd8.png",
-      "type": "remote_image",
-      "usage": "Subtle abstract background for the 4-digit code hero screen."
-    }
+  "layout_rules": {
+    "first_screen": "Show the working app surface first. Do not replace app screens with marketing hero pages.",
+    "cards": "Use cards for forms, repeated items, modals, and framed tools only. Avoid nested cards.",
+    "radius": "Default card radius should stay around 8-16px. Pill radius only for badges and small utility actions.",
+    "spacing": "Dense enough for operational use, calm enough for mental-health reading. Avoid cramped chat bubbles.",
+    "mobile": "All primary flows must fit narrow mobile widths without overlap, clipped controls, or hidden primary actions."
   },
-  "component_anatomy": {
-    "layout_rules": {
-      "global": "Mobile-first execution. Use max-w-md mx-auto on web to simulate the app constraints, or full width if native.",
-      "spacing": "Generous. Use p-6 and p-8 for major containers. Let the UI breathe.",
-      "shadows": "Very soft. shadow-[0_8px_30px_rgb(0,0,0,0.04)] for cards."
-    },
-    "login_screen": {
-      "background": "Paper-Cream bg-[#F7F5F0]",
-      "hero": "Render the ESV logo (/app/frontend/assets/images/esv-logo.png) centered, generous top margin.",
-      "action": "Google Login button: White bg, Deep Moss border (border-[#2B3A30]), Graphite text. Minimalist, no heavy shadows."
-    },
-    "quiz_question_card": {
-      "container": "White surface, subtle shadow, rounded-2xl, p-6.",
-      "question_text": "Graphite text, text-xl, Manrope font, generous line height.",
-      "likert_scale": {
-        "layout": "Flex row, justify-between, gap-2 mt-8.",
-        "buttons": "Large touch targets (min-h-[48px] min-w-[48px] rounded-full).",
-        "inactive": "White bg, 1px solid Sage (#6B7D70/40), Graphite text.",
-        "active": "Terracotta bg (#C07C66), pure White text, no border."
-      }
-    },
-    "quiz_result_hero": {
-      "container": "Full height/viewport focus. Use result_hero_bg as a very faint background layer (opacity-30).",
-      "code_reveal": "The 4-digit code is the absolute center. Deep Moss text, Cormorant Garamond, text-6xl tracking-[0.2em].",
-      "diagnosis_title": "Graphite, text-2xl, serif, mt-4.",
-      "severity_tag": "Inline flex, rounded-full px-3 py-1 bg-[#C07C66]/10 text-[#C07C66] text-xs font-bold uppercase tracking-widest."
-    },
-    "chat_interface": {
-      "background": "Paper-Cream bg-[#F7F5F0]",
-      "myra_bubble": "White bg, rounded-2xl rounded-tl-none, p-4, Graphite text. Avatar: 32x32px rounded-full using myra_avatar.",
-      "user_bubble": "Deep Moss bg (#2B3A30), rounded-2xl rounded-tr-none, p-4, Paper-Cream text.",
-      "separator_pill": "Used for code changes. Centered. Sage bg with 10% opacity (bg-[#6B7D70]/10), Sage text, uppercase caption font. e.g. 'ÚJ MÉRÉS: 2134'.",
-      "input_bar": "Fixed at bottom. White bg, border-t border-[#6B7D70]/20. Deep Moss send icon."
-    },
-    "side_drawer": {
-      "background": "Deep Moss bg-[#2B3A30]",
-      "text": "Paper-Cream text-[#F7F5F0]",
-      "header": "User avatar, Name, Email.",
-      "state_badge": "Large prominent badge displaying the current 4-digit code (e.g. 'ÁLLAPOT: 3124'). Terracotta text on Deep Moss bg with Terracotta border.",
-      "nav_items": "Manrope text-lg, active state gets a slight Terracotta left-border indicator."
-    }
+  "component_rules": {
+    "content_background": "Use ContentBackground for app screens that need the Aurora environment. Do not introduce unrelated beige, purple, or one-hue gradient systems.",
+    "top_bar": "Keep TopBar compact, dark, and functional. Menu/back controls must remain obvious and touch-friendly.",
+    "login": "Login should feel premium, private, and simple: logo, short product description, form, support contact.",
+    "chat": "Conversation is the primary product surface. Preserve readable message widths, timestamps, avatar grounding, TXT export, and a stable bottom input bar.",
+    "live": "Live should stay centered and low-noise: avatar, status, one large microphone/stop control, clear memory notice, no transcript persistence unless explicitly redesigned.",
+    "quiz": "Quiz screens should keep section context, large tap targets, and clear progress. Decorative sheen layers must not block interaction."
   },
-  "testing_rules": {
-    "data_testid": "CRITICAL: All interactive and key informational elements MUST include a data-testid attribute in kebab-case. Examples: 'login-google-button', 'quiz-likert-button-3', 'chat-input-field', 'chat-send-button', 'drawer-toggle', 'hero-state-code'."
+  "accessibility_and_ux": {
+    "contrast": "Text on glass surfaces must remain readable against the dark gradient.",
+    "touch_targets": "Primary controls should be at least 44x44px.",
+    "motion": "Motion should communicate state, not decorate. Live pulse is acceptable; avoid competing animations.",
+    "copy": "Keep interface text short, direct, and Hungarian-first.",
+    "warnings": "Medical/therapeutic disclaimers must remain visible where chat or live guidance appears."
   },
-  "instructions_to_main_agent": [
-    "Strictly adhere to the color palette. Do not introduce pure blacks, bright blues, or standard 'app' colors.",
-    "Implement typography changes carefully, ensuring Cormorant Garamond is imported and applied to headings, and Manrope to the body.",
-    "Ensure all Hungarian diacritics render correctly.",
-    "Rely entirely on the media URLs provided in this JSON.",
-    "Make sure the Shadcn components (if used) are heavily customized to strip their default Vercel-like borders/shadows, aligning with the Organic & Earthy quiet luxury aesthetic."
+  "technical_rules": {
+    "web_shadows": "Use theme shadow tokens. On web they must resolve to boxShadow, not deprecated React Native shadow props.",
+    "pointer_events": "Decorative overlay layers must use style.pointerEvents = 'none', not the deprecated pointerEvents prop.",
+    "test_ids": "Important interactive elements should keep stable testID values in kebab-case.",
+    "assets": "Use local assets from frontend/assets/images where possible. Do not depend on remote image URLs for core UI identity."
+  },
+  "do_not_do": [
+    "Do not rewrite or soften the Myra prompt while doing design work.",
+    "Do not turn Myra into a generic SaaS dashboard.",
+    "Do not introduce a new color palette without explicit approval.",
+    "Do not add decorative visual noise that slows the app or distracts from conversation.",
+    "Do not hide admin or safety controls behind novelty UI."
   ]
 }

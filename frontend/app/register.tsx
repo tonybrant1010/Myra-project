@@ -27,6 +27,7 @@ import { termsText } from "@/src/constants/docs/terms";
 import { kisokosText } from "@/src/constants/docs/kisokos";
 
 const MYRA_MARK = require("@/assets/images/uj_logo1_kor.png");
+const PASSWORD_MAX_CHARS = 128;
 
 export default function RegisterScreen() {
   const router = useRouter();
@@ -38,6 +39,9 @@ export default function RegisterScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [docModal, setDocModal] = useState<{ title: string; text: string } | null>(null);
+
+  const [emailFocused, setEmailFocused] = useState(false);
+  const [nameFocused, setNameFocused] = useState(false);
 
   const submit = async () => {
     setError(null);
@@ -55,7 +59,7 @@ export default function RegisterScreen() {
     }
     setBusy(true);
     try {
-      const r = await register(email.trim(), name.trim(), password);
+      const r = await register(email.trim(), name.trim(), password, acceptedTerms);
       if (!r.ok) setError(r.error || "Nem sikerült regisztrálni.");
       else router.replace("/");
     } catch (e: any) {
@@ -85,17 +89,19 @@ export default function RegisterScreen() {
             <View style={[styles.formCard, shadow.card]}>
               <FieldLabel text="Név" />
               <TextInput
-                style={styles.input}
+                style={[styles.input, nameFocused && styles.inputFocused]}
                 value={name}
                 onChangeText={setName}
                 placeholder="Teljes név"
                 placeholderTextColor={styles.placeholderColor.color}
+                onFocus={() => setNameFocused(true)}
+                onBlur={() => setNameFocused(false)}
                 testID="reg-name"
               />
 
               <FieldLabel text="Email" />
               <TextInput
-                style={styles.input}
+                style={[styles.input, emailFocused && styles.inputFocused]}
                 value={email}
                 onChangeText={setEmail}
                 placeholder="email@example.com"
@@ -103,6 +109,8 @@ export default function RegisterScreen() {
                 keyboardType="email-address"
                 autoCapitalize="none"
                 autoCorrect={false}
+                onFocus={() => setEmailFocused(true)}
+                onBlur={() => setEmailFocused(false)}
                 testID="reg-email"
               />
 
@@ -114,6 +122,7 @@ export default function RegisterScreen() {
                 placeholderTextColor={styles.placeholderColor.color}
                 containerStyle={styles.passwordBox}
                 style={styles.passwordInput}
+                maxLength={PASSWORD_MAX_CHARS}
                 testID="reg-password"
               />
 
@@ -194,9 +203,9 @@ const styles = StyleSheet.create({
     borderRadius: 44,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(79,209,197,0.14)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.20)",
+    borderColor: "rgba(79,209,197,0.22)",
     marginBottom: 16,
   },
   logo: { width: 82, height: 82, borderRadius: 41 },
@@ -210,29 +219,48 @@ const styles = StyleSheet.create({
     paddingBottom: 38,
   },
   formCard: {
-    backgroundColor: "rgba(6,19,32,0.58)",
-    borderRadius: 16,
+    backgroundColor: "rgba(7,27,48,0.48)",
+    borderRadius: 22,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
+    borderColor: "rgba(79,209,197,0.22)",
     padding: 20,
-    backdropFilter: "blur(18px)",
-  },
+    backdropFilter: "blur(20px)",
+  } as any,
   lbl: { marginTop: 12, marginBottom: 7, letterSpacing: 1.1, fontSize: 10 },
   input: {
-    backgroundColor: "rgba(255,255,255,0.10)",
+    backgroundColor: "rgba(255,255,255,0.06)",
     borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 15,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.22)",
+    borderColor: "rgba(79,209,197,0.18)",
     fontSize: 16,
     color: theme.textOnDark,
     fontFamily: "Manrope_400Regular",
   },
+  inputFocused: {
+    borderColor: theme.accent,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    ...Platform.select({
+      web: {
+        boxShadow: "0 0 12px rgba(79, 209, 197, 0.4)",
+        outlineWidth: 0,
+      },
+      ios: {
+        shadowColor: theme.accent,
+        shadowOpacity: 0.35,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 0 },
+      },
+      android: {
+        elevation: 3,
+      }
+    })
+  } as any,
   placeholderColor: { color: "rgba(247,251,255,0.48)" },
   passwordBox: {
-    backgroundColor: "rgba(255,255,255,0.10)",
-    borderColor: "rgba(255,255,255,0.22)",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderColor: "rgba(79,209,197,0.18)",
   },
   passwordInput: {
     color: theme.textOnDark,
@@ -243,8 +271,8 @@ const styles = StyleSheet.create({
     height: 24,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.24)",
-    backgroundColor: "rgba(255,255,255,0.10)",
+    borderColor: "rgba(79,209,197,0.28)",
+    backgroundColor: "rgba(255,255,255,0.06)",
     alignItems: "center",
     justifyContent: "center",
     marginTop: 1,

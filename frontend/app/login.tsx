@@ -23,6 +23,7 @@ import { T } from "@/src/components/Typography";
 import { shadow, theme } from "@/src/theme";
 
 const MYRA_MARK = require("@/assets/images/uj_logo1_kor.png");
+const PASSWORD_MAX_CHARS = 128;
 
 type Mode = "login" | "mfa" | "forgot" | "reset";
 
@@ -42,6 +43,10 @@ export default function LoginScreen() {
   const [mfaCode, setMfaCode] = useState("");
   const [rememberDevice, setRememberDevice] = useState(true);
   const [mfaIsAdmin, setMfaIsAdmin] = useState(false);
+
+  const [emailFocused, setEmailFocused] = useState(false);
+  const [mfaCodeFocused, setMfaCodeFocused] = useState(false);
+  const [resetCodeFocused, setResetCodeFocused] = useState(false);
 
   const submit = async () => {
     setError(null);
@@ -88,6 +93,8 @@ export default function LoginScreen() {
     try {
       const r = await fetch(apiUrl("/api/auth/forgot-password"), {
         method: "POST",
+        cache: "no-store",
+        credentials: "omit",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: trimmedEmail }),
       });
@@ -123,6 +130,8 @@ export default function LoginScreen() {
     try {
       const response = await fetch(apiUrl("/api/auth/reset-password"), {
         method: "POST",
+        cache: "no-store",
+        credentials: "omit",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: resetCode.trim(), new_password: newPassword }),
       });
@@ -176,7 +185,7 @@ export default function LoginScreen() {
                     <>
                       <FieldLabel text="Email" />
                       <TextInput
-                        style={styles.input}
+                        style={[styles.input, emailFocused && styles.inputFocused]}
                         value={email}
                         onChangeText={setEmail}
                         placeholder="email@example.com"
@@ -184,6 +193,8 @@ export default function LoginScreen() {
                         keyboardType="email-address"
                         autoCapitalize="none"
                         autoCorrect={false}
+                        onFocus={() => setEmailFocused(true)}
+                        onBlur={() => setEmailFocused(false)}
                         testID="login-email"
                       />
                       <FieldLabel text="Jelszó" />
@@ -194,6 +205,7 @@ export default function LoginScreen() {
                         placeholderTextColor={styles.placeholderColor.color}
                         containerStyle={styles.passwordBox}
                         style={styles.passwordInput}
+                        maxLength={PASSWORD_MAX_CHARS}
                         testID="login-password"
                       />
                       <TouchableOpacity onPress={() => setMode("forgot")} style={styles.forgotBtn}>
@@ -224,13 +236,15 @@ export default function LoginScreen() {
                       </View>
                       <FieldLabel text="6 jegyű biztonsági kód" />
                       <TextInput
-                        style={[styles.input, styles.codeInput]}
+                        style={[styles.input, styles.codeInput, mfaCodeFocused && styles.inputFocused]}
                         value={mfaCode}
                         onChangeText={setMfaCode}
                         placeholder="000000"
                         placeholderTextColor={styles.placeholderColor.color}
                         keyboardType="number-pad"
                         maxLength={6}
+                        onFocus={() => setMfaCodeFocused(true)}
+                        onBlur={() => setMfaCodeFocused(false)}
                         testID="mfa-code"
                       />
                       {!mfaIsAdmin ? (
@@ -253,13 +267,15 @@ export default function LoginScreen() {
                     <>
                       <FieldLabel text="Email címed" />
                       <TextInput
-                        style={styles.input}
+                        style={[styles.input, emailFocused && styles.inputFocused]}
                         value={email}
                         onChangeText={setEmail}
                         placeholder="email@example.com"
                         placeholderTextColor={styles.placeholderColor.color}
                         keyboardType="email-address"
                         autoCapitalize="none"
+                        onFocus={() => setEmailFocused(true)}
+                        onBlur={() => setEmailFocused(false)}
                       />
                       {error ? <T variant="small" color={theme.danger} style={styles.error}>{error}</T> : null}
                       <PrimaryButton busy={busy} label="Biztonsági kód kérése" onPress={handleForgotPassword} />
@@ -271,13 +287,15 @@ export default function LoginScreen() {
                     <>
                       <FieldLabel text="6 jegyű biztonsági kód" />
                       <TextInput
-                        style={[styles.input, styles.codeInput]}
+                        style={[styles.input, styles.codeInput, resetCodeFocused && styles.inputFocused]}
                         value={resetCode}
                         onChangeText={setResetCode}
                         placeholder="000000"
                         placeholderTextColor={styles.placeholderColor.color}
                         keyboardType="number-pad"
                         maxLength={6}
+                        onFocus={() => setResetCodeFocused(true)}
+                        onBlur={() => setResetCodeFocused(false)}
                       />
                       <FieldLabel text="Új jelszó" />
                       <PasswordInput
@@ -287,6 +305,7 @@ export default function LoginScreen() {
                         placeholderTextColor={styles.placeholderColor.color}
                         containerStyle={styles.passwordBox}
                         style={styles.passwordInput}
+                        maxLength={PASSWORD_MAX_CHARS}
                       />
                       <FieldLabel text="Megerősítés" />
                       <PasswordInput
@@ -296,6 +315,7 @@ export default function LoginScreen() {
                         placeholderTextColor={styles.placeholderColor.color}
                         containerStyle={styles.passwordBox}
                         style={styles.passwordInput}
+                        maxLength={PASSWORD_MAX_CHARS}
                       />
                       {error ? <T variant="small" color={theme.danger} style={styles.error}>{error}</T> : null}
                       <PrimaryButton busy={busy} label="Jelszó mentése" onPress={handleResetSubmit} />
@@ -350,9 +370,9 @@ const styles = StyleSheet.create({
     borderRadius: 44,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(79,209,197,0.14)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.20)",
+    borderColor: "rgba(79,209,197,0.22)",
     marginBottom: 16,
   },
   logo: { width: 82, height: 82, borderRadius: 41 },
@@ -361,24 +381,44 @@ const styles = StyleSheet.create({
   heroSubtitle: { marginTop: 10, maxWidth: 400, lineHeight: 22 },
   formSheet: { width: "100%" },
   formCard: {
-    borderRadius: 18,
+    borderRadius: 22,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
-    backgroundColor: "rgba(6,19,32,0.62)",
+    borderColor: "rgba(79,209,197,0.22)",
+    backgroundColor: "rgba(7,27,48,0.48)",
     padding: 20,
-  },
+    backdropFilter: "blur(20px)",
+  } as any,
   lbl: { marginTop: 12, marginBottom: 6 },
   input: {
     minHeight: 52,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.16)",
-    backgroundColor: "rgba(255,255,255,0.08)",
+    borderColor: "rgba(79,209,197,0.18)",
+    backgroundColor: "rgba(255,255,255,0.06)",
     color: theme.textOnDark,
     paddingHorizontal: 14,
     fontFamily: "Manrope_500Medium",
     fontSize: 15,
   },
+  inputFocused: {
+    borderColor: theme.accent,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    ...Platform.select({
+      web: {
+        boxShadow: "0 0 12px rgba(79, 209, 197, 0.4)",
+        outlineWidth: 0,
+      },
+      ios: {
+        shadowColor: theme.accent,
+        shadowOpacity: 0.35,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 0 },
+      },
+      android: {
+        elevation: 3,
+      }
+    })
+  } as any,
   codeInput: {
     textAlign: "center",
     letterSpacing: 6,
@@ -386,8 +426,8 @@ const styles = StyleSheet.create({
   },
   placeholderColor: { color: "rgba(247,251,255,0.45)" },
   passwordBox: {
-    backgroundColor: "rgba(255,255,255,0.08)",
-    borderColor: "rgba(255,255,255,0.16)",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderColor: "rgba(79,209,197,0.18)",
     borderRadius: 12,
   },
   passwordInput: { color: theme.textOnDark },
@@ -403,8 +443,8 @@ const styles = StyleSheet.create({
     minHeight: 52,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "rgba(87,199,255,0.22)",
-    backgroundColor: "rgba(87,199,255,0.12)",
+    borderColor: "rgba(79,209,197,0.22)",
+    backgroundColor: "rgba(79,209,197,0.12)",
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
@@ -422,10 +462,10 @@ const styles = StyleSheet.create({
     height: 23,
     borderRadius: 7,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.28)",
+    borderColor: "rgba(79,209,197,0.28)",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "rgba(255,255,255,0.06)",
   },
   checkboxOn: {
     backgroundColor: theme.accentDeep,

@@ -96,7 +96,7 @@ export default function SideMenu({ visible, onClose }: Props) {
         <TouchableOpacity style={styles.backdropTouch} activeOpacity={1} onPress={onClose} />
         <SafeAreaView style={styles.drawer} edges={["top", "left", "bottom"]}>
           <LinearGradient colors={["#061320", "#0A2340", "#11365A"]} style={styles.drawerGradient}>
-            <View pointerEvents="none" style={styles.drawerMist} />
+            <View style={[styles.drawerMist, styles.noPointer]} />
             <View style={styles.drawerInner} testID="side-menu">
               <ScrollView style={{ flex: 1 }} contentContainerStyle={{ gap: 12 }} showsVerticalScrollIndicator={false}>
                 <View style={styles.header}>
@@ -120,6 +120,7 @@ export default function SideMenu({ visible, onClose }: Props) {
 
                 <MenuGroup title="Alapműveletek">
                   <MenuItem label="Főoldal" icon="home-outline" onPress={() => { onClose(); router.replace("/welcome"); }} testID="menu-welcome" />
+                  <MenuItem label="Fórum" icon="chatbubbles-outline" onPress={() => { onClose(); router.push("/forum" as any); }} testID="menu-forum" />
                   <MenuItem label="Új mérés" icon="analytics-outline" onPress={() => setConfirmRetake(true)} testID="menu-retake" disabled={busy} />
                   <MenuItem label="Beállítások" icon="person-circle-outline" onPress={() => { onClose(); router.push("/settings" as any); }} testID="menu-settings" />
                 </MenuGroup>
@@ -345,6 +346,7 @@ function ConfirmModal({ visible, title, text, confirmLabel, onCancel, onConfirm,
 }
 
 const styles = StyleSheet.create({
+  noPointer: { pointerEvents: "none" },
   backdrop: { flex: 1, flexDirection: "row", backgroundColor: "rgba(3,12,22,0.60)" },
   backdropTouch: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
   drawer: { width: "86%", maxWidth: 370, height: "100%" },

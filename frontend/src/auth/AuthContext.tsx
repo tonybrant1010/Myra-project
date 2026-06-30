@@ -34,7 +34,7 @@ export type AuthResult = {
 type Ctx = AuthState & {
   login: (email: string, password: string) => Promise<AuthResult>;
   verifyMfa: (challengeId: string, code: string, rememberDevice: boolean) => Promise<AuthResult>;
-  register: (email: string, name: string, password: string) => Promise<{ ok: boolean; error?: string }>;
+  register: (email: string, name: string, password: string, acceptedTerms: boolean) => Promise<{ ok: boolean; error?: string }>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   setUserLocal: (updater: (u: AppUser | null) => AppUser | null) => void;
@@ -78,6 +78,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const fetchMe = useCallback(async (token: string): Promise<AppUser | null> => {
     try {
       const r = await fetch(apiUrl("/api/auth/me"), {
+        cache: "no-store",
+        credentials: "omit",
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!r.ok) return null;
@@ -126,6 +128,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const deviceToken = await readDeviceToken();
     const r = await fetch(apiUrl("/api/auth/login"), {
       method: "POST",
+      cache: "no-store",
+      credentials: "omit",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password, device_token: deviceToken || undefined }),
     });
@@ -135,17 +139,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const verifyMfa = useCallback(async (challengeId: string, code: string, rememberDevice: boolean) => {
     const r = await fetch(apiUrl("/api/auth/mfa/verify"), {
       method: "POST",
+      cache: "no-store",
+      credentials: "omit",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ challenge_id: challengeId, code, remember_device: rememberDevice }),
     });
     return handleAuthResult(r);
   }, [handleAuthResult]);
 
-  const register = useCallback(async (email: string, name: string, password: string) => {
+  const register = useCallback(async (email: string, name: string, password: string, acceptedTerms: boolean) => {
     const r = await fetch(apiUrl("/api/auth/register"), {
       method: "POST",
+      cache: "no-store",
+      credentials: "omit",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, name, password }),
+      body: JSON.stringify({
+        email,
+        name,
+        password,
+        accepted_terms: acceptedTerms,
+        accepted_terms_version: "2026-06-15",
+        accepted_privacy_version: "2026-06-15",
+      }),
     });
     return handleAuthResult(r);
   }, [handleAuthResult]);
@@ -155,6 +170,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (state.token) {
         await fetch(apiUrl("/api/auth/logout"), {
           method: "POST",
+          cache: "no-store",
+          credentials: "omit",
           headers: { Authorization: `Bearer ${state.token}` },
         });
       }
@@ -237,7 +254,7 @@ export async function authedFetch(token: string | null, path: string, init: Requ
   if (!headers.has("Content-Type") && init.body && !(init.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
-  const r = await fetch(apiUrl(path), { ...init, headers });
+  const r = await fetch(apiUrl(path), { ...init, cache: init.cache ?? "no-store", credentials: init.credentials ?? "omit", headers });
   if (r.status === 401) {
     notifyUnauthorized();
   }

@@ -10,7 +10,7 @@ export default function GlobalNotice() {
 
   useEffect(() => {
     let alive = true;
-    fetch(apiUrl("/api/config"))
+    fetch(apiUrl("/api/config"), { cache: "no-store", credentials: "omit" })
       .then((r) => r.json())
       .then((d) => {
         if (alive) setNotice(String(d?.global_notice_text || "").trim());

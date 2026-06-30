@@ -23,7 +23,7 @@ export default function FormsScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch(apiUrl("/api/config"));
+        const r = await fetch(apiUrl("/api/config"), { cache: "no-store", credentials: "omit" });
         const data = await r.json();
         setFormsUrl(data.forms_url || "");
       } catch {}

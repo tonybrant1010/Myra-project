@@ -40,10 +40,15 @@ A frontend Vercelen fut. A backend Google Cloud VM-en fut Docker konténerben. A
 - chat- és mérési előzmények;
 - bővített chat kontextus ugyanazon mérési szálon belül;
 - TXT beszélgetés-export a chat felületről;
+- felhasználói adathordozhatóság (GDPR Art. 20) adatexporttal JSON formátumban;
+- felhasználói fiók és adatok végleges önkiszolgáló törlése (GDPR Art. 17);
 - Gemini Live beszélgetés az aktuális kapcsolat idejére korlátozott kontextussal;
+- Fórum (csoportos üzenőfal) egyedi becenevekkel, 12 választható emoji-avatarral, magyar trágárságszűrővel és szerzői/adminisztrátori törlési jogkörökkel;
 - PDF-alapú RAG tudásvisszakeresés;
+- FastEmbed in-memory normalizált embedding gyorsítótár a válaszok gyorsításához és erőforrás-takarékossághoz;
 - admin tudásanyag-kezelés PDF feltöltéssel, törléssel és háttérben futó élesítéssel;
 - admin rendszerbeállítások, karbantartási mód és SOS eszközök;
+- biztonsági adminisztrátori audit naplózás és megerősített brute-force védelem;
 - 30 napos mérési érvényességi ciklus és archivált, olvasható beszélgetések;
 - Vercel frontend, VM backend, Supabase adatbázis.
 
@@ -51,18 +56,20 @@ A frontend Vercelen fut. A backend Google Cloud VM-en fut Docker konténerben. A
 
 ### Backend
 
-- Python 3.11
+- Python 3.11 / 3.12
 - FastAPI
 - SQLAlchemy async
 - asyncpg
 - Supabase/Postgres
 - pgvector
-- FastEmbed 384 dimenziós lokális embedding
+- FastEmbed 384 dimenziós lokális embedding és in-memory caching
 - pypdf PDF szövegkinyerés
 - JWT auth
 - Gmail SMTP MFA kódokhoz
 - Docker / Docker Compose
 - LLM provider admin felületről konfigurálva
+- Statikus kód- és függőség-sérülékenység ellenőrzés (bandit, pip-audit)
+- Automatizált pytest tesztcsomag (biztonsági és megfelelőségi tesztek: OWASP szűrések, JWT token érvényesség, MFA ellenőrzés, biztonsági HTTP fejlécek validálása és GDPR megfelelőségi folyamatok)
 
 ### Frontend
 
@@ -71,6 +78,23 @@ A frontend Vercelen fut. A backend Google Cloud VM-en fut Docker konténerben. A
 - TypeScript
 - Vercel deploy
 - Expo web export
+
+## Design Irány
+
+A Myra jelenlegi arculati iránya az **Aurora Blue dark calm** rendszer. Ez egy sötét, nyugodt, minimalista,
+üvegszerű felület, amely a beszélgetést és a mérést helyezi előtérbe. A design forrása:
+
+```text
+design_guidelines.json
+frontend/src/theme.ts
+frontend/src/components/ContentBackground.tsx
+frontend/src/components/TopBar.tsx
+```
+
+Design módosításnál az alapelv: a működő app-felület maradjon az első képernyő, ne marketing landing page
+legyen belőle. A chat és a Live felület maradjon alacsony zajszintű, gyors, könnyen olvasható és mobilon is
+stabil. Új színpaletta, nagyobb vizuális átalakítás vagy Myra promptot érintő változtatás csak külön jóváhagyással
+kerülhet be.
 
 ## Fontos Működési Részletek
 
@@ -132,6 +156,20 @@ limit 25 MB/fájl, env-ből hangolható:
 KB_PDF_UPLOAD_MAX_BYTES=26214400
 KB_TEXT_UPLOAD_MAX_BYTES=2097152
 ```
+
+RAG teljesitmenyhez hangolhato env valtozok:
+
+```env
+RAG_QUERY_PROFILE_MAX_CHARS=900
+RAG_CONTEXT_CHUNK_MAX_CHARS=1800
+RAG_EMBEDDING_CACHE_MAX_ENTRIES=128
+DISABLE_RAG_STARTUP_WARMUP=false
+```
+
+- `RAG_QUERY_PROFILE_MAX_CHARS`: a meresi profilbol ennyi karakter kerul a RAG keresesi querybe.
+- `RAG_CONTEXT_CHUNK_MAX_CHARS`: egy talalt PDF chunkbol ennyi karakter kerul a promptba.
+- `RAG_EMBEDDING_CACHE_MAX_ENTRIES`: processzen beluli FastEmbed cache merete; `0` kikapcsolja.
+- `DISABLE_RAG_STARTUP_WARMUP=true`: kikapcsolja a startup RAG warmupot, ha gyors kontenerinditas fontosabb az elso RAG keresesi kesleltetesnel.
 
 A backend a PDF-ekből szöveget nyer ki, chunkokra bontja, FastEmbed embeddinget készít, majd Supabase-ben tárolja:
 
@@ -243,9 +281,15 @@ nem ír át `knowledge_chunks` rekordot.
 ```text
 backend/
   server.py
+  security.py
   requirements.txt
   Dockerfile
   .dockerignore
+  tests/
+    test_security_headers.py
+    test_auth_flow.py
+    test_compliance.py
+    test_owasp.py
   data/
     kb_pdfs/
       *.pdf
@@ -253,6 +297,7 @@ backend/
 
 frontend/
   app/
+    forum.tsx
   src/
   assets/
   scripts/patch-dist.js
@@ -260,7 +305,6 @@ frontend/
   package.json
 
 publication/
-tests/
 docker-compose.yml
 README.md
 ```
@@ -339,6 +383,25 @@ set EXPO_PUBLIC_BACKEND_URL=http://localhost:8001
 npx expo start --web
 ```
 
+Frontend ellenőrzés deploy előtt:
+
+```bash
+cd frontend
+npm run typecheck
+node --check scripts/patch-dist.js
+npm run audit:high
+```
+
+Backend ellenorzes tiszta fejlesztoi kornyezetben:
+
+```bash
+cd backend
+.\.venv\Scripts\python -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python -m pytest tests
+.\.venv\Scripts\python -m bandit server.py scripts\migrate_sqlite_to_postgres.py scripts\seed_codes.py
+.\.venv\Scripts\python -m pip_audit -r requirements.txt
+```
+
 ## Kötelező Env Változók
 
 Backend / VM:
@@ -361,7 +424,10 @@ Vercel:
 MYRA_PROXY_SECRET=...
 MYRA_BACKEND_ORIGIN=http://<VM_EXTERNAL_IP>:8001
 EXPO_PUBLIC_BACKEND_URL=/api
+MYRA_PROXY_TIMEOUT_MS=30000
 ```
+
+Vercelen a `MYRA_BACKEND_ORIGIN`/`BACKEND_URL` és a `MYRA_PROXY_SECRET` kötelező. Ha bármelyik hiányzik, a proxy szándékosan hibával leáll, és nem próbál régi, beégetett VM IP-re továbbítani.
 
 ## Git / Repo Higiénia
 
@@ -379,6 +445,7 @@ dist/
 *.db
 *.sqlite
 live-db-backups/
+backend/data/
 backend/data/myra.db
 ```
 
@@ -395,11 +462,22 @@ backend/rag/
 - API kulcsot és `.env` fájlt ne commitolj.
 - Éles adatbázis-exportot vagy felhasználói adatot tartalmazó fájlt ne commitolj.
 - Supabase IP allowlist változás után mindig ellenőrizd a login, mérés, chat és admin tudásanyag folyamatot.
+- Új admin jogosultságot csak az `ADMIN_EMAIL_ALLOWLIST` adhat; nincs automatikus "első felhasználó admin" kiosztás.
 - Backend restart után az első RAG keresés FastEmbed cold start miatt lassabb lehet.
 - A jelszó-visszaállító 6 jegyű kód a felhasználónak továbbra is emailben megy ki, de a backend a DB-ben csak hash formában tárolja.
+- A regisztráció jogi elfogadása szerveroldalon is kötelező: a backend az aktuális Felhasználási feltételek és Adatkezelési tájékoztató verzióját, valamint az elfogadás idejét eltárolja.
+- A belépési MFA és admin műveleti biztonsági kódok kiküldése felhasználó + IP + cél alapján limitált, hogy ne lehessen kódküldéssel email floodot vagy felesleges terhelést okozni.
+- A veszélyes admin műveletekhez kért jelszó hibás megadása is audit logba kerül `*.denied` műveletként, jelszó vagy érzékeny adat nélkül.
+- A rate-limit tárolók automatikusan takarítják a régi vagy túl sok rekordot, hogy támadás alatt se nőjenek korlátlanul memóriában.
+- Az admin beállítások mezőszintű hosszlimiteket kapnak, így túlméretes modelnév, API kulcs, globális üzenet, prompt vagy manuális tudásbázis-szöveg nem kerülhet kontroll nélkül adatbázisba.
 - A jelszó-reset frontend hívás a központi `apiUrl()` útvonalat használja, nem fix domainre küld érzékeny adatot.
 - A backend és a Vercel frontend alap biztonsági HTTP fejléceket ad: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, éles HTTPS alatt `Strict-Transport-Security`.
+- A Vercel API proxy fail-closed módon működik: hiányzó backend origin vagy proxy secret esetén nem továbbít kérést, és nincs beégetett VM IP fallback.
+- A backend production módban az `OPTIONS` preflight kéréseket is csak engedélyezett originről engedi proxy secret nélkül; ismeretlen origin vagy direkt origin nélküli OPTIONS kérés 403-at kap.
+- A frontend `package.json` célzott `overrides`/`resolutions` réteget használ a magasabb kockázatú transitive build-eszköz sérülékenységek zárására; Expo/React Native főverziót csak külön regressziós teszttel frissíts.
+- Backend dependency frissítés előtt és után futtasd a `pip-audit -r backend/requirements.txt` ellenőrzést; a framework csomagokat (`fastapi`, `starlette`) mindig együtt validáld teljes backend teszttel.
 - Szigorú Content-Security-Policy jelenleg nincs bekapcsolva, mert a Gemini Live/WebSocket és Expo web bundle miatt külön, célzott tesztelést igényelne.
 - Az admin log nézet maszkolja az URL-ben vagy headerben megjelenő API kulcsokat és bearer tokeneket.
+- Az admin audit log `detail` és `user_agent` mezői mentés előtt is maszkolva vannak, és felhasználótörlésnél csak a belső `user_id` kerül naplózásra, email cím nem.
 - A személyes vagy admin jellegű API válaszok `Cache-Control: no-store` fejléccel mennek ki.
 - Supabase/Postgres környezetben az adatbázis backup nem az alkalmazásból készül; a tiltott backup-kérés admin audit logba kerül.

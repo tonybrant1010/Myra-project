@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# Security and test tooling for local/CI checks. Do not install this file in the production VM image.
+bandit
+pip-audit
+pytest

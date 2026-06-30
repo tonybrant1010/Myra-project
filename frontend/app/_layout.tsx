@@ -1,4 +1,5 @@
 import React, { useCallback } from "react";
+import { Platform } from "react-native";
 import { Stack } from "expo-router";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -51,6 +52,54 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <AuthProvider>
           <StatusBar style="light" />
+          {Platform.OS === "web" && (
+            <style dangerouslySetInnerHTML={{ __html: `
+              /* Custom Brand Scrollbars */
+              ::-webkit-scrollbar {
+                width: 8px;
+                height: 8px;
+              }
+              ::-webkit-scrollbar-track {
+                background: #040b14;
+              }
+              ::-webkit-scrollbar-thumb {
+                background: rgba(79, 209, 197, 0.25);
+                border-radius: 99px;
+                border: 2px solid #040b14;
+                transition: background 0.3s ease;
+              }
+              ::-webkit-scrollbar-thumb:hover {
+                background: rgba(79, 209, 197, 0.45);
+              }
+
+              /* Brand text selection color */
+              ::selection {
+                background: rgba(79, 209, 197, 0.35);
+                color: #f7fafc;
+              }
+
+              /* Smooth transition for inputs & active elements */
+              input, textarea, [role="button"], button, a {
+                transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+              }
+
+              /* Input Focus Glows */
+              input:focus, textarea:focus, [contenteditable="true"]:focus {
+                outline: none !important;
+                outline-width: 0 !important;
+                border-color: #4fd1c5 !important;
+                box-shadow: 0 0 14px rgba(79, 209, 197, 0.45) !important;
+                background-color: rgba(255, 255, 255, 0.08) !important;
+              }
+
+              /* Hover scales for interactive elements (buttons, links, active pressables) */
+              [role="button"]:hover, button:hover, a:hover, [role="link"]:hover, [style*="cursor: pointer"]:hover, [style*="cursor:pointer"]:hover {
+                transform: translateY(-1.5px) scale(1.015) !important;
+                opacity: 0.95 !important;
+                filter: brightness(1.15) !important;
+              }
+            ` }} />
+          )}
           <Stack
             screenOptions={{
               headerShown: false,

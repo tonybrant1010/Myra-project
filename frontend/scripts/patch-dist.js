@@ -53,14 +53,25 @@ if (!fs.existsSync(apiDir)) {
 
 const proxyCode = `
 const securityHeaders = {
+  'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
-  'Permissions-Policy': 'geolocation=(), camera=(), payment=(), usb=(), magnetometer=(), gyroscope=()',
+  'Permissions-Policy': 'geolocation=(), camera=(), microphone=(self), payment=(), usb=(), magnetometer=(), gyroscope=()',
   'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Resource-Policy': 'same-site',
+  'X-Permitted-Cross-Domain-Policies': 'none',
 };
-const normalRequestMaxBytes = Number(process.env.API_REQUEST_MAX_BYTES || 1024 * 1024);
-const uploadRequestMaxBytes = Number(process.env.KB_PDF_UPLOAD_MAX_BYTES || 25 * 1024 * 1024);
+function envNumber(name, fallback, min, max) {
+  const value = Number(process.env[name] || fallback);
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(value, max));
+}
+
+const normalRequestMaxBytes = envNumber('API_REQUEST_MAX_BYTES', 1024 * 1024, 64 * 1024, 10 * 1024 * 1024);
+const uploadRequestMaxBytes = envNumber('KB_PDF_UPLOAD_MAX_BYTES', 25 * 1024 * 1024, 1024 * 1024, 100 * 1024 * 1024);
+const proxyTimeoutMs = envNumber('MYRA_PROXY_TIMEOUT_MS', 30000, 5000, 120000);
 
 function requestBodyLimit(cleanPath) {
   return cleanPath === 'api/admin/kb/files/upload' || cleanPath === 'api/admin/kb/upload'
@@ -68,16 +79,40 @@ function requestBodyLimit(cleanPath) {
     : normalRequestMaxBytes;
 }
 
+function isSafeProxyPath(cleanPath) {
+  if (!cleanPath || cleanPath.includes('\\\\') || cleanPath.includes('\\0')) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(cleanPath) || cleanPath.startsWith('//')) return false;
+  return cleanPath.split('/').every((segment) => segment !== '..' && segment !== '.');
+}
+
 module.exports = async function handler(req, res) {
-  const path = req.query.path || '';
+  const path = Array.isArray(req.query.path) ? req.query.path.join('/') : (req.query.path || '');
   const cleanPath = path.startsWith('api/') ? path : \`api/\${path}\`;
-  let backendOrigin = (process.env.MYRA_BACKEND_ORIGIN || process.env.BACKEND_URL || "http://35.253.246.219:8001").trim();
+  if (!isSafeProxyPath(cleanPath)) {
+    for (const [key, value] of Object.entries(securityHeaders)) {
+      res.setHeader(key, value);
+    }
+    res.status(400).json({ detail: 'Invalid proxy path.' });
+    return;
+  }
+  let backendOrigin = (process.env.MYRA_BACKEND_ORIGIN || process.env.BACKEND_URL || '').trim();
+  const proxySecret = (process.env.MYRA_PROXY_SECRET || '').trim();
+  if (!backendOrigin || !proxySecret) {
+    for (const [key, value] of Object.entries(securityHeaders)) {
+      res.setHeader(key, value);
+    }
+    res.status(500).json({ detail: 'Proxy configuration is incomplete.' });
+    return;
+  }
   while (backendOrigin.endsWith('/')) backendOrigin = backendOrigin.slice(0, -1);
   const targetUrl = new URL(\`\${backendOrigin}/\${cleanPath}\`);
   
   for (const [key, value] of Object.entries(req.query)) {
     if (key !== 'path') {
-      targetUrl.searchParams.append(key, value);
+      const values = Array.isArray(value) ? value : [value];
+      for (const item of values) {
+        targetUrl.searchParams.append(key, item);
+      }
     }
   }
 
@@ -85,6 +120,7 @@ module.exports = async function handler(req, res) {
   const hopByHopHeaders = new Set([
     'host',
     'connection',
+    'cookie',
     'keep-alive',
     'proxy-connection',
     'te',
@@ -98,7 +134,7 @@ module.exports = async function handler(req, res) {
       headers[key] = value;
     }
   }
-  headers['X-Myra-Proxy-Secret'] = process.env.MYRA_PROXY_SECRET || '';
+  headers['X-Myra-Proxy-Secret'] = proxySecret;
   const bodyLimit = requestBodyLimit(cleanPath);
   const declaredLength = Number(req.headers['content-length'] || 0);
   if (declaredLength && declaredLength > bodyLimit) {
@@ -106,36 +142,54 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  let body = undefined;
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    body = await new Promise((resolve, reject) => {
-      let chunks = [];
-      let total = 0;
-      req.on('data', (chunk) => {
-        total += chunk.length;
-        if (total > bodyLimit) {
-          reject(new Error('REQUEST_TOO_LARGE'));
-          req.destroy();
-          return;
-        }
-        chunks.push(chunk);
-      });
-      req.on('end', () => resolve(Buffer.concat(chunks)));
-      req.on('error', reject);
-    });
-  }
-
   try {
+    let body = undefined;
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      body = await new Promise((resolve, reject) => {
+        let chunks = [];
+        let total = 0;
+        req.on('data', (chunk) => {
+          total += chunk.length;
+          if (total > bodyLimit) {
+            reject(new Error('REQUEST_TOO_LARGE'));
+            req.destroy();
+            return;
+          }
+          chunks.push(chunk);
+        });
+        req.on('end', () => resolve(Buffer.concat(chunks)));
+        req.on('error', reject);
+      });
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), proxyTimeoutMs);
     const response = await fetch(targetUrl.toString(), {
       method: req.method,
       headers: headers,
       body: body,
-      redirect: 'manual'
-    });
+      redirect: 'manual',
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeout));
 
     res.status(response.status);
+    const blockedResponseHeaders = new Set([
+      'connection',
+      'content-encoding',
+      'content-length',
+      'keep-alive',
+      'proxy-authenticate',
+      'proxy-authorization',
+      'set-cookie',
+      'te',
+      'trailer',
+      'transfer-encoding',
+      'upgrade',
+    ]);
     response.headers.forEach((value, key) => {
-      res.setHeader(key, value);
+      if (!blockedResponseHeaders.has(key.toLowerCase())) {
+        res.setHeader(key, value);
+      }
     });
     for (const [key, value] of Object.entries(securityHeaders)) {
       res.setHeader(key, value);
@@ -150,6 +204,10 @@ module.exports = async function handler(req, res) {
     }
     if (error && error.message === 'REQUEST_TOO_LARGE') {
       res.status(413).json({ detail: 'A kérés túl nagy.' });
+      return;
+    }
+    if (error && error.name === 'AbortError') {
+      res.status(504).json({ detail: "Proxy timeout connecting to origin." });
       return;
     }
     res.status(502).json({ detail: "Proxy error connecting to origin." });

@@ -29,7 +29,7 @@ export default function TopBar({ title, showBack, backPath, rightLabel }: Props)
         style={styles.bar}
         testID="top-bar"
       >
-        <View pointerEvents="none" style={styles.topMist} />
+        <View style={[styles.topMist, styles.noPointer]} />
         <View style={styles.sideContainer}>
           {showBack ? (
             <TouchableOpacity
@@ -80,6 +80,7 @@ export default function TopBar({ title, showBack, backPath, rightLabel }: Props)
 }
 
 const styles = StyleSheet.create({
+  noPointer: { pointerEvents: "none" },
   bar: {
     flexDirection: "row",
     alignItems: "center",

@@ -30,6 +30,7 @@ type LiveTokenResponse = {
   token: string;
   model: string;
   websocket_url: string;
+  system_instruction: string;
 };
 
 function floatTo16BitPCM(input: Float32Array): Int16Array {
@@ -99,6 +100,7 @@ export default function MyraLiveScreen() {
   const playingSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const mountedRef = useRef(true);
   const closingRef = useRef(false);
+  const startingRef = useRef(false);
   const wakeLockRef = useRef<any>(null);
 
   const isActive = phase !== "idle" && phase !== "error";
@@ -137,6 +139,7 @@ export default function MyraLiveScreen() {
 
   const closeSession = useCallback(() => {
     closingRef.current = true;
+    startingRef.current = false;
     processorRef.current?.disconnect();
     sourceRef.current?.disconnect();
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -197,13 +200,19 @@ export default function MyraLiveScreen() {
       releaseWakeLock();
       return;
     }
+    if (Platform.OS !== "web" || typeof document === "undefined") return;
     void requestWakeLock();
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") void requestWakeLock();
     };
+    const handlePageHide = () => {
+      releaseWakeLock();
+    };
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    globalThis.addEventListener?.("pagehide", handlePageHide);
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      globalThis.removeEventListener?.("pagehide", handlePageHide);
     };
   }, [isActive, releaseWakeLock, requestWakeLock]);
 
@@ -322,7 +331,10 @@ export default function MyraLiveScreen() {
   }, []);
 
   const startSession = useCallback(async () => {
+    if (startingRef.current) return;
+    startingRef.current = true;
     if (Platform.OS !== "web") {
+      startingRef.current = false;
       setPhase("error");
       setStatus("A Myra Live béta jelenleg a webalkalmazásban használható.");
       return;
@@ -351,6 +363,9 @@ export default function MyraLiveScreen() {
                 voiceConfig: {
                   prebuiltVoiceConfig: { voiceName: "Kore" },
                 },
+              },
+              systemInstruction: {
+                parts: [{ text: live.system_instruction }],
               },
             },
             inputAudioTranscription: {},
@@ -388,11 +403,16 @@ export default function MyraLiveScreen() {
       closeSession();
       setPhase("error");
       setStatus(error instanceof Error ? error.message : "Nem sikerült elindítani a Myra Live-ot.");
+    } finally {
+      startingRef.current = false;
     }
   }, [closeSession, handleServerMessage, startMicrophone, token]);
 
   const startSessionSdk = useCallback(async () => {
+    if (startingRef.current) return;
+    startingRef.current = true;
     if (Platform.OS !== "web") {
+      startingRef.current = false;
       setPhase("error");
       setStatus("A Myra Live béta jelenleg a webalkalmazásban használható.");
       return;
@@ -496,6 +516,8 @@ export default function MyraLiveScreen() {
       closeSession();
       setPhase("error");
       setStatus(error instanceof Error ? error.message : "Nem sikerült elindítani a Myra Live-ot.");
+    } finally {
+      startingRef.current = false;
     }
   }, [closeSession, handleServerMessage, startMicrophone, token]);
 
@@ -521,9 +543,9 @@ export default function MyraLiveScreen() {
           <View style={styles.stage}>
             <View style={styles.avatarStage}>
               <Animated.View
-                pointerEvents="none"
                 style={[
                   styles.pulseRing,
+                  styles.noPointer,
                   { opacity: pulseOpacity, transform: [{ scale: pulseScale }] },
                 ]}
               />
@@ -575,6 +597,7 @@ export default function MyraLiveScreen() {
 }
 
 const styles = StyleSheet.create({
+  noPointer: { pointerEvents: "none" },
   safe: { flex: 1, backgroundColor: theme.primaryDark },
   scroll: { flexGrow: 1, paddingHorizontal: 18, paddingTop: 24, paddingBottom: 42 },
   stage: { alignItems: "center", justifyContent: "center", minHeight: 430 },

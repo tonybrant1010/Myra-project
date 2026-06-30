@@ -8,5 +8,7 @@ __pycache__/
 .git/
 .gitignore
 .env
-data/tts_cache/
+data/
+*.log
+rag/
 tests/

@@ -35,6 +35,11 @@ type Settings = {
 };
 
 const PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "groq", "cerebras", "mistral"];
+const MODEL_MAX_CHARS = 160;
+const API_KEY_MAX_CHARS = 4096;
+const SYSTEM_PROMPT_MAX_CHARS = 50000;
+const GLOBAL_NOTICE_MAX_CHARS = 1200;
+const PASSWORD_MAX_CHARS = 128;
 
 export default function AdminSettingsScreen() {
   useAuthGuard();
@@ -64,6 +69,16 @@ export default function AdminSettingsScreen() {
   const [forceLogoutBusy, setForceLogoutBusy] = useState(false);
   const [restartBusy, setRestartBusy] = useState(false);
   const [downBusy, setDownBusy] = useState(false);
+  const [emergencyPassword, setEmergencyPassword] = useState("");
+
+  const requireEmergencyPassword = () => {
+    if (!emergencyPassword.trim()) {
+      setErr("Az SOS muvelethez add meg az admin jelszavadat.");
+      return null;
+    }
+    return emergencyPassword;
+  };
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -128,17 +143,20 @@ export default function AdminSettingsScreen() {
   };
 
   const toggleMaintenance = async () => {
+    const currentPassword = requireEmergencyPassword();
+    if (!currentPassword) return;
     setMaintenanceLoading(true);
     setMsg(null);
     setErr(null);
     try {
       const r = await authedFetch(token, "/api/admin/maintenance", {
         method: "POST",
-        body: JSON.stringify({ maintenance_mode: !maintenance }),
+        body: JSON.stringify({ maintenance_mode: !maintenance, current_password: currentPassword }),
       });
       if (r.ok) {
         const d = await r.json();
         setMaintenance(d.maintenance_mode);
+        setEmergencyPassword("");
         setMsg(d.maintenance_mode ? "Karbantartási mód bekapcsolva." : "Karbantartási mód kikapcsolva.");
       }
     } catch (e: any) {
@@ -179,12 +197,18 @@ export default function AdminSettingsScreen() {
   };
 
   const forceLogoutAll = async () => {
+    const currentPassword = requireEmergencyPassword();
+    if (!currentPassword) return;
     setForceLogoutBusy(true);
     setMsg(null);
     setErr(null);
     try {
-      const r = await authedFetch(token, "/api/admin/force-logout-all", { method: "POST" });
+      const r = await authedFetch(token, "/api/admin/force-logout-all", {
+        method: "POST",
+        body: JSON.stringify({ current_password: currentPassword }),
+      });
       if (r.ok) {
+        setEmergencyPassword("");
         setMsg("Minden nem-admin felhasználó sikeresen kijelentkeztetve.");
       } else {
         setErr("Kijelentkeztetés sikertelen.");
@@ -197,12 +221,18 @@ export default function AdminSettingsScreen() {
   };
 
   const restartBackend = async () => {
+    const currentPassword = requireEmergencyPassword();
+    if (!currentPassword) return;
     setRestartBusy(true);
     setMsg(null);
     setErr(null);
     try {
-      const r = await authedFetch(token, "/api/admin/restart", { method: "POST" });
+      const r = await authedFetch(token, "/api/admin/restart", {
+        method: "POST",
+        body: JSON.stringify({ current_password: currentPassword }),
+      });
       if (r.ok) {
+        setEmergencyPassword("");
         setMsg("A szerver leállítása elindult. A Docker konténer hamarosan újraindul (kb. 5-10 mp).");
       } else {
         setErr("Újraindítás sikertelen.");
@@ -224,12 +254,18 @@ export default function AdminSettingsScreen() {
           text: "LEÁLLÍTÁS",
           style: "destructive",
           onPress: async () => {
+            const currentPassword = requireEmergencyPassword();
+            if (!currentPassword) return;
             setDownBusy(true);
             setMsg(null);
             setErr(null);
             try {
-              const r = await authedFetch(token, "/api/admin/down", { method: "POST" });
+              const r = await authedFetch(token, "/api/admin/down", {
+                method: "POST",
+                body: JSON.stringify({ current_password: currentPassword }),
+              });
               if (r.ok) {
+                setEmergencyPassword("");
                 setMsg("Leállítás elindítva. A szerver le fog állni, a konténerek leállnak.");
               } else {
                 setErr("Leállítás sikertelen.");
@@ -298,6 +334,7 @@ export default function AdminSettingsScreen() {
                     onChangeText={(v) => { setModel(v); setShowModelDrop(true); }}
                     onFocus={() => setShowModelDrop(true)}
                     autoCapitalize="none"
+                    maxLength={MODEL_MAX_CHARS}
                     placeholder="Válassz vagy írj be modellnevet..."
                     placeholderTextColor="rgba(247,251,255,0.48)"
                     testID="model-input"
@@ -330,6 +367,7 @@ export default function AdminSettingsScreen() {
                   placeholderTextColor="rgba(247,251,255,0.48)"
                   secureTextEntry
                   autoCapitalize="none"
+                  maxLength={API_KEY_MAX_CHARS}
                   testID="api-key-input"
                 />
                 <T variant="small" color="rgba(247,251,255,0.58)" style={{ marginTop: 6, marginBottom: 12 }}>
@@ -342,6 +380,7 @@ export default function AdminSettingsScreen() {
                   value={liveModel}
                   onChangeText={setLiveModel}
                   autoCapitalize="none"
+                  maxLength={MODEL_MAX_CHARS}
                   placeholder="Pl. gemini-2.0-flash-exp"
                   placeholderTextColor="rgba(247,251,255,0.48)"
                   testID="live-model-input"
@@ -356,6 +395,7 @@ export default function AdminSettingsScreen() {
                   placeholderTextColor="rgba(247,251,255,0.48)"
                   secureTextEntry
                   autoCapitalize="none"
+                  maxLength={API_KEY_MAX_CHARS}
                   testID="live-api-key-input"
                 />
 
@@ -365,6 +405,7 @@ export default function AdminSettingsScreen() {
                   value={prompt}
                   onChangeText={setPrompt}
                   multiline
+                  maxLength={SYSTEM_PROMPT_MAX_CHARS}
                   placeholder="A Myra chatbot viselkedését meghatározó prompt..."
                   placeholderTextColor="rgba(247,251,255,0.48)"
                   testID="prompt-input"
@@ -384,7 +425,7 @@ export default function AdminSettingsScreen() {
                   onChangeText={setNotice}
                   placeholder="Pl. Ma este 22:00 után rövid karbantartás várható."
                   placeholderTextColor="rgba(247,251,255,0.48)"
-                  maxLength={180}
+                  maxLength={GLOBAL_NOTICE_MAX_CHARS}
                   testID="global-notice-input"
                 />
 
@@ -455,6 +496,21 @@ export default function AdminSettingsScreen() {
                     </View>
                   ) : null}
                 </View>
+
+                <T variant="caption" color="rgba(247,251,255,0.72)" style={styles.lbl}>Admin jelszo az SOS muveletekhez</T>
+                <TextInput
+                  value={emergencyPassword}
+                  onChangeText={setEmergencyPassword}
+                  placeholder="Jelenlegi admin jelszo"
+                  placeholderTextColor="rgba(247,251,255,0.45)"
+                  secureTextEntry
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  textContentType="password"
+                  maxLength={PASSWORD_MAX_CHARS}
+                  style={styles.input}
+                  testID="sos-admin-password"
+                />
 
                 {/* Maintenance Switch */}
                 <TouchableOpacity
@@ -592,7 +648,11 @@ function providerHelp(provider: Provider) {
 
 function downloadBackup(token: string | null, setErr: (message: string) => void) {
   if (Platform.OS !== "web") return;
-  fetch(apiUrl("/api/admin/backup"), { headers: { Authorization: `Bearer ${token || ""}` } })
+  fetch(apiUrl("/api/admin/backup"), {
+    cache: "no-store",
+    credentials: "omit",
+    headers: { Authorization: `Bearer ${token || ""}` },
+  })
     .then(async (r) => {
       if (!r.ok) {
         const data = await r.json().catch(() => ({}));

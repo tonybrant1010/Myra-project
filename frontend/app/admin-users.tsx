@@ -42,6 +42,7 @@ type ChatActivity = {
   today: { assistant_messages: number; user_messages: number; active_users: number };
   last_24h: { assistant_messages: number; user_messages: number; active_users: number };
   last_7d: { assistant_messages: number; user_messages: number; active_users: number };
+  last_30d: { assistant_messages: number; user_messages: number; active_users: number };
   last_message_at: string | null;
   top_users_24h: Array<{
     id: number;
@@ -94,8 +95,6 @@ function ChatActivityCard({ activity }: { activity: ChatActivity | null }) {
     );
   }
 
-  const topUser = activity.top_users_24h[0];
-
   return (
     <View style={styles.activityCard}>
       <View style={styles.activityHeader}>
@@ -112,15 +111,44 @@ function ChatActivityCard({ activity }: { activity: ChatActivity | null }) {
       </View>
 
       <View style={styles.activityStatsRow}>
-        <ActivityStat label="MA" value={activity.today.assistant_messages} hint={`${activity.today.active_users} aktív user`} />
-        <ActivityStat label="24 ÓRA" value={activity.last_24h.assistant_messages} hint={`${activity.last_24h.user_messages} user üzenet`} />
-        <ActivityStat label="7 NAP" value={activity.last_7d.assistant_messages} hint={`${activity.last_7d.active_users} aktív user`} />
+        <ActivityStat
+          label="NAPI"
+          value={activity.last_24h.user_messages + activity.last_24h.assistant_messages}
+          hint={`${activity.last_24h.active_users} aktív`}
+        />
+        <ActivityStat
+          label="HETI"
+          value={activity.last_7d.user_messages + activity.last_7d.assistant_messages}
+          hint={`${activity.last_7d.active_users} aktív`}
+        />
+        <ActivityStat
+          label="HAVI"
+          value={activity.last_30d.user_messages + activity.last_30d.assistant_messages}
+          hint={`${activity.last_30d.active_users} aktív`}
+        />
       </View>
 
-      <View style={styles.activityFooter}>
-        <T variant="small" color="rgba(247,251,255,0.62)">
-          Top 24h: {topUser ? `${topUser.name} (${topUser.message_count})` : "nincs kiugró aktivitás"}
-        </T>
+      <View style={styles.topUsersSection}>
+        <T variant="caption" color={theme.accent} style={{ marginBottom: 4, letterSpacing: 1 }}>TOP 3 AKTÍV CSEVEGŐ (HETI)</T>
+        {activity.top_users_24h && activity.top_users_24h.length > 0 ? (
+          activity.top_users_24h.slice(0, 3).map((u, idx) => (
+            <View key={u.id} style={styles.topUserRow}>
+              <View style={styles.topUserRank}>
+                <T variant="small" color={theme.textOnDark} style={{ fontWeight: "700" }}>#{idx + 1}</T>
+              </View>
+              <View style={{ flex: 1, paddingLeft: 4 }}>
+                <T variant="body" color={theme.textOnDark} style={{ fontWeight: "600" }}>{u.name}</T>
+                <T variant="small" color="rgba(247,251,255,0.58)" numberOfLines={1}>{u.email}</T>
+              </View>
+              <View style={{ alignItems: "flex-end" }}>
+                <T variant="label" color={theme.accent} style={{ fontWeight: "700" }}>{u.message_count} üzenet</T>
+                <T variant="small" color="rgba(247,251,255,0.48)">Aktív: {activityTime(u.last_message_at)}</T>
+              </View>
+            </View>
+          ))
+        ) : (
+          <T variant="small" color="rgba(247,251,255,0.58)">Nincs aktív csevegő.</T>
+        )}
       </View>
     </View>
   );
@@ -351,14 +379,6 @@ export default function AdminUsersScreen() {
       <TopBar title="Felhasználók" showBack />
       <ContentBackground>
         <View style={styles.container}>
-          <View style={styles.headRow}>
-            <T variant="small" color="rgba(247,251,255,0.66)">{users.length} felhasználó</T>
-            <TouchableOpacity onPress={load} style={styles.refreshBtn}>
-              <T variant="small" color={theme.accent}>Frissítés</T>
-            </TouchableOpacity>
-          </View>
-          <ChatActivityCard activity={activity} />
-
           {loading ? (
             <View style={styles.center}>
               <ActivityIndicator color={theme.primary} />
@@ -367,7 +387,19 @@ export default function AdminUsersScreen() {
             <FlatList
               data={users}
               keyExtractor={(u) => String(u.id)}
-              contentContainerStyle={{ paddingBottom: 24, gap: 10 }}
+              contentContainerStyle={{ paddingBottom: 64, gap: 10 }}
+              ListHeaderComponent={
+                <View>
+                  <View style={styles.headRow}>
+                    <T variant="small" color="rgba(247,251,255,0.66)">{users.length} felhasználó</T>
+                    <TouchableOpacity onPress={load} style={styles.refreshBtn}>
+                      <T variant="small" color={theme.accent}>Frissítés</T>
+                    </TouchableOpacity>
+                  </View>
+                  <ChatActivityCard activity={activity} />
+                  <View style={{ height: 10 }} />
+                </View>
+              }
               ListEmptyComponent={
                 <T variant="body" color={theme.textSecondary} align="center" style={{ padding: 24 }}>
                   Még nincs regisztrált felhasználó.
@@ -777,5 +809,32 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.16)",
+  },
+  topUsersSection: {
+    marginTop: 18,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255,255,255,0.12)",
+    paddingTop: 14,
+  },
+  topUserRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginTop: 10,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderRadius: 10,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+  },
+  topUserRank: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: "rgba(79,209,197,0.16)",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(79,209,197,0.3)",
   },
 });

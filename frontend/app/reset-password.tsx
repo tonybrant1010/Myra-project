@@ -8,6 +8,8 @@ import PasswordInput from "@/src/components/PasswordInput";
 import ContentBackground from "@/src/components/ContentBackground";
 import { apiUrl } from "@/src/auth/AuthContext";
 
+const PASSWORD_MAX_CHARS = 128;
+
 export default function ResetPasswordScreen() {
   const router = useRouter();
   const { token } = useLocalSearchParams<{ token: string }>(); // Kinyeri a ?token=... részt az URL-ből
@@ -40,6 +42,8 @@ export default function ResetPasswordScreen() {
     try {
       const response = await fetch(apiUrl("/api/auth/reset-password"), {
         method: "POST",
+        cache: "no-store",
+        credentials: "omit",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, new_password: password }),
       });
@@ -88,10 +92,10 @@ export default function ResetPasswordScreen() {
 
           <View style={styles.form}>
             <T variant="label" color={theme.textSecondary} style={styles.lbl}>Új jelszó (min. 8 karakter)</T>
-            <PasswordInput value={password} onChangeText={setPassword} placeholder="Új jelszó" />
+            <PasswordInput value={password} onChangeText={setPassword} placeholder="Új jelszó" maxLength={PASSWORD_MAX_CHARS} />
 
             <T variant="label" color={theme.textSecondary} style={styles.lbl}>Új jelszó megerősítése</T>
-            <PasswordInput value={passwordConfirm} onChangeText={setPasswordConfirm} placeholder="Megerősítés" />
+            <PasswordInput value={passwordConfirm} onChangeText={setPasswordConfirm} placeholder="Megerősítés" maxLength={PASSWORD_MAX_CHARS} />
 
             {error ? <T variant="small" color={theme.danger} style={{ marginTop: 12 }}>{error}</T> : null}
 

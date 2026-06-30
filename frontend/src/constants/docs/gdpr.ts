@@ -1,6 +1,6 @@
 export const gdprText = `ADATKEZELÉSI TÁJÉKOZTATÓ
 
-Hatályos: 2026. június 15.
+Hatályos: 2026. június 30.
 
 1. Az adatkezelő
 Név: Ódor Antal
@@ -76,7 +76,8 @@ A felhasználó a GDPR alapján jogosult:
 - tájékoztatást kérni az adatkezelésről,
 - hozzáférni a róla kezelt adatokhoz,
 - kérni az adatok helyesbítését,
-- kérni az adatok törlését,
+- kérni az adatok törlését (a Beállítások menüben közvetlenül és azonnal végrehajtható),
+- kérni az adathordozhatóságot (a GDPR 20. cikke alapján a Beállítások -> 'Adatok letöltése' menüpontban közvetlenül letölthető a teljes profil és chat előzmény gépileg olvasható JSON formátumban),
 - kérni az adatkezelés korlátozását,
 - tiltakozni a jogos érdeken alapuló adatkezelés ellen,
 - hozzájárulását visszavonni,
@@ -93,7 +94,7 @@ A Myra nem hoz hivatalos joghatással járó vagy a felhasználót hasonlóan je
 Az alkalmazás 18 éven aluli személyek számára nem elérhető. A regisztrációval a felhasználó kijelenti, hogy betöltötte a 18. életévét.
 
 12. Cookie-k és helyi tárolás
-Az alkalmazás a működéshez szükséges munkamenet- vagy azonosító tokent tárolhatja a felhasználó készülékén. Marketing vagy hirdetési célú nyomkövető cookie használata nem célja a rendszernek.
+Az alkalmazás a biztonságos működéshez szükséges munkamenet-azonosító (JWT) tokent tárolja a felhasználó készülékén. A biztonsági kockázatok minimalizálása érdekében a bejelentkezési munkamenet adminisztrátorok esetében 1 óra, míg normál felhasználók esetében legfeljebb 7 nap tétlenség után lejár, és automatikus kijelentkezést von maga után. Marketing vagy hirdetési célú nyomkövető cookie használata nem célja a rendszernek.
 
 13. Adatvédelmi incidens
 Adatvédelmi incidens gyanúja esetén az adatkezelő megteszi a szükséges technikai és szervezési lépéseket, és ha a GDPR alapján indokolt, értesíti az illetékes hatóságot és az érintetteket.

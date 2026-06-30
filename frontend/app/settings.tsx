@@ -27,6 +27,8 @@ import { termsText } from "@/src/constants/docs/terms";
 import { shadow, theme } from "@/src/theme";
 
 type DocModal = { title: string; text: string } | null;
+const PASSWORD_MAX_CHARS = 128;
+
 type TrustedDevice = {
   id: number;
   label: string;
@@ -51,7 +53,9 @@ export default function SettingsScreen() {
   const [busy, setBusy] = useState(false);
   const [securityBusy, setSecurityBusy] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [adminCodeFocused, setAdminCodeFocused] = useState(false);
   const [confirmDeleteAccount, setConfirmDeleteAccount] = useState(false);
+  const [deletePassword, setDeletePassword] = useState("");
   const [docModal, setDocModal] = useState<DocModal>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -186,13 +190,24 @@ export default function SettingsScreen() {
   };
 
   const handleDeleteAccount = async () => {
+    if (!deletePassword.trim()) {
+      Alert.alert("Jelszo szukseges", "A fiok torlesehez add meg a jelenlegi jelszavadat.");
+      return;
+    }
     setDeleteBusy(true);
     try {
-      const r = await authedFetch(token, "/api/auth/delete-account", { method: "DELETE" });
+      const r = await authedFetch(token, "/api/auth/delete-account", {
+        method: "DELETE",
+        body: JSON.stringify({ current_password: deletePassword }),
+      });
       if (r.ok) {
         setConfirmDeleteAccount(false);
+        setDeletePassword("");
         await logout();
         router.replace("/login");
+      } else {
+        const d = await r.json().catch(() => ({}));
+        Alert.alert("Torles sikertelen", typeof d?.detail === "string" ? d.detail : "Nem sikerult torolni a fiokot.");
       }
     } finally {
       setDeleteBusy(false);
@@ -311,11 +326,11 @@ export default function SettingsScreen() {
               </View>
 
               <FieldLabel text="Jelenlegi jelszó" />
-              <PasswordInput value={currentPassword} onChangeText={setCurrentPassword} placeholder="Jelenlegi jelszó" placeholderTextColor="rgba(247,251,255,0.48)" containerStyle={styles.passwordBox} style={styles.passwordInput} testID="settings-current-password" />
+              <PasswordInput value={currentPassword} onChangeText={setCurrentPassword} placeholder="Jelenlegi jelszó" placeholderTextColor="rgba(247,251,255,0.48)" containerStyle={styles.passwordBox} style={styles.passwordInput} maxLength={PASSWORD_MAX_CHARS} testID="settings-current-password" />
               <FieldLabel text="Új jelszó" />
-              <PasswordInput value={newPassword} onChangeText={setNewPassword} placeholder="Legalább 8 karakter" placeholderTextColor="rgba(247,251,255,0.48)" containerStyle={styles.passwordBox} style={styles.passwordInput} testID="settings-new-password" />
+              <PasswordInput value={newPassword} onChangeText={setNewPassword} placeholder="Legalább 8 karakter" placeholderTextColor="rgba(247,251,255,0.48)" containerStyle={styles.passwordBox} style={styles.passwordInput} maxLength={PASSWORD_MAX_CHARS} testID="settings-new-password" />
               <FieldLabel text="Új jelszó megerősítése" />
-              <PasswordInput value={confirmPassword} onChangeText={setConfirmPassword} placeholder="Új jelszó még egyszer" placeholderTextColor="rgba(247,251,255,0.48)" containerStyle={styles.passwordBox} style={styles.passwordInput} testID="settings-confirm-password" />
+              <PasswordInput value={confirmPassword} onChangeText={setConfirmPassword} placeholder="Új jelszó még egyszer" placeholderTextColor="rgba(247,251,255,0.48)" containerStyle={styles.passwordBox} style={styles.passwordInput} maxLength={PASSWORD_MAX_CHARS} testID="settings-confirm-password" />
 
               {user?.is_admin ? (
                 <View style={styles.adminCodeBox}>
@@ -330,11 +345,13 @@ export default function SettingsScreen() {
                   <TextInput
                     value={adminCode}
                     onChangeText={setAdminCode}
-                    style={[styles.input, styles.codeInput]}
+                    style={[styles.input, styles.codeInput, adminCodeFocused && styles.inputFocused]}
                     placeholder="000000"
                     placeholderTextColor="rgba(247,251,255,0.48)"
                     keyboardType="number-pad"
                     maxLength={6}
+                    onFocus={() => setAdminCodeFocused(true)}
+                    onBlur={() => setAdminCodeFocused(false)}
                   />
                 </View>
               ) : null}
@@ -374,7 +391,14 @@ export default function SettingsScreen() {
         title="Fiók törlése"
         text="Ez a művelet véglegesen törli a fiókodat, az összes chatüzenetedet és mérési eredményedet. Ez nem visszavonható."
         confirmLabel="Törlés"
-        onCancel={() => setConfirmDeleteAccount(false)}
+        passwordValue={deletePassword}
+        onPasswordChange={setDeletePassword}
+        passwordPlaceholder="Jelenlegi jelszo"
+        passwordTestID="settings-delete-account-password"
+        onCancel={() => {
+          setConfirmDeleteAccount(false);
+          setDeletePassword("");
+        }}
         onConfirm={handleDeleteAccount}
         busy={deleteBusy}
       />
@@ -439,11 +463,15 @@ function DocumentModal({ doc, onClose }: { doc: DocModal; onClose: () => void })
   );
 }
 
-function ConfirmModal({ visible, title, text, confirmLabel, onCancel, onConfirm, busy }: {
+function ConfirmModal({ visible, title, text, confirmLabel, passwordValue, onPasswordChange, passwordPlaceholder, passwordTestID, onCancel, onConfirm, busy }: {
   visible: boolean;
   title: string;
   text: string;
   confirmLabel: string;
+  passwordValue?: string;
+  onPasswordChange?: (value: string) => void;
+  passwordPlaceholder?: string;
+  passwordTestID?: string;
   onCancel: () => void;
   onConfirm: () => void;
   busy: boolean;
@@ -454,6 +482,18 @@ function ConfirmModal({ visible, title, text, confirmLabel, onCancel, onConfirm,
         <View style={[styles.confirmCard, shadow.card]}>
           <T variant="h2" color={theme.danger}>{title}</T>
           <T variant="body" color={theme.textSecondary} style={{ marginTop: 8 }}>{text}</T>
+          {onPasswordChange ? (
+            <PasswordInput
+              value={passwordValue || ""}
+              onChangeText={onPasswordChange}
+              placeholder={passwordPlaceholder || "Jelszo"}
+              placeholderTextColor="rgba(247,251,255,0.48)"
+              containerStyle={[styles.passwordBox, styles.confirmPasswordBox]}
+              style={styles.passwordInput}
+              maxLength={PASSWORD_MAX_CHARS}
+              testID={passwordTestID}
+            />
+          ) : null}
           <View style={styles.confirmActions}>
             <TouchableOpacity style={styles.confirmCancel} onPress={onCancel} disabled={busy}>
               <T variant="title" color={theme.primary}>Mégse</T>
@@ -483,6 +523,25 @@ const styles = StyleSheet.create({
   readonlyInput: { flex: 1, color: theme.textOnDark, fontFamily: "Manrope_500Medium", fontSize: 15, paddingVertical: 0 },
   label: { marginTop: 12, marginBottom: 6 },
   input: { minHeight: 52, borderRadius: 12, borderWidth: 1, borderColor: "rgba(255,255,255,0.16)", backgroundColor: "rgba(255,255,255,0.08)", color: theme.textOnDark, paddingHorizontal: 14, fontFamily: "Manrope_500Medium", fontSize: 15 },
+  inputFocused: {
+    borderColor: theme.accent,
+    backgroundColor: "rgba(255,255,255,0.12)",
+    ...Platform.select({
+      web: {
+        boxShadow: "0 0 12px rgba(79, 209, 197, 0.4)",
+        outlineWidth: 0,
+      },
+      ios: {
+        shadowColor: theme.accent,
+        shadowOpacity: 0.35,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 0 },
+      },
+      android: {
+        elevation: 3,
+      }
+    })
+  } as any,
   codeInput: { textAlign: "center", letterSpacing: 6, fontSize: 20 },
   passwordBox: { backgroundColor: "rgba(255,255,255,0.08)", borderColor: "rgba(255,255,255,0.16)", borderRadius: 12 },
   passwordInput: { color: theme.textOnDark },
@@ -507,6 +566,7 @@ const styles = StyleSheet.create({
   docText: { lineHeight: 22 },
   confirmBackdrop: { flex: 1, backgroundColor: "rgba(3,12,22,0.64)", alignItems: "center", justifyContent: "center", paddingHorizontal: 24 },
   confirmCard: { backgroundColor: theme.surfaceStrong, borderRadius: 16, padding: 24, width: "100%", maxWidth: 390, borderWidth: 1, borderColor: theme.borderSoft },
+  confirmPasswordBox: { marginTop: 16 },
   confirmActions: { flexDirection: "row", gap: 10, marginTop: 22 },
   confirmCancel: { flex: 1, paddingVertical: 14, borderRadius: 10, borderWidth: 1.5, borderColor: theme.primary, alignItems: "center" },
   confirmGo: { flex: 1, paddingVertical: 14, borderRadius: 10, backgroundColor: theme.danger, alignItems: "center" },

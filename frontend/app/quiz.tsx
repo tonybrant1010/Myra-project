@@ -131,7 +131,7 @@ export default function QuizScreen() {
         <ContentBackground>
           <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
             <LinearGradient colors={["rgba(255,255,255,0.16)", "rgba(255,255,255,0.07)"]} style={[styles.sectionHeader, shadow.card]}>
-              <View pointerEvents="none" style={styles.sectionSheen} />
+              <View style={[styles.sectionSheen, styles.noPointer]} />
               <T variant="caption" color={theme.accentSoft}>TÁJÉKOZTATÁS ÉS HOZZÁJÁRULÁS</T>
               <T variant="display" color={theme.textOnDark} style={styles.sectionTitle}>Mérés indítása</T>
               <T variant="body" color="rgba(247,251,255,0.72)" style={styles.sectionIntro}>
@@ -182,7 +182,7 @@ export default function QuizScreen() {
 
         <ScrollView ref={scrollRef} style={{ flex: 1 }} contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
           <LinearGradient colors={["rgba(255,255,255,0.16)", "rgba(255,255,255,0.07)"]} style={[styles.sectionHeader, shadow.card]}>
-            <View pointerEvents="none" style={styles.sectionSheen} />
+            <View style={[styles.sectionSheen, styles.noPointer]} />
             <T variant="caption" color={theme.accentSoft}>{`${sectionIdx + 1}. SZAKASZ`}</T>
             <T variant="display" color={theme.textOnDark} style={styles.sectionTitle}>{section.title}</T>
             <T variant="body" color="rgba(247,251,255,0.72)" style={styles.sectionIntro}>{section.intro}</T>
@@ -237,6 +237,7 @@ export default function QuizScreen() {
 }
 
 const styles = StyleSheet.create({
+  noPointer: { pointerEvents: "none" },
   safe: { flex: 1, backgroundColor: theme.primaryDark },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
   progressTrack: { height: 5, backgroundColor: "rgba(255,255,255,0.20)", marginHorizontal: 18, marginTop: 14, borderRadius: 3, overflow: "hidden" },

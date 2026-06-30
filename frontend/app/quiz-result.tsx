@@ -44,7 +44,7 @@ export default function QuizResultScreen() {
       <ContentBackground>
         <View style={styles.container}>
           <LinearGradient colors={["rgba(255,255,255,0.16)", "rgba(255,255,255,0.07)"]} style={[styles.resultPanel, shadow.card]}>
-            <View pointerEvents="none" style={styles.resultSheen} />
+            <View style={[styles.resultSheen, styles.noPointer]} />
             <T variant="caption" color={theme.accentSoft} style={styles.caption}>
               A te állapotkódod
             </T>
@@ -100,6 +100,7 @@ export default function QuizResultScreen() {
 }
 
 const styles = StyleSheet.create({
+  noPointer: { pointerEvents: "none" },
   safe: { flex: 1, backgroundColor: theme.primaryDark },
   container: { flex: 1, padding: 18, justifyContent: "space-between" },
   resultPanel: {

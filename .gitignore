@@ -15,6 +15,7 @@ node_modules/
 
 # Testing
 /coverage
+.playwright-cli/
 
 # Next.js
 /.next/
@@ -64,6 +65,9 @@ venv/
 chainlit.md
 .chainlit
 .ipynb_checkpoints/
+backend-search.py
+search-details.py
+backend/rag/
 
 # Deployment
 .vercel

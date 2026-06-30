@@ -1,42 +1,42 @@
 import { Platform } from "react-native";
 
 export const theme = {
-  // Aurora Blue system
-  bg: "#061320",
-  background: "#061320",
-  surface: "rgba(255,255,255,0.94)",
+  // Aurora Deep Blue system
+  bg: "#040b14",
+  background: "#040b14",
+  surface: "rgba(255,255,255,0.96)",
   surfaceStrong: "#FFFFFF",
-  surfaceAlt: "rgba(241,248,255,0.82)",
-  surfaceGlass: "rgba(255,255,255,0.14)",
-  surfaceGlassStrong: "rgba(255,255,255,0.22)",
+  surfaceAlt: "rgba(244,249,255,0.85)",
+  surfaceGlass: "rgba(255,255,255,0.08)",
+  surfaceGlassStrong: "rgba(255,255,255,0.15)",
 
   // Brand
-  primary: "#0A2340",
-  primaryDark: "#05111F",
-  primarySoft: "#123A62",
-  secondary: "#8BA8FF",
-  accent: "#57C7FF",
-  accentDeep: "#1D8ED8",
-  accentSoft: "#DDF5FF",
-  info: "#65B7F2",
-  warm: "#D2AA6C",
-  calm: "#55B7B0",
-  violet: "#8B8FE8",
+  primary: "#071b30",
+  primaryDark: "#030c16",
+  primarySoft: "#0f2d4e",
+  secondary: "#7ea3ff",
+  accent: "#4fd1c5", // Neon mint/teal
+  accentDeep: "#2baba0",
+  accentSoft: "#e6fffa",
+  info: "#4299e1",
+  warm: "#ecc94b",
+  calm: "#319795",
+  violet: "#9f7aea",
 
   // Text
-  textPrimary: "#10243A",
-  textSecondary: "#60758A",
-  textMuted: "#8A9BAA",
-  textOnDark: "#F7FBFF",
+  textPrimary: "#0d1f35",
+  textSecondary: "#4a5d73",
+  textMuted: "#718096",
+  textOnDark: "#f7fafc",
 
   // Borders & dividers
-  border: "rgba(87,199,255,0.28)",
-  borderSoft: "rgba(87,199,255,0.16)",
-  borderOnDark: "rgba(255,255,255,0.18)",
+  border: "rgba(79,209,197,0.3)", // Teal border
+  borderSoft: "rgba(79,209,197,0.15)",
+  borderOnDark: "rgba(255,255,255,0.12)",
 
   // Status
-  danger: "#D95F72",
-  success: "#56D68D",
+  danger: "#e53e3e",
+  success: "#38a169",
   white: "#FFFFFF",
 };
 
@@ -75,6 +75,9 @@ export const spacing = {
 
 export const shadow = {
   card: Platform.select({
+    web: {
+      boxShadow: "0 14px 28px rgba(3,17,31,0.18)",
+    },
     ios: {
       shadowColor: "#03111F",
       shadowOpacity: 0.18,
@@ -90,6 +93,9 @@ export const shadow = {
     },
   })!,
   glow: Platform.select({
+    web: {
+      boxShadow: "0 8px 22px rgba(87,199,255,0.28)",
+    },
     ios: {
       shadowColor: "#57C7FF",
       shadowOpacity: 0.28,

@@ -17,10 +17,10 @@ export default function ContentBackground({ children, style }: Props) {
       end={{ x: 1, y: 1 }}
       style={[styles.bg, style]}
     >
-      <View pointerEvents="none" style={styles.auroraMistOne} />
-      <View pointerEvents="none" style={styles.auroraMistTwo} />
-      <View pointerEvents="none" style={styles.vignette} />
-      <View pointerEvents="none" style={styles.grainLayer} />
+      <View style={[styles.auroraMistOne, styles.noPointer]} />
+      <View style={[styles.auroraMistTwo, styles.noPointer]} />
+      <View style={[styles.vignette, styles.noPointer]} />
+      <View style={[styles.grainLayer, styles.noPointer]} />
       {children}
     </LinearGradient>
   );
@@ -28,6 +28,7 @@ export default function ContentBackground({ children, style }: Props) {
 
 const styles = StyleSheet.create({
   bg: { flex: 1, backgroundColor: theme.bg, overflow: "hidden" },
+  noPointer: { pointerEvents: "none" },
   auroraMistOne: {
     ...StyleSheet.absoluteFillObject,
     backgroundImage:

@@ -164,6 +164,8 @@ export default function AdminKbScreen() {
       fd.append("file", file);
       const r = await fetch(apiUrl("/api/admin/kb/files/upload"), {
         method: "POST",
+        cache: "no-store",
+        credentials: "omit",
         headers: { Authorization: `Bearer ${token}` },
         body: fd,
       });

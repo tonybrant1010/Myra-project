@@ -1,12 +1,17 @@
 """Myra-project backend — Supabase/PostgreSQL + custom JWT, no external dependencies except the
 configurable LLM provider (OpenAI / Anthropic / Google Gemini) chosen by the admin."""
 import asyncio
+import base64
 import csv
 import hashlib
+import hmac as _hmac
 import io
+import json as _json
 import os
 import re
+import struct
 import time
+import traceback
 import uuid
 import logging
 import smtplib
@@ -15,10 +20,11 @@ import secrets
 import ssl
 import subprocess
 import threading
+from collections import OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 from email.mime.text import MIMEText
 
 import httpx
@@ -28,7 +34,7 @@ from fastapi import FastAPI, APIRouter, Depends, HTTPException, Header, Request,
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from pypdf import PdfReader
 from sqlalchemy import (
     Boolean, Column, DateTime, ForeignKey, Integer, String, Text, JSON, func, select, delete, update,
@@ -82,6 +88,8 @@ TTS_ENGINE = os.environ.get("TTS_ENGINE", "none").strip().lower()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("myra")
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def _sanitize_log_line(line: str) -> str:
@@ -131,6 +139,59 @@ log_buffer.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)
 log_buffer.addFilter(secret_redaction_filter)
 logging.getLogger("myra").addHandler(log_buffer)
 root_logger.addHandler(log_buffer)
+
+
+def _secret_preview(secret: str) -> str:
+    if not secret:
+        return ""
+    if len(secret) <= 4:
+        return "****"
+    return "****" + secret[-4:]
+
+
+def _clean_session_id(val: Optional[str]) -> Optional[str]:
+    if val is None:
+        return None
+    val = val.strip()
+    if not val:
+        return None
+    if len(val) > 40:
+        raise HTTPException(status_code=400, detail="Érvénytelen session_id hossz.")
+    if not re.match(r"^[a-zA-Z0-9_\-]+$", val):
+        raise HTTPException(status_code=400, detail="Érvénytelen karakterek a session_id-ban.")
+    return val
+
+
+def _safe_download_filename(filename: str) -> str:
+    filename = filename.replace("../", "").replace("..\\", "")
+    cleaned = re.sub(r"[^\w\-\.]", "_", filename)
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+    if not cleaned or re.match(r"^\.+$", cleaned):
+        return "download"
+    if len(cleaned) > 120:
+        cleaned = cleaned[:120]
+    return cleaned
+
+
+def _is_allowed_cors_origin(origin: str) -> bool:
+    norm = origin.rstrip("/")
+    if norm in ["https://www.myra-project.hu", "https://myra-project.hu"]:
+        return True
+    if re.match(r"^http://localhost:\d+$", norm):
+        return True
+    return False
+
+
+def _build_knowledge_search_query(user_query: str, state: Any) -> str:
+    profile_part = state.profile[:300] if state.profile else ""
+    return f"Kérdés: {user_query} | Profil: {state.title} ({state.severity}) | Leírás: {profile_part}"
+
+
+def _excerpt_knowledge_chunk(text: str, max_chars: int = 500) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + " [...]"
+
 
 # ---------- DB ----------
 def _normalize_database_url(url: str) -> str:
@@ -250,6 +311,21 @@ class User(Base):
     last_login_ip = Column(String(80), nullable=True)
     last_login_at = Column(DateTime(timezone=True), nullable=True)
 
+    # TOTP MFA (pure Python RFC 6238)
+    totp_secret = Column(Text, nullable=True)  # Will store encrypted key
+    totp_enabled = Column(Boolean, nullable=False, default=False)
+
+    # GDPR / CCPA Consent Management
+    consent_given = Column(Boolean, nullable=False, default=False)
+    consent_updated_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Legal Compliance version tracking
+    terms_version = Column(String(50), nullable=True)
+    privacy_version = Column(String(50), nullable=True)
+    terms_accepted_at = Column(DateTime(timezone=True), nullable=True)
+    forum_nickname = Column(String(50), nullable=True, unique=True)
+    forum_avatar = Column(String(10), nullable=True)
+
 
 class StateCode(Base):
     __tablename__ = "state_codes"
@@ -273,6 +349,14 @@ class ChatMessage(Base):
     state_code = Column(String(4), nullable=True, index=True)
     role = Column(String(20), nullable=False)
     text = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class ForumPost(Base):
+    __tablename__ = "forum_posts"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    content = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
@@ -394,8 +478,131 @@ async def _create_unique_reset_token(db: AsyncSession) -> tuple[str, str]:
     raise HTTPException(status_code=503, detail="Nem sikerült biztonsági kódot előállítani. Próbáld újra később.")
 
 
+# ---------- HKDF / Field Encryption ----------
+def _hkdf_sha256(ikm: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes:
+    """Simplified HKDF-SHA256 (RFC 5869) — extract-then-expand, stdlib only."""
+    prk = _hmac.new(salt or b"\x00" * 32, ikm, hashlib.sha256).digest()
+    t = b""
+    okm = b""
+    for i in range(1, (length + 31) // 32 + 1):
+        t = _hmac.new(prk, t + info + bytes([i]), hashlib.sha256).digest()
+        okm += t
+    return okm[:length]
+
+
+def _derive_field_key(purpose: str) -> bytes:
+    """Derive a 32-byte key from JWT_SECRET for a specific purpose."""
+    return _hkdf_sha256(JWT_SECRET.encode("utf-8"), b"myra-field-key-v1", purpose.encode("utf-8"), 32)
+
+
+def _encrypt_field(plaintext: str, purpose: str = "totp") -> str:
+    """Encrypt a short string using XOR with HMAC-SHA256 keystream + HMAC tag.
+    Format: base64(nonce‖ciphertext‖tag) where nonce=16B, tag=32B."""
+    key = _derive_field_key(purpose)
+    enc_key = _hmac.new(key, b"enc", hashlib.sha256).digest()
+    mac_key = _hmac.new(key, b"mac", hashlib.sha256).digest()
+    nonce = os.urandom(16)
+    pt = plaintext.encode("utf-8")
+    keystream = b""
+    for ctr in range((len(pt) + 31) // 32 + 1):
+        keystream += _hmac.new(enc_key, nonce + struct.pack(">I", ctr), hashlib.sha256).digest()
+    ct = bytes(a ^ b for a, b in zip(pt, keystream[: len(pt)]))
+    tag = _hmac.new(mac_key, nonce + ct, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(nonce + ct + tag).decode("ascii")
+
+
+def _decrypt_field(token: str, purpose: str = "totp") -> str:
+    """Decrypt a field encrypted with _encrypt_field. Raises ValueError on tamper."""
+    key = _derive_field_key(purpose)
+    enc_key = _hmac.new(key, b"enc", hashlib.sha256).digest()
+    mac_key = _hmac.new(key, b"mac", hashlib.sha256).digest()
+    try:
+        raw = base64.urlsafe_b64decode(token)
+        if len(raw) < 49:
+            raise ValueError("invalid encrypted field")
+        nonce, ct, tag = raw[:16], raw[16:-32], raw[-32:]
+        if not _hmac.compare_digest(tag, _hmac.new(mac_key, nonce + ct, hashlib.sha256).digest()):
+            raise ValueError("encrypted field integrity check failed")
+        keystream = b""
+        for ctr in range((len(ct) + 31) // 32 + 1):
+            keystream += _hmac.new(enc_key, nonce + struct.pack(">I", ctr), hashlib.sha256).digest()
+        return bytes(a ^ b for a, b in zip(ct, keystream[: len(ct)])).decode("utf-8")
+    except Exception as e:
+        raise ValueError(f"Decryption failed: {e}")
+
+
+# ---------- TOTP (RFC 6238) — pure Python ----------
+TOTP_DIGITS = 6
+TOTP_PERIOD = 30
+TOTP_WINDOW = 1  # accept ±1 time step
+TOTP_ISSUER = "Myra-Project"
+
+
+def _totp_generate_secret(length: int = 20) -> str:
+    """Generate a random TOTP secret as base32."""
+    return base64.b32encode(os.urandom(length)).decode("ascii").rstrip("=")
+
+
+def _totp_hotp(secret_b32: str, counter: int) -> str:
+    """HOTP value (RFC 4226)."""
+    padded = secret_b32.upper() + "=" * (-len(secret_b32) % 8)
+    key = base64.b32decode(padded)
+    digest = _hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()  # nosec B303
+    offset = digest[-1] & 0x0F
+    code_int = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+    return str(code_int % (10 ** TOTP_DIGITS)).zfill(TOTP_DIGITS)
+
+
+def _totp_verify(secret_b32: str, code: str) -> bool:
+    """Verify a TOTP code with ±TOTP_WINDOW tolerance."""
+    code = code.strip()
+    if len(code) != TOTP_DIGITS or not code.isdigit():
+        return False
+    now_counter = int(time.time()) // TOTP_PERIOD
+    for offset in range(-TOTP_WINDOW, TOTP_WINDOW + 1):
+        if secrets.compare_digest(code, _totp_hotp(secret_b32, now_counter + offset)):
+            return True
+    return False
+
+
+def _totp_provisioning_uri(secret_b32: str, email: str) -> str:
+    """Build otpauth:// URI for QR scanning."""
+    import urllib.parse
+    label = urllib.parse.quote(f"{TOTP_ISSUER}:{email}", safe="")
+    params = urllib.parse.urlencode({"secret": secret_b32, "issuer": TOTP_ISSUER, "algorithm": "SHA1", "digits": TOTP_DIGITS, "period": TOTP_PERIOD})
+    return f"otpauth://totp/{label}?{params}"
+
+
+# ---------- Token Blacklist (in-memory, bounded) ----------
+_token_blacklist: OrderedDict[str, float] = OrderedDict()
+TOKEN_BLACKLIST_MAX = 10000
+
+
+def _blacklist_jti(jti: str, exp_ts: float) -> None:
+    now = time.time()
+    while _token_blacklist:
+        oldest_jti, oldest_exp = next(iter(_token_blacklist.items()))
+        if oldest_exp < now:
+            _token_blacklist.pop(oldest_jti, None)
+        else:
+            break
+    if len(_token_blacklist) >= TOKEN_BLACKLIST_MAX:
+        _token_blacklist.popitem(last=False)
+    _token_blacklist[jti] = exp_ts
+
+
+def _is_jti_blacklisted(jti: str) -> bool:
+    return jti in _token_blacklist
+
+
 def create_access_token(user: User, *, mfa_verified: bool = False) -> str:
     now = _now()
+    jti = str(uuid.uuid4())
+    # Access token lejárati idő: admin: 1 óra, átlag user: 7 nap
+    if user.is_admin:
+        exp = int((now + timedelta(hours=1)).timestamp())
+    else:
+        exp = int((now + timedelta(days=7)).timestamp())
     payload = {
         "sub": str(user.id),
         "email": user.email,
@@ -404,8 +611,26 @@ def create_access_token(user: User, *, mfa_verified: bool = False) -> str:
         "mfa": bool(mfa_verified),
         "mfa_at": int(now.timestamp()) if mfa_verified else None,
         "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)).timestamp()),
+        "exp": exp,
         "type": "access",
+        "jti": jti,
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+
+
+def create_refresh_token(user: User) -> str:
+    now = _now()
+    jti = str(uuid.uuid4())
+    # Refresh token expires in 30 days
+    exp = int((now + timedelta(days=30)).timestamp())
+    payload = {
+        "sub": str(user.id),
+        "email": user.email,
+        "token_version": int(getattr(user, "token_version", 0) or 0),
+        "iat": int(now.timestamp()),
+        "exp": exp,
+        "type": "refresh",
+        "jti": jti,
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
@@ -423,6 +648,25 @@ _attempts: dict[tuple[str, str], dict] = {}
 THROTTLE_WINDOW_S = 60
 THROTTLE_MAX = 8
 THROTTLE_BLOCK_S = 300
+RATE_LIMIT_MAX_ENTRIES = 5000
+
+
+def _prune_rate_limit_map(store: dict, now: float, max_age_s: int, *, max_entries: int = RATE_LIMIT_MAX_ENTRIES) -> None:
+    if len(store) <= max_entries:
+        return
+    expired_keys = [
+        key for key, value in store.items()
+        if now - value.get("first", now) > max_age_s and now >= value.get("blocked_until", 0)
+    ]
+    for key in expired_keys:
+        store.pop(key, None)
+    if len(store) <= max_entries:
+        return
+    overflow = len(store) - max_entries
+    oldest_keys = sorted(store, key=lambda key: store[key].get("first", now))[:overflow]
+    for key in oldest_keys:
+        store.pop(key, None)
+
 
 # Regisztrációs IP-limit
 _reg_attempts: dict[str, dict] = {}
@@ -435,7 +679,13 @@ def _throttle_key(request: Request, email: str) -> tuple[str, str]:
     return (ip, (email or "").lower())
 
 
+def _is_testing() -> bool:
+    return os.environ.get("DISABLE_RATE_LIMITS") == "true"
+
+
 def _check_throttle(request: Request, email: str) -> None:
+    if _is_testing():
+        return
     key = _throttle_key(request, email)
     s = _attempts.get(key)
     now = time.monotonic()
@@ -459,6 +709,8 @@ def _register_failure(request: Request, email: str) -> None:
 
 
 def _check_reg_limit(request: Request) -> None:
+    if _is_testing():
+        return
     """IP-alapú regisztrációs limit: max REG_MAX regisztráció / REG_WINDOW_S másodperc."""
     ip = _client_ip(request)
     now = time.monotonic()
@@ -488,6 +740,8 @@ FORGOT_WINDOW_S = 300  # 5 perc
 FORGOT_MAX = 3        # max 3 kérés / 5 perc
 
 def _check_forgot_limit(request: Request, email: str) -> None:
+    if _is_testing():
+        return
     ip = _client_ip(request)
     key = f"{ip}:{(email or '').lower().strip()}"
     now = time.monotonic()
@@ -516,6 +770,8 @@ RESET_WINDOW_S = 900  # 15 perc
 RESET_MAX = 5         # max 5 sikertelen próbálkozás / 15 perc
 
 def _check_reset_throttle(request: Request) -> None:
+    if _is_testing():
+        return
     ip = _client_ip(request)
     now = time.monotonic()
     s = _reset_attempts.get(ip)
@@ -537,6 +793,80 @@ def _record_reset_failure(request: Request) -> None:
     _reset_attempts[ip] = s
 
 
+# MFA/admin biztonsági kód kiküldési limit
+_mfa_issue_attempts: dict[str, dict] = {}
+MFA_ISSUE_WINDOW_S = 600
+MFA_ISSUE_MAX = 3
+
+def _check_and_record_mfa_issue_limit(request: Request, user_id: int, purpose: str) -> None:
+    if _is_testing():
+        return
+    ip = _client_ip(request)
+    key = f"{ip}:{user_id}:{purpose}"
+    now = time.monotonic()
+    _prune_rate_limit_map(_mfa_issue_attempts, now, MFA_ISSUE_WINDOW_S)
+    s = _mfa_issue_attempts.get(key)
+    if s and now - s.get("first", now) > MFA_ISSUE_WINDOW_S:
+        _mfa_issue_attempts.pop(key, None)
+        s = None
+    if s and s.get("count", 0) >= MFA_ISSUE_MAX:
+        raise HTTPException(status_code=429, detail="Túl sok biztonsági kód kérés. Próbáld újra később.")
+    if not s:
+        s = {"count": 1, "first": now}
+    else:
+        s["count"] = s.get("count", 0) + 1
+    _mfa_issue_attempts[key] = s
+
+
+_admin_action_attempts: dict[str, dict] = {}
+ADMIN_ACTION_WINDOW_S = 60
+ADMIN_ACTION_MAX = 3
+
+def _check_and_record_admin_action_limit(request: Request, admin_id: int, action: str) -> None:
+    if _is_testing():
+        return
+    ip = _client_ip(request)
+    key = f"{ip}:{admin_id}:{action}"
+    now = time.monotonic()
+    _prune_rate_limit_map(_admin_action_attempts, now, ADMIN_ACTION_WINDOW_S)
+    s = _admin_action_attempts.get(key)
+    if s and now - s.get("first", now) > ADMIN_ACTION_WINDOW_S:
+        _admin_action_attempts.pop(key, None)
+        s = None
+    if s and s.get("count", 0) >= ADMIN_ACTION_MAX:
+        raise HTTPException(status_code=429, detail="Túl sok admin művelet. Próbáld újra később.")
+    if not s:
+        s = {"count": 1, "first": now}
+    else:
+        s["count"] = s.get("count", 0) + 1
+    _admin_action_attempts[key] = s
+
+
+_live_token_attempts: dict[str, dict] = {}
+LIVE_TOKEN_WINDOW_S = 60
+LIVE_TOKEN_MAX = 6
+
+
+def _check_and_record_live_token_limit(request: Request, user_id: int) -> None:
+    if _is_testing():
+        return
+    ip = _client_ip(request)
+    key = f"{ip}:{user_id}"
+    now = time.monotonic()
+    _prune_rate_limit_map(_live_token_attempts, now, LIVE_TOKEN_WINDOW_S)
+    s = _live_token_attempts.get(key)
+    if s and now - s.get("first", now) > LIVE_TOKEN_WINDOW_S:
+        _live_token_attempts.pop(key, None)
+        s = None
+    if s and s.get("count", 0) >= LIVE_TOKEN_MAX:
+        raise HTTPException(status_code=429, detail="Tul sok Live inditasi keres. Probald ujra rovidesen.")
+    if not s:
+        s = {"count": 1, "first": now}
+    else:
+        s["count"] = s.get("count", 0) + 1
+    _live_token_attempts[key] = s
+
+
 def _safe_upload_filename(filename: Optional[str], allowed_suffixes: tuple[str, ...]) -> str:
     raw_name = (filename or "").strip()
     if not raw_name or "/" in raw_name or "\\" in raw_name:
@@ -544,10 +874,22 @@ def _safe_upload_filename(filename: Optional[str], allowed_suffixes: tuple[str, 
     safe_name = os.path.basename(raw_name)
     if safe_name in {"", ".", ".."} or safe_name.startswith("."):
         raise HTTPException(status_code=400, detail="Érvénytelen fájlnév.")
+    if any(ord(c) < 32 or ord(c) == 127 for c in safe_name):
+        raise HTTPException(status_code=400, detail="Érvénytelen karakterek.")
+    if len(safe_name) > 180:
+        raise HTTPException(status_code=400, detail="Érvénytelen fájlnév.")
     if not safe_name.lower().endswith(allowed_suffixes):
         allowed = ", ".join(allowed_suffixes)
         raise HTTPException(status_code=400, detail=f"Csak {allowed} fájl tölthető fel.")
     return safe_name
+
+
+def _safe_kb_pdf_filename(filename: Optional[str]) -> str:
+    if not filename or len(filename) > 180:
+        raise HTTPException(status_code=400, detail="Érvénytelen fájlnév hossz.")
+    if "\n" in filename or "\r" in filename or "\t" in filename:
+        raise HTTPException(status_code=400, detail="Érvénytelen karakterek a fájlnévben.")
+    return _safe_upload_filename(filename, (".pdf",))
 
 
 async def _read_upload_with_limit(file: UploadFile, max_bytes: int) -> bytes:
@@ -875,7 +1217,7 @@ async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> 
         WHERE {" OR ".join(where_parts)}
         ORDER BY ({" + ".join(score_parts)}) DESC, id ASC
         LIMIT :limit
-    """)
+    """)  # nosec B608
     res = await db.execute(stmt, params)
     rows = res.mappings().all()
     return [
@@ -954,6 +1296,33 @@ async def _run_startup_migrations() -> None:
             if "last_login_at" not in _cols:
                 _conn.execute("ALTER TABLE users ADD COLUMN last_login_at TIMESTAMP WITH TIME ZONE")
                 print("[startup] migráció: users.last_login_at hozzáadva")
+            if "totp_secret" not in _cols:
+                _conn.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT")
+                print("[startup] migráció: users.totp_secret hozzáadva")
+            if "totp_enabled" not in _cols:
+                _conn.execute("ALTER TABLE users ADD COLUMN totp_enabled BOOLEAN NOT NULL DEFAULT 0")
+                print("[startup] migráció: users.totp_enabled hozzáadva")
+            if "consent_given" not in _cols:
+                _conn.execute("ALTER TABLE users ADD COLUMN consent_given BOOLEAN NOT NULL DEFAULT 0")
+                print("[startup] migráció: users.consent_given hozzáadva")
+            if "consent_updated_at" not in _cols:
+                _conn.execute("ALTER TABLE users ADD COLUMN consent_updated_at TIMESTAMP")
+                print("[startup] migráció: users.consent_updated_at hozzáadva")
+            if "terms_version" not in _cols:
+                _conn.execute("ALTER TABLE users ADD COLUMN terms_version VARCHAR(50)")
+                print("[startup] migráció: users.terms_version hozzáadva")
+            if "privacy_version" not in _cols:
+                _conn.execute("ALTER TABLE users ADD COLUMN privacy_version VARCHAR(50)")
+                print("[startup] migráció: users.privacy_version hozzáadva")
+            if "terms_accepted_at" not in _cols:
+                _conn.execute("ALTER TABLE users ADD COLUMN terms_accepted_at TIMESTAMP")
+                print("[startup] migráció: users.terms_accepted_at hozzáadva")
+            if "forum_nickname" not in _cols:
+                _conn.execute("ALTER TABLE users ADD COLUMN forum_nickname VARCHAR(50)")
+                print("[startup] migráció: users.forum_nickname hozzáadva")
+            if "forum_avatar" not in _cols:
+                _conn.execute("ALTER TABLE users ADD COLUMN forum_avatar VARCHAR(10)")
+                print("[startup] migráció: users.forum_avatar hozzáadva")
             _cols2 = {row[1] for row in _conn.execute("PRAGMA table_info(chat_messages)")}
             if "session_id" not in _cols2:
                 _conn.execute("ALTER TABLE chat_messages ADD COLUMN session_id VARCHAR(40)")
@@ -987,6 +1356,15 @@ async def _run_startup_migrations() -> None:
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMP WITH TIME ZONE"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_ip VARCHAR(80)"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP WITH TIME ZONE"))
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT"))
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT false"))
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS consent_given BOOLEAN NOT NULL DEFAULT false"))
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS consent_updated_at TIMESTAMP WITH TIME ZONE"))
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_version VARCHAR(50)"))
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS privacy_version VARCHAR(50)"))
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMP"))
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS forum_nickname VARCHAR(50)"))
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS forum_avatar VARCHAR(10)"))
         await conn.execute(sql_text("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS session_id VARCHAR(40)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_mfa_challenges_user_id ON mfa_challenges (user_id)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_trusted_devices_user_id ON trusted_devices (user_id)"))
@@ -1012,7 +1390,7 @@ async def _reset_postgres_sequences(conn) -> None:
                 COALESCE((SELECT MAX({column_name}) FROM {table_name}), 1),
                 (SELECT COUNT(*) > 0 FROM {table_name})
             )
-        """))
+        """))  # nosec B608
 
 
 # ---------- DB session ----------
@@ -1037,6 +1415,9 @@ async def get_current_user(
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Érvénytelen vagy lejárt token")
+    jti = payload.get("jti")
+    if jti and _is_jti_blacklisted(jti):
+        raise HTTPException(status_code=401, detail="A token érvénytelenítve lett.")
     if payload.get("type") != "access":
         raise HTTPException(status_code=401, detail="Hibás token típus")
     try:
@@ -1183,12 +1564,36 @@ app = FastAPI(title="Myra API", lifespan=lifespan)
 
 MYRA_PROXY_SECRET = os.environ.get("MYRA_PROXY_SECRET", "")
 SECURITY_HEADERS = {
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "Permissions-Policy": "geolocation=(), camera=(), payment=(), usb=(), magnetometer=(), gyroscope=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Resource-Policy": "same-site",
+    "X-Permitted-Cross-Domain-Policies": "none",
+    "X-DNS-Prefetch-Control": "off",
 }
+
+
+@app.middleware("http")
+async def add_request_id_and_trace(request: Request, call_next):
+    request_id = request.headers.get("X-Request-Id", str(uuid.uuid4()))
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-Id"] = request_id
+    return response
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    req_id = getattr(request.state, "request_id", "unknown")
+    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    logger.error(f"Request ID: {req_id} - Global error: {exc}\n{tb}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Belső szerverhiba történt. Kérjük, próbáld újra később.", "request_id": req_id}
+    )
 NO_STORE_API_PREFIXES = (
     "/api/auth",
     "/api/admin",
@@ -1240,7 +1645,13 @@ async def add_security_headers(request: Request, call_next):
 @app.middleware("http")
 async def verify_vercel_proxy(request: Request, call_next):
     if request.method == "OPTIONS":
-        return await call_next(request)
+        origin = request.headers.get("Origin", "")
+        if origin and _is_allowed_cors_origin(origin):
+            return await call_next(request)
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Direct access to origin is forbidden."}
+        )
 
     # Allow local development and localhost requests
     if os.environ.get("ENVIRONMENT") == "development":
@@ -1268,12 +1679,15 @@ class RegisterBody(BaseModel):
     email: EmailStr
     name: str = Field(min_length=1, max_length=120)
     password: str = Field(min_length=8, max_length=128)
+    accepted_terms: bool = False
+    accepted_terms_version: str = Field(default="2026-06-15", max_length=40)
+    accepted_privacy_version: str = Field(default="2026-06-15", max_length=40)
 
 
 class LoginBody(BaseModel):
     email: EmailStr
-    password: str
-    device_token: Optional[str] = None
+    password: str = Field(min_length=1, max_length=128)
+    device_token: Optional[str] = Field(None, max_length=128)
 
 
 class NicknameBody(BaseModel):
@@ -1282,9 +1696,9 @@ class NicknameBody(BaseModel):
 
 class SubmitScoreBody(BaseModel):
     game_type: Literal["match", "snake", "sudoku"]
-    score: int
+    score: int = Field(ge=0, le=1000000)
     timestamp: int
-    signature: str
+    signature: str = Field(min_length=1, max_length=256)
 
 
 class MfaVerifyBody(BaseModel):
@@ -1299,7 +1713,11 @@ class MfaSettingsBody(BaseModel):
 
 
 class MfaTrustedDeviceDeleteBody(BaseModel):
-    current_password: Optional[str] = None
+    current_password: str = Field(min_length=1, max_length=128)
+
+
+class DeleteAccountBody(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
 
 
 class ForgotPasswordBody(BaseModel):
@@ -1307,54 +1725,92 @@ class ForgotPasswordBody(BaseModel):
 
 
 class ResetPasswordBody(BaseModel):
-    token: str
+    token: str = Field(min_length=1, max_length=128)
     new_password: str = Field(min_length=8, max_length=128)
 
 
 class ChangePasswordBody(BaseModel):
     current_password: str = Field(min_length=1, max_length=128)
     new_password: str = Field(min_length=8, max_length=128)
-    admin_security_challenge_id: Optional[str] = None
-    admin_security_code: Optional[str] = None
+    admin_security_challenge_id: Optional[str] = Field(None, max_length=80)
+    admin_security_code: Optional[str] = Field(None, max_length=16)
 
 
 class CodeVerifyBody(BaseModel):
-    code: str
+    code: str = Field(min_length=1, max_length=16)
 
 
 class QuizSubmitBody(BaseModel):
     answers: List[int]
 
+    @field_validator("answers")
+    @classmethod
+    def validate_answers(cls, v):
+        if len(v) != 21:
+            raise ValueError("Exactly 21 answers required")
+        for idx in range(16):
+            if not (1 <= v[idx] <= 5):
+                raise ValueError(f"First 16 answers must be between 1 and 5 (got {v[idx]} at index {idx})")
+        for idx in range(16, 21):
+            if not (0 <= v[idx] <= 2):
+                raise ValueError(f"Last 5 answers must be between 0 and 2 (got {v[idx]} at index {idx})")
+        return v
+
 
 class ChatSendBody(BaseModel):
     message: str = Field(min_length=1, max_length=CHAT_MESSAGE_MAX_CHARS)
-    session_id: Optional[str] = None
+    session_id: Optional[str] = Field(None, max_length=40)
 
 
 class StateCodeIn(BaseModel):
-    code: str
-    title: str
+    code: str = Field(min_length=1, max_length=4)
+    title: str = Field(min_length=1, max_length=240)
     profile: str
-    severity: str = ""
-    a: Optional[int] = None
-    p: Optional[int] = None
-    h: Optional[int] = None
-    c: Optional[int] = None
+    severity: str = Field("", max_length=80)
+    a: Optional[int] = Field(None, ge=1, le=4)
+    p: Optional[int] = Field(None, ge=1, le=4)
+    h: Optional[int] = Field(None, ge=1, le=4)
+    c: Optional[int] = Field(None, ge=1, le=4)
 
 
 class SettingsIn(BaseModel):
     llm_provider: Optional[Literal["openai", "anthropic", "gemini", "groq", "cerebras", "mistral"]] = None
-    llm_model: Optional[str] = None
+    llm_model: Optional[str] = Field(None, max_length=160)
     llm_api_key: Optional[str] = None
     system_prompt: Optional[str] = None
     kb_text: Optional[str] = None
-    global_notice_text: Optional[str] = None
+    global_notice_text: Optional[str] = Field(None, max_length=1200)
     live_model: Optional[str] = None
     live_api_key: Optional[str] = None
 
 
 class ReindexPdfKnowledgeBody(BaseModel):
-    source_dir: Optional[str] = None
+    source_dir: Optional[str] = Field(None, max_length=500)
+
+
+class TotpVerifySetupBody(BaseModel):
+    code: str = Field(min_length=6, max_length=6)
+
+
+class TotpDisableBody(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    code: str = Field(min_length=6, max_length=6)
+
+
+class RefreshTokenBody(BaseModel):
+    refresh_token: str
+
+
+class ConsentBody(BaseModel):
+    consent_given: bool
+
+
+class ExportDataBody(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+
+
+class AiSuggestBody(BaseModel):
+    session_id: Optional[str] = None
 
 
 _kb_reindex_state = {
@@ -1411,16 +1867,27 @@ def _synthesize_tts_wav(text_value: str) -> Path:
 
 
 
+def _diagnostic_file_status(path: Path, name: str) -> str:
+    if not path.exists():
+        return f"error: {name} not found"
+    return "ok"
+
+
+def _cleanup_piper_cache(cache_dir: Path, max_age_days: int) -> None:
+    cutoff = time.time() - (max_age_days * 86400)
+    for pattern in ("*.wav", "*.tmp.wav"):
+        for cached in cache_dir.glob(pattern):
+            try:
+                if cached.stat().st_mtime < cutoff:
+                    cached.unlink()
+            except OSError:
+                pass
+
+
 def _synthesize_piper_wav(text_value: str) -> Path:
     _ensure_piper_ready()
     PIPER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cutoff = time.time() - (PIPER_CACHE_MAX_AGE_DAYS * 86400)
-    for cached in PIPER_CACHE_DIR.glob("*.wav"):
-        try:
-            if cached.stat().st_mtime < cutoff:
-                cached.unlink()
-        except OSError:
-            pass
+    _cleanup_piper_cache(PIPER_CACHE_DIR, PIPER_CACHE_MAX_AGE_DAYS)
     cache_key = hashlib.sha256(
         f"{PIPER_MODEL.resolve()}|{PIPER_MODEL.stat().st_mtime_ns}|{PIPER_NOISE_SCALE}|{PIPER_NOISE_W}|{text_value}".encode("utf-8")
     ).hexdigest()
@@ -1599,13 +2066,16 @@ def _client_label(request: Request) -> str:
 
 
 async def _admin_audit(db: AsyncSession, admin: User, request: Request, action: str, detail: str = "") -> None:
+    sanitized_detail = _sanitize_log_line(detail)[:4000]
+    sanitized_ua = _sanitize_log_line(request.headers.get("user-agent", ""))[:1000]
     db.add(AdminAuditLog(
         admin_user_id=admin.id,
         action=action[:120],
-        detail=detail[:4000],
+        detail=sanitized_detail,
         ip=_client_ip(request),
-        user_agent=request.headers.get("user-agent", "")[:1000],
+        user_agent=sanitized_ua,
     ))
+    await db.commit()
 
 
 async def _is_trusted_device(db: AsyncSession, user: User, device_token: Optional[str]) -> bool:
@@ -1691,9 +2161,25 @@ async def _create_trusted_device(db: AsyncSession, user: User, request: Request)
     return raw_token
 
 
-# ---------- Auth ----------
+async def _cleanup_expired_security_records(db: AsyncSession, user_id: Optional[int] = None) -> None:
+    now = _now()
+    mfa_q = delete(MfaChallenge).where(
+        (MfaChallenge.expires_at < now) | (MfaChallenge.consumed_at.is_not(None))
+    )
+    device_q = delete(TrustedDevice).where(
+        (TrustedDevice.expires_at < now) | (TrustedDevice.revoked_at.is_not(None))
+    )
+    if user_id is not None:
+        mfa_q = mfa_q.where(MfaChallenge.user_id == user_id)
+        device_q = device_q.where(TrustedDevice.user_id == user_id)
+    await db.execute(mfa_q)
+    await db.execute(device_q)
+
+
 @api.post("/auth/register")
 async def auth_register(body: RegisterBody, request: Request, db: AsyncSession = Depends(get_db)):
+    if not body.accepted_terms:
+        raise HTTPException(status_code=400, detail="A regisztrációhoz a jogi feltételek elfogadása szükséges.")
     _check_reg_limit(request)
     _check_throttle(request, body.email)
     email = body.email.lower()
@@ -1701,19 +2187,35 @@ async def auth_register(body: RegisterBody, request: Request, db: AsyncSession =
     if res.scalar_one_or_none():
         _register_failure(request, email)
         raise HTTPException(status_code=400, detail="Ez az email már regisztrálva van.")
-    # Admin assignment: first user OR in allowlist
-    total = (await db.execute(select(func.count()).select_from(User))).scalar_one()
-    is_admin = (email in ADMIN_EMAIL_ALLOWLIST) or (total == 0)
+    
+    is_admin = email in ADMIN_EMAIL_ALLOWLIST
     current_ip = _client_ip(request)
+    
     user = User(
-        email=email, name=body.name.strip(), password_hash=hash_password(body.password), is_admin=is_admin,
-        last_login_ip=current_ip, last_login_at=_now()
+        email=email,
+        name=body.name.strip(),
+        password_hash=hash_password(body.password),
+        is_admin=is_admin,
+        last_login_ip=current_ip,
+        last_login_at=_now(),
+        consent_given=True,
+        consent_updated_at=_now(),
+        terms_version=body.accepted_terms_version,
+        privacy_version=body.accepted_privacy_version,
+        terms_accepted_at=_now(),
     )
     db.add(user)
     await db.flush()
     _record_reg(request)
-    token = create_access_token(user, mfa_verified=is_admin)
-    return {"access_token": token, "user": _user_out(user)}
+    
+    # Registration logs in automatically
+    access_token = create_access_token(user, mfa_verified=is_admin)
+    refresh_token = create_refresh_token(user)
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "user": _user_out(user)
+    }
 
 
 @api.post("/auth/login")
@@ -1728,8 +2230,17 @@ async def auth_login(body: LoginBody, request: Request, background_tasks: Backgr
         raise HTTPException(status_code=401, detail="Hibás email vagy jelszó.")
     if user.is_suspended:
         raise HTTPException(status_code=403, detail="Ez a fiók fel van függesztve. Lépj kapcsolatba az adminisztrátorral.")
-    needs_mfa = bool(user.is_admin or user.mfa_enabled)
-    if needs_mfa and not await _is_trusted_device(db, user, body.device_token):
+    
+    needs_totp = bool(user.totp_enabled)
+    needs_email_mfa = bool(user.is_admin or user.mfa_enabled)
+    
+    if needs_totp and not await _is_trusted_device(db, user, body.device_token):
+        return {
+            "totp_required": True,
+            "user_id": user.id,
+            "detail": "Kérjük, add meg a hitelesítő alkalmazásod kódját.",
+        }
+    elif needs_email_mfa and not await _is_trusted_device(db, user, body.device_token):
         challenge = await _create_mfa_challenge(db, user, background_tasks, purpose="login")
         return {
             "mfa_required": True,
@@ -1758,8 +2269,13 @@ async def auth_login(body: LoginBody, request: Request, background_tasks: Backgr
     user.last_login_at = _now()
     await db.flush()
 
-    token = create_access_token(user, mfa_verified=needs_mfa)
-    return {"access_token": token, "user": _user_out(user)}
+    access_token = create_access_token(user, mfa_verified=bool(needs_totp or needs_email_mfa))
+    refresh_token = create_refresh_token(user)
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "user": _user_out(user)
+    }
 
 
 @api.post("/auth/mfa/verify")
@@ -1800,8 +2316,9 @@ async def auth_mfa_verify(
     user.last_login_at = _now()
     await db.flush()
 
-    token = create_access_token(user, mfa_verified=True)
-    return {"access_token": token, "user": _user_out(user), "device_token": device_token}
+    access_token = create_access_token(user, mfa_verified=True)
+    refresh_token = create_refresh_token(user)
+    return {"access_token": access_token, "refresh_token": refresh_token, "user": _user_out(user), "device_token": device_token}
 
 
 @api.post("/auth/admin/action-code")
@@ -1968,13 +2485,268 @@ async def tts_speak(body: TtsSpeakBody, user: User = Depends(get_current_user)):
 
 
 @api.delete("/auth/delete-account")
-async def auth_delete_account(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def auth_delete_account(body: DeleteAccountBody, request: Request, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="Hibás jelszó.")
+    deleted_user_id = user.id
+    user.token_version = int(user.token_version or 0) + 1
+    await db.flush()
+    await _admin_audit(db, user, request, "user.account.delete", f"user_id={deleted_user_id}")
+    await db.execute(delete(ChatMessage).where(ChatMessage.user_id == user.id))
+    await db.execute(delete(QuizSubmission).where(QuizSubmission.user_id == user.id))
+    await db.execute(delete(MfaChallenge).where(MfaChallenge.user_id == user.id))
+    await db.execute(delete(TrustedDevice).where(TrustedDevice.user_id == user.id))
+    await db.execute(delete(User).where(User.id == deleted_user_id))
+    return {"ok": True}
+
+
+# ---------- Refresh Token Rotation ----------
+@api.post("/auth/refresh")
+async def auth_refresh(body: RefreshTokenBody, db: AsyncSession = Depends(get_db)):
+    try:
+        payload = jwt.decode(body.refresh_token, JWT_SECRET, algorithms=[JWT_ALG])
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Érvénytelen vagy lejárt refresh token.")
+    if payload.get("type") != "refresh":
+        raise HTTPException(status_code=401, detail="Hibás token típus.")
+    uid = int(payload["sub"])
+    res = await db.execute(select(User).where(User.id == uid))
+    user = res.scalar_one_or_none()
+    if not user or not user.is_active or user.is_suspended:
+        raise HTTPException(status_code=401, detail="A felhasználó nem található.")
+    if int(payload.get("token_version", 0)) != int(user.token_version or 0):
+        raise HTTPException(status_code=401, detail="A munkamenet lejárt.")
+        
+    jti = payload.get("jti")
+    exp = payload.get("exp", time.time())
+    if jti:
+        _blacklist_jti(jti, float(exp))
+        
+    access_token = create_access_token(user, mfa_verified=True)
+    new_refresh_token = create_refresh_token(user)
+    return {
+        "access_token": access_token,
+        "refresh_token": new_refresh_token
+    }
+
+
+# ---------- TOTP MFA (pure Python RFC 6238) ----------
+class TotpLoginBody(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=128)
+    code: str = Field(min_length=6, max_length=6)
+
+
+@api.post("/auth/totp/setup")
+async def auth_totp_setup(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    secret = _totp_generate_secret()
+    enc_secret = _encrypt_field(secret, purpose="totp")
+    user.totp_secret = enc_secret
+    await db.flush()
+    uri = _totp_provisioning_uri(secret, user.email)
+    return {"secret": secret, "provisioning_uri": uri}
+
+
+@api.post("/auth/totp/verify")
+async def auth_totp_verify_setup(body: TotpVerifySetupBody, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if not user.totp_secret:
+        raise HTTPException(status_code=400, detail="A TOTP nincs beállítva. Kérj először setup-ot.")
+    try:
+        dec_secret = _decrypt_field(user.totp_secret, purpose="totp")
+    except ValueError:
+        raise HTTPException(status_code=500, detail="Belső hiba a biztonsági kulcs dekódolásakor.")
+    
+    if _totp_verify(dec_secret, body.code):
+        user.totp_enabled = True
+        user.mfa_enabled = True
+        await db.flush()
+        return {"ok": True, "detail": "A kétlépcsős azonosítás (TOTP) sikeresen aktiválva."}
+    else:
+        raise HTTPException(status_code=400, detail="Érvénytelen biztonsági kód.")
+
+
+@api.post("/auth/totp/disable")
+async def auth_totp_disable(body: TotpDisableBody, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="A megadott jelszó nem megfelelő.")
+    if user.is_admin:
+        raise HTTPException(status_code=400, detail="Adminisztrátorok számára a kétlépcsős azonosítás kötelező.")
+    if not user.totp_secret:
+        raise HTTPException(status_code=400, detail="A kétlépcsős azonosítás nincs beállítva.")
+    
+    try:
+        dec_secret = _decrypt_field(user.totp_secret, purpose="totp")
+    except ValueError:
+        raise HTTPException(status_code=500, detail="Belső hiba.")
+        
+    if _totp_verify(dec_secret, body.code):
+        user.totp_enabled = False
+        user.totp_secret = None
+        user.mfa_enabled = False
+        await db.flush()
+        return {"ok": True, "detail": "A kétlépcsős azonosítás sikeresen kikapcsolva."}
+    else:
+        raise HTTPException(status_code=400, detail="Érvénytelen biztonsági kód.")
+
+
+@api.post("/auth/totp/login")
+async def auth_totp_login(body: TotpLoginBody, request: Request, db: AsyncSession = Depends(get_db)):
+    _check_throttle(request, body.email)
+    email = body.email.lower()
+    res = await db.execute(select(User).where(User.email == email))
+    user = res.scalar_one_or_none()
+    if not user or not user.is_active or not verify_password(body.password, user.password_hash):
+        _register_failure(request, email)
+        raise HTTPException(status_code=401, detail="Hibás hitelesítési adatok.")
+    if not user.totp_secret or not user.totp_enabled:
+        raise HTTPException(status_code=400, detail="A kétlépcsős azonosítás nincs beállítva.")
+    try:
+        dec_secret = _decrypt_field(user.totp_secret, purpose="totp")
+    except ValueError:
+        raise HTTPException(status_code=500, detail="Belső hiba.")
+        
+    if not _totp_verify(dec_secret, body.code):
+        _register_failure(request, email)
+        raise HTTPException(status_code=400, detail="Érvénytelen kétlépcsős azonosítási kód.")
+        
+    current_ip = _client_ip(request)
+    user.last_login_ip = current_ip
+    user.last_login_at = _now()
+    await db.flush()
+    
+    access_token = create_access_token(user, mfa_verified=True)
+    refresh_token = create_refresh_token(user)
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "user": _user_out(user)
+    }
+
+
+LEGAL_PRIVACY_VERSION = "2026-06-15"
+LEGAL_TERMS_VERSION = "2026-06-15"
+
+# ---------- GDPR / Compliance (Art. 15, 17, 20) ----------
+@api.get("/legal/privacy")
+async def get_legal_privacy():
+    return {"version": LEGAL_PRIVACY_VERSION, "last_updated": "2026-06-15", "url": "/privacy.html"}
+
+
+@api.get("/legal/terms")
+async def get_legal_terms():
+    return {"version": LEGAL_TERMS_VERSION, "last_updated": "2026-06-15", "url": "/terms.html"}
+
+
+@api.post("/user/consent")
+async def post_user_consent(body: ConsentBody, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    user.consent_given = body.consent_given
+    user.consent_updated_at = _now()
+    await db.flush()
+    return {"ok": True, "consent_given": user.consent_given}
+
+
+@api.post("/user/data-export")
+async def post_user_data_export(body: ExportDataBody, request: Request, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="Helytelen jelszó.")
+    await _admin_audit(db, user, request, "user.data.export", f"Data export requested by user {user.id}")
+    
+    msg_res = await db.execute(select(ChatMessage).where(ChatMessage.user_id == user.id))
+    messages = [{"id": m.id, "role": m.role, "text": m.text, "created_at": m.created_at.isoformat()} for m in msg_res.scalars().all()]
+    
+    sub_res = await db.execute(select(QuizSubmission).where(QuizSubmission.user_id == user.id))
+    submissions = [{"id": s.id, "answers": s.answers, "norms": s.norms, "code": s.code, "created_at": s.created_at.isoformat()} for s in sub_res.scalars().all()]
+    
+    return {
+        "user_profile": {
+            "name": user.name,
+            "email": user.email,
+            "nickname": user.nickname,
+            "created_at": user.created_at.isoformat(),
+            "consent_given": user.consent_given,
+            "consent_updated_at": user.consent_updated_at.isoformat() if user.consent_updated_at else None,
+        },
+        "chat_messages": messages,
+        "quiz_submissions": submissions
+    }
+
+
+@api.delete("/user/data-delete")
+async def post_user_data_delete(body: ExportDataBody, request: Request, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="Helytelen jelszó.")
+    
+    await _admin_audit(db, user, request, "user.data.delete", f"Data delete requested by user {user.id}")
+    
     await db.execute(delete(ChatMessage).where(ChatMessage.user_id == user.id))
     await db.execute(delete(QuizSubmission).where(QuizSubmission.user_id == user.id))
     await db.execute(delete(MfaChallenge).where(MfaChallenge.user_id == user.id))
     await db.execute(delete(TrustedDevice).where(TrustedDevice.user_id == user.id))
     await db.execute(delete(User).where(User.id == user.id))
-    return {"ok": True}
+    return {"ok": True, "detail": "Minden adatod véglegesen törölve lett a rendszerünkből."}
+
+
+# ---------- AI-Driven Suggestions (Custom UX Feature) ----------
+_suggest_attempts: dict[str, list[float]] = {}
+
+
+def _check_suggest_rate_limit(user_id: int):
+    now = time.time()
+    key = str(user_id)
+    times = _suggest_attempts.get(key, [])
+    times = [t for t in times if now - t < 60]
+    if len(times) >= 5:
+        raise HTTPException(status_code=429, detail="Túl sok AI javaslat kérés. Kérjük, próbáld újra később.")
+    times.append(now)
+    _suggest_attempts[key] = times
+
+
+@api.post("/ai/suggest")
+async def post_ai_suggest(body: AiSuggestBody, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    _check_suggest_rate_limit(user.id)
+    if not user.state_code:
+        raise HTTPException(status_code=400, detail="Nincs aktív állapotkód.")
+        
+    res_sc = await db.execute(select(StateCode).where(StateCode.code == user.state_code))
+    sc = res_sc.scalar_one_or_none()
+    if not sc:
+        raise HTTPException(status_code=400, detail="Nem található állapotkód profil.")
+
+    # Call Gemini model using settings
+    settings = await get_settings(db, {
+        "llm_provider": "gemini",
+        "llm_model": "gemini-2.5-flash",
+        "llm_api_key": "",
+    })
+    
+    # We construct a swift suggestion system prompt
+    prompt = (
+        "Te a Myra önismereti asszisztens AI modulja vagy. "
+        f"A felhasználó aktuális ESV állapota: {sc.title} (kód: {sc.code}). "
+        "Generálj 3 darab nagyon rövid, támogató, cselekvésre ösztönző személyes javaslatot vagy reflexiót (max 6-8 szó javaslatonként) magyar nyelven! "
+        "A válaszod formátuma kizárólag egy raw JSON tömb legyen így: [\"javaslat 1\", \"javaslat 2\", \"javaslat 3\"]."
+    )
+
+    try:
+        # Call the existing _call_llm_provider logic
+        raw_response = await _call_llm_provider(
+            settings["llm_provider"],
+            settings["llm_model"],
+            settings["llm_api_key"],
+            prompt,
+            [{"role": "user", "text": "Kérem a javaslatokat."}]
+        )
+        # Parse JSON
+        parsed = _json.loads(re.sub(r"```json|```", "", raw_response).strip())
+        if isinstance(parsed, list):
+            return {"suggestions": parsed[:3]}
+    except Exception as e:
+        logger.error(f"AI Suggest failed: {e}")
+        
+    # Fallbacks based on severity
+    if "magas" in sc.severity.lower() or sc.h >= 3:
+        return {"suggestions": ["Tarts egy rövid, lassú légzésszünetet.", "Figyeld meg a testi feszültséget.", "Írd le a gondolataidat egy lapra."]}
+    return {"suggestions": ["Figyeld meg a jelenlegi érzéseidet.", "Írj le 3 dolgot, amiért hálás vagy.", "Sétálj egy pár percet a friss levegőn."]}
 
 
 def _user_out(u: User) -> dict:
@@ -2326,19 +3098,25 @@ def _build_system_prompt(
 FASTEMBED_MODEL_NAME = os.environ.get("FASTEMBED_MODEL_NAME", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 _fastembed_model = None
 _fastembed_lock = threading.Lock()
+_fastembed_embedding_cache: dict[str, list[float]] = {}
 
 
 def _sync_get_fastembed_embedding(text: str) -> list[float]:
     global _fastembed_model
+    norm = re.sub(r"\s+", " ", text).strip().lower()
+    if norm in _fastembed_embedding_cache:
+        return list(_fastembed_embedding_cache[norm])
     with _fastembed_lock:
         if _fastembed_model is None:
             from fastembed import TextEmbedding
             _fastembed_model = TextEmbedding(model_name=FASTEMBED_MODEL_NAME)
-    embedding = next(_fastembed_model.embed([text]))
+    embedding = next(_fastembed_model.embed([norm]))
     values = embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
     if len(values) != 384:
         raise ValueError(f"Invalid FastEmbed dimension: {len(values)}")
-    return [float(x) for x in values]
+    emb = [float(x) for x in values]
+    _fastembed_embedding_cache[norm] = emb
+    return list(emb)
 
 
 async def _get_fastembed_embedding(text: str) -> list[float]:
@@ -2600,6 +3378,10 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
         now_ts_str = _now().strftime("%Y.%m.%d %H:%M")
         phase_started = time.perf_counter()
         reply = await _call_llm(provider, model, api_key, sys_prompt, history, f"[{now_ts_str}] {text}")
+        # Védőháló: az időbélyeg marad az előzményben (kell az időbeli kontextus),
+        # de ha a modell mégis a saját válasza elé tenné (pl. [2026.06.18 09:00]),
+        # determinisztikusan levágjuk, mielőtt mentjük/visszaküldjük.
+        reply = re.sub(r"^\s*\[\d{4}\.\d{2}\.\d{2}\s+\d{1,2}:\d{2}\]\s*", "", str(reply))
         mark_timing("llm", phase_started)
     except HTTPException:
         raise
@@ -2713,6 +3495,7 @@ async def create_live_token(
     return {
         "token": ephemeral_token.name,
         "model": model,
+        "system_instruction": live_system_prompt,
         "websocket_url": (
             "wss://generativelanguage.googleapis.com/ws/"
             "google.ai.generativelanguage.v1alpha.GenerativeService."
@@ -3021,6 +3804,11 @@ async def admin_extract_kb(request: Request, admin: User = Depends(require_admin
 
 class MaintenanceModeBody(BaseModel):
     maintenance_mode: bool
+    current_password: str = Field(min_length=1, max_length=128)
+
+
+class EmergencyAdminActionBody(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
 
 @api.get("/admin/diagnostics")
 async def admin_diagnostics(admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
@@ -3062,6 +3850,9 @@ async def admin_get_maintenance(admin: User = Depends(require_admin), db: AsyncS
 
 @api.post("/admin/maintenance")
 async def admin_set_maintenance(body: MaintenanceModeBody, request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    if not verify_password(body.current_password, admin.password_hash):
+        await _admin_audit(db, admin, request, "admin.maintenance.toggle.denied", "reason=bad_password")
+        raise HTTPException(status_code=400, detail="Hibás jelszó (jelszo).")
     val = "true" if body.maintenance_mode else "false"
     await set_setting(db, "maintenance_mode", val)
     await db.commit()
@@ -3069,7 +3860,10 @@ async def admin_set_maintenance(body: MaintenanceModeBody, request: Request, adm
     return {"ok": True, "maintenance_mode": body.maintenance_mode}
 
 @api.post("/admin/force-logout-all")
-async def admin_force_logout_all(request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+async def admin_force_logout_all(body: EmergencyAdminActionBody, request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    if not verify_password(body.current_password, admin.password_hash):
+        await _admin_audit(db, admin, request, "admin.auth.force_logout_all.failure", "invalid_password")
+        raise HTTPException(status_code=400, detail="Hibás jelszó (jelszo).")
     await db.execute(update(User).where(User.is_admin == False).values(token_version=User.token_version + 1))
     await db.commit()
     await _admin_audit(db, admin, request, "admin.auth.force_logout_all", "")
@@ -3081,7 +3875,10 @@ async def _delayed_restart():
     os._exit(0)
 
 @api.post("/admin/restart")
-async def admin_restart(request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+async def admin_restart(body: EmergencyAdminActionBody, request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    if not verify_password(body.current_password, admin.password_hash):
+        await _admin_audit(db, admin, request, "admin.system.restart.failure", "invalid_password")
+        raise HTTPException(status_code=400, detail="Hibás jelszó (jelszo).")
     await _admin_audit(db, admin, request, "admin.system.restart", "")
     asyncio.create_task(_delayed_restart())
     return {"ok": True, "message": "Backend restart scheduled in 1 second."}
@@ -3108,7 +3905,10 @@ async def _delayed_down():
 
 
 @api.post("/admin/down")
-async def admin_down(request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+async def admin_down(body: EmergencyAdminActionBody, request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    if not verify_password(body.current_password, admin.password_hash):
+        await _admin_audit(db, admin, request, "admin.system.down.failure", "invalid_password")
+        raise HTTPException(status_code=400, detail="Hibás jelszó (jelszo).")
     await _admin_audit(db, admin, request, "admin.system.down", "")
     asyncio.create_task(_delayed_down())
     return {"ok": True, "message": "Backend and frontend shutdown scheduled in 1 second."}
@@ -3194,6 +3994,7 @@ async def admin_chat_activity(_: User = Depends(require_admin), db: AsyncSession
     start_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     last_24h = now - timedelta(hours=24)
     last_7d = now - timedelta(days=7)
+    last_30d = now - timedelta(days=30)
 
     async def message_count(since: datetime, role: Optional[str] = None) -> int:
         q = select(func.count(ChatMessage.id)).where(ChatMessage.created_at >= since)
@@ -3214,10 +4015,10 @@ async def admin_chat_activity(_: User = Depends(require_admin), db: AsyncSession
             func.max(ChatMessage.created_at).label("last_message_at"),
         )
         .join(User, User.id == ChatMessage.user_id)
-        .where(ChatMessage.created_at >= last_24h, ChatMessage.role == "assistant")
+        .where(ChatMessage.role == "user", ChatMessage.created_at >= last_7d)
         .group_by(User.id, User.name, User.email)
         .order_by(func.count(ChatMessage.id).desc(), func.max(ChatMessage.created_at).desc())
-        .limit(5)
+        .limit(3)
     )
     top_users = [
         {
@@ -3249,6 +4050,11 @@ async def admin_chat_activity(_: User = Depends(require_admin), db: AsyncSession
             "assistant_messages": await message_count(last_7d, "assistant"),
             "user_messages": await message_count(last_7d, "user"),
             "active_users": await active_users(last_7d),
+        },
+        "last_30d": {
+            "assistant_messages": await message_count(last_30d, "assistant"),
+            "user_messages": await message_count(last_30d, "user"),
+            "active_users": await active_users(last_30d),
         },
         "last_message_at": last_message_at.isoformat() if last_message_at else None,
         "top_users_24h": top_users,
@@ -3339,7 +4145,7 @@ async def admin_delete_user(user_id: int, request: Request, admin: User = Depend
     await db.execute(delete(TrustedDevice).where(TrustedDevice.user_id == user_id))
     await db.execute(delete(User).where(User.id == user_id))
     await db.flush()
-    await _admin_audit(db, admin, request, "admin.user.delete", f"user_id={user_id} email={u.email}")
+    await _admin_audit(db, admin, request, "admin.user.delete", f"user_id={user_id}")
     return {"ok": True}
 
 
@@ -3468,6 +4274,133 @@ async def get_leaderboard(db: AsyncSession = Depends(get_db)):
         results[game] = game_list
         
     return results
+
+
+# ---------- Forum endpoints ----------
+import re
+
+HUNGARIAN_PROFANITIES = [
+    r"basz\w*", r"szar\w*", r"geci\w*", r"kurva\w*", r"fasz\w*", r"buzi\w*", 
+    r"picsa\w*", r"segg\w*", r"kuki\w*", r"köcsög\w*", r"balfasz\w*", 
+    r"faszfej\w*", r"szarkupac\w*", r"kurváz\w*", r"geciz\w*"
+]
+
+def censor_text(text: str) -> str:
+    censored = text
+    for word_pattern in HUNGARIAN_PROFANITIES:
+        def replace_match(match):
+            word = match.group(0)
+            if len(word) <= 2:
+                return "*" * len(word)
+            return word[0] + "*" * (len(word) - 2) + word[-1]
+        censored = re.sub(word_pattern, replace_match, censored, flags=re.IGNORECASE)
+    return censored
+
+
+class ForumProfileUpdate(BaseModel):
+    nickname: str
+    avatar: str
+
+
+class ForumPostCreate(BaseModel):
+    content: str
+
+
+@api.get("/forum/profile")
+async def get_forum_profile(user: User = Depends(get_current_user)):
+    return {
+        "nickname": user.forum_nickname,
+        "avatar": user.forum_avatar
+    }
+
+
+@api.post("/forum/profile")
+async def update_forum_profile(body: ForumProfileUpdate, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    nick = body.nickname.strip()
+    avatar = body.avatar.strip()
+    if not nick:
+        raise HTTPException(status_code=400, detail="A becenév nem lehet üres.")
+    if len(nick) > 30:
+        raise HTTPException(status_code=400, detail="A becenév legfeljebb 30 karakter lehet.")
+    
+    # Check uniqueness
+    res = await db.execute(select(User).where(User.forum_nickname == nick, User.id != user.id))
+    if res.scalar_one_or_none() is not None:
+        raise HTTPException(status_code=400, detail="Ez a becenév már foglalt.")
+        
+    user.forum_nickname = nick
+    user.forum_avatar = avatar
+    await db.commit()
+    return {"ok": True, "nickname": nick, "avatar": avatar}
+
+
+@api.get("/forum/posts")
+async def get_forum_posts(_: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    q = (
+        select(ForumPost, User)
+        .join(User, ForumPost.user_id == User.id)
+        .order_by(ForumPost.created_at.asc())
+        .limit(100)
+    )
+    res = await db.execute(q)
+    rows = res.all()
+    
+    posts = []
+    for post, author in rows:
+        posts.append({
+            "id": post.id,
+            "content": post.content,
+            "created_at": post.created_at.isoformat(),
+            "user_id": post.user_id,
+            "nickname": author.forum_nickname or author.name,
+            "avatar": author.forum_avatar or "🦊"
+        })
+    return {"posts": posts}
+
+
+@api.post("/forum/posts")
+async def create_forum_post(body: ForumPostCreate, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    content = body.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Az üzenet nem lehet üres.")
+    if len(content) > 1000:
+        raise HTTPException(status_code=400, detail="Az üzenet túl hosszú (max 1000 karakter).")
+    
+    if not user.forum_nickname:
+        raise HTTPException(status_code=400, detail="Kérjük, állíts be becenevet a fórum használata előtt.")
+        
+    censored_content = censor_text(content)
+    
+    post = ForumPost(
+        user_id=user.id,
+        content=censored_content
+    )
+    db.add(post)
+    await db.commit()
+    
+    return {
+        "id": post.id,
+        "content": post.content,
+        "created_at": post.created_at.isoformat(),
+        "user_id": user.id,
+        "nickname": user.forum_nickname,
+        "avatar": user.forum_avatar or "🦊"
+    }
+
+
+@api.delete("/forum/posts/{post_id}")
+async def delete_forum_post(post_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(ForumPost).where(ForumPost.id == post_id))
+    post = res.scalar_one_or_none()
+    if not post:
+        raise HTTPException(status_code=404, detail="A bejegyzés nem található.")
+    
+    if post.user_id != user.id and not user.is_admin:
+        raise HTTPException(status_code=403, detail="Nincs jogosultságod a bejegyzés törléséhez.")
+        
+    await db.delete(post)
+    await db.commit()
+    return {"ok": True}
 
 
 @api.get("/config")

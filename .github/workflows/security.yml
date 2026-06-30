@@ -1,0 +1,126 @@
+name: Security & Quality Pipeline
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+env:
+  DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+  JWT_SECRET: "test-jwt-secret-at-least-32-chars-long-security-pipeline"
+  DISABLE_RAG_STARTUP_WARMUP: "true"
+  ENVIRONMENT: "development"
+
+jobs:
+  lint:
+    name: Ruff Linting
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-lint-${{ hashFiles('backend/requirements.txt', 'backend/requirements-dev.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-lint-
+            ${{ runner.os }}-pip-
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Run ruff linter
+        run: ruff check backend/
+        continue-on-error: true
+
+  security:
+    name: Security Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-security-${{ hashFiles('backend/requirements.txt', 'backend/requirements-dev.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-security-
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install -r backend/requirements-dev.txt
+
+      - name: Install security tools
+        run: pip install bandit pip-audit
+
+      - name: Run Bandit static security analysis
+        run: bandit -r backend/ -x backend/tests,backend/data,backend/.venv -ll
+        continue-on-error: true
+
+      - name: Run pip-audit dependency scan
+        run: pip-audit -r backend/requirements.txt
+        continue-on-error: true
+
+  test:
+    name: Tests with Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-test-${{ hashFiles('backend/requirements.txt', 'backend/requirements-dev.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-test-
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install -r backend/requirements-dev.txt
+
+      - name: Install test dependencies
+        run: pip install pytest-asyncio httpx pytest-cov
+
+      - name: Run tests with coverage
+        env:
+          JWT_SECRET: "test-jwt-secret-at-least-32-chars-long-security-pipeline"
+          DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+        run: |
+          pytest backend/tests/ \
+            --cov=backend \
+            --cov-report=term-missing \
+            -v
