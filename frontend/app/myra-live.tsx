@@ -30,7 +30,6 @@ type LiveTokenResponse = {
   token: string;
   model: string;
   websocket_url: string;
-  system_instruction: string;
 };
 
 function floatTo16BitPCM(input: Float32Array): Int16Array {
@@ -329,84 +328,6 @@ export default function MyraLiveScreen() {
     sourceRef.current = source;
     processorRef.current = processor;
   }, []);
-
-  const startSession = useCallback(async () => {
-    if (startingRef.current) return;
-    startingRef.current = true;
-    if (Platform.OS !== "web") {
-      startingRef.current = false;
-      setPhase("error");
-      setStatus("A Myra Live béta jelenleg a webalkalmazásban használható.");
-      return;
-    }
-    setPhase("connecting");
-    setStatus("Kapcsolódás Myrához...");
-    setUserTranscript("");
-    setMyraTranscript("");
-    closingRef.current = false;
-
-    try {
-      const response = await authedFetch(token, "/api/live/token", { method: "POST" });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data?.detail || "Nem sikerült előkészíteni a Live kapcsolatot.");
-      const live = data as LiveTokenResponse;
-      const socket = new WebSocket(`${live.websocket_url}?access_token=${encodeURIComponent(live.token)}`);
-      socketRef.current = socket;
-
-      socket.onopen = () => {
-        socket.send(JSON.stringify({
-          setup: {
-            model: `models/${live.model}`,
-            generationConfig: {
-              responseModalities: ["AUDIO"],
-              speechConfig: {
-                voiceConfig: {
-                  prebuiltVoiceConfig: { voiceName: "Kore" },
-                },
-              },
-              systemInstruction: {
-                parts: [{ text: live.system_instruction }],
-              },
-            },
-            inputAudioTranscription: {},
-            outputAudioTranscription: {},
-          },
-        }));
-      };
-      socket.onmessage = async (event) => {
-        if (typeof event.data !== "string") return;
-        const message = JSON.parse(event.data);
-        if (message.setupComplete && !streamRef.current) {
-          setStatus("Mikrofon engedélyezése...");
-          try {
-            await startMicrophone(socket as unknown as Session);
-          } catch (error) {
-            closeSession();
-            setPhase("error");
-        setStatus(microphoneErrorMessage(error));
-            return;
-          }
-        }
-        handleServerMessage(message);
-      };
-      socket.onerror = () => {
-        if (!mountedRef.current) return;
-        setPhase("error");
-        setStatus("A Live kapcsolat megszakadt. Próbáld újra.");
-      };
-      socket.onclose = (event) => {
-        if (!mountedRef.current || closingRef.current) return;
-        setPhase("idle");
-        setStatus(event.reason ? `A Live kapcsolat lezárult: ${event.reason}` : "A Live kapcsolat lezárult.");
-      };
-    } catch (error) {
-      closeSession();
-      setPhase("error");
-      setStatus(error instanceof Error ? error.message : "Nem sikerült elindítani a Myra Live-ot.");
-    } finally {
-      startingRef.current = false;
-    }
-  }, [closeSession, handleServerMessage, startMicrophone, token]);
 
   const startSessionSdk = useCallback(async () => {
     if (startingRef.current) return;

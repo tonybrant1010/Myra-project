@@ -3496,7 +3496,6 @@ async def create_live_token(
     return {
         "token": ephemeral_token.name,
         "model": model,
-        "system_instruction": live_system_prompt,
         "websocket_url": (
             "wss://generativelanguage.googleapis.com/ws/"
             "google.ai.generativelanguage.v1alpha.GenerativeService."
