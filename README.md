@@ -206,7 +206,7 @@ Jó állapotban:
 
 - `chunks = embedded_384`;
 - fájlonként `chunks = embedded`;
-- jelenlegi teljes tudásanyag: 31 PDF, 271 chunk.
+- az aktuális chunk- és PDF-számot az admin felület Tudásanyag szekciója mutatja.
 
 ### Tudásanyag élesítése
 
@@ -355,7 +355,7 @@ npm run deploy
 Windows CMD:
 
 ```cmd
-cd /d C:\Users\TonyBrant\Desktop\Myra-Project-App\Myra-project-main\frontend && npm run deploy
+cd /d <PROJEKT_MAPPA>\frontend && npm run deploy
 ```
 
 A deploy folyamat:
