@@ -98,6 +98,12 @@ kerülhet be.
 
 ## Fontos Működési Részletek
 
+### ESV normalizálás — v2 (POMP, 2026-07-02)
+
+A kvíz normalizálása a pszichometriában standard POMP-skálázást használja (percent of maximum possible): `(összeg − minimum) / (maximum − minimum)`. Képletek: `A(t)=(xa−6)/24`, `P(t)=1−(xp−6)/24`, `H(t)=(xh−4)/16`, `C(t)=xc/10`.
+
+A v1 (2026-07-02 előtt) csak a maximummal osztott, ezért az A/P/H dimenziók nem érték el a skála szélét; a P-nél emiatt a 4-es bucket ("erős érzelemszabályozás") érvényes kitöltésből elérhetetlen volt. A v2 lineáris átskálázás: a kitöltők sorrendjét és a dimenziók közötti korrelációkat nem változtatja meg, de a határközeli kitöltők bucketje eltolódhat. Az új mérések `norms` mezőjében `"v": 2` jelzi a verziót; a régi (v1) mérések változatlanul maradnak, és a 30 napos ciklus végén maguktól lejárnak. A számítási referencia (`backend/data/esv_calc.ods`, ill. a gyökérben az `ESV_Calc1_egyéni_v2.ods`) ugyanezeket a képleteket tartalmazza, üressor-védelemmel (üres adat-sor nem kap értéket és diagnózist).
+
 ### Vercel API proxy
 
 A böngészőből induló API hívások `/api/...` útvonalra mennek. Vercelen ezt a `dist/api/proxy.js` Vercel Function kezeli, amely:
@@ -330,6 +336,11 @@ docker logs --tail 80 myra-backend
 docker stats myra-backend --no-stream
 ```
 
+A `docker ps -a` a `myra-backend` mellett egy `myra-docker-socket-proxy` konténert is mutat.
+Ez egy szűkre szabott (tecnativa/docker-socket-proxy) proxy a vészleállítás (`/admin/down`)
+funkcióhoz: a backend konténer emiatt nem éri el közvetlenül a hoszt `/var/run/docker.sock`-ját,
+csak ezen a proxyn keresztül, kizárólag container-stop hívást tud indítani.
+
 Tárhely ellenőrzés:
 
 ```bash
@@ -474,10 +485,4 @@ backend/rag/
 - A backend és a Vercel frontend alap biztonsági HTTP fejléceket ad: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, éles HTTPS alatt `Strict-Transport-Security`.
 - A Vercel API proxy fail-closed módon működik: hiányzó backend origin vagy proxy secret esetén nem továbbít kérést, és nincs beégetett VM IP fallback.
 - A backend production módban az `OPTIONS` preflight kéréseket is csak engedélyezett originről engedi proxy secret nélkül; ismeretlen origin vagy direkt origin nélküli OPTIONS kérés 403-at kap.
-- A frontend `package.json` célzott `overrides`/`resolutions` réteget használ a magasabb kockázatú transitive build-eszköz sérülékenységek zárására; Expo/React Native főverziót csak külön regressziós teszttel frissíts.
-- Backend dependency frissítés előtt és után futtasd a `pip-audit -r backend/requirements.txt` ellenőrzést; a framework csomagokat (`fastapi`, `starlette`) mindig együtt validáld teljes backend teszttel.
-- Szigorú Content-Security-Policy jelenleg nincs bekapcsolva, mert a Gemini Live/WebSocket és Expo web bundle miatt külön, célzott tesztelést igényelne.
-- Az admin log nézet maszkolja az URL-ben vagy headerben megjelenő API kulcsokat és bearer tokeneket.
-- Az admin audit log `detail` és `user_agent` mezői mentés előtt is maszkolva vannak, és felhasználótörlésnél csak a belső `user_id` kerül naplózásra, email cím nem.
-- A személyes vagy admin jellegű API válaszok `Cache-Control: no-store` fejléccel mennek ki.
-- Supabase/Postgres környezetben az adatbázis backup nem az alkalmazásból készül; a tiltott backup-kérés admin audit logba kerül.
+- A frontend `package.json` célzott `overrides`/`resol

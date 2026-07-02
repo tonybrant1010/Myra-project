@@ -15,7 +15,6 @@ import traceback
 import uuid
 import logging
 import smtplib
-import random
 import secrets
 import ssl
 import subprocess
@@ -47,7 +46,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 try:
-    from google import genai as google_genai
+    from google import genai as google_genai  # noqa: E402
     GOOGLE_GENAI_AVAILABLE = True
 except ImportError:
     GOOGLE_GENAI_AVAILABLE = False
@@ -55,7 +54,6 @@ except ImportError:
 # ---------- Config ----------
 JWT_SECRET = os.environ.get("JWT_SECRET", "")
 JWT_ALG = os.environ.get("JWT_ALG", "HS256")
-LEADERBOARD_SALT = os.environ.get("LEADERBOARD_SALT", "myra-default-leaderboard-salt-2026")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "10080"))
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 if not DATABASE_URL:
@@ -67,6 +65,10 @@ ADMIN_EMAIL_ALLOWLIST = {
 # Gmail SMTP Config
 GMAIL_USER = os.environ.get("GMAIL_USER", "")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
+
+# Docker-socket-proxy: lásd docker-compose.yml. A backend csak ezen a szűkre szabott
+# proxyn keresztül tud konténert leállítani, a nyers docker.sock-ot nem éri el.
+DOCKER_SOCKET_PROXY_URL = os.environ.get("DOCKER_SOCKET_PROXY_URL", "http://docker-socket-proxy:2375").rstrip("/")
 
 if not JWT_SECRET or len(JWT_SECRET) < 32:
     raise RuntimeError("JWT_SECRET must be set in .env and be at least 32 chars long")
@@ -231,7 +233,7 @@ if DB_DIALECT == "postgresql":
 engine = create_async_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
 
-from sqlalchemy.types import UserDefinedType
+from sqlalchemy.types import UserDefinedType  # noqa: E402
 
 def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
     try:
@@ -1695,11 +1697,14 @@ class NicknameBody(BaseModel):
     nickname: str = Field(min_length=1, max_length=50)
 
 
+class GameSessionStartBody(BaseModel):
+    game_type: Literal["match", "snake", "sudoku"]
+
+
 class SubmitScoreBody(BaseModel):
     game_type: Literal["match", "snake", "sudoku"]
     score: int = Field(ge=0, le=1000000)
-    timestamp: int
-    signature: str = Field(min_length=1, max_length=256)
+    session_token: str = Field(min_length=16, max_length=128)
 
 
 class MfaVerifyBody(BaseModel):
@@ -1921,7 +1926,7 @@ def _synthesize_piper_wav(text_value: str) -> Path:
         )
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="A felolvasás túl sokáig tartott.")
-    except OSError as exc:
+    except OSError:
         logger.exception("Piper execution failed")
         raise HTTPException(status_code=503, detail="Piper indítási hiba történt.")
 
@@ -2729,13 +2734,14 @@ async def post_ai_suggest(body: AiSuggestBody, user: User = Depends(get_current_
     )
 
     try:
-        # Call the existing _call_llm_provider logic
-        raw_response = await _call_llm_provider(
+        # _call_llm(provider, model, api_key, system_prompt, history, user_message)
+        raw_response = await _call_llm(
             settings["llm_provider"],
             settings["llm_model"],
             settings["llm_api_key"],
             prompt,
-            [{"role": "user", "text": "Kérem a javaslatokat."}]
+            [],
+            "Kérem a javaslatokat."
         )
         # Parse JSON
         parsed = _json.loads(re.sub(r"```json|```", "", raw_response).strip())
@@ -2799,7 +2805,7 @@ async def codes_verify(body: CodeVerifyBody, user: User = Depends(get_current_us
     session_id = str(uuid.uuid4())
     db.add(QuizSubmission(
         id=session_id, user_id=user.id, answers=[3]*21,
-        norms={"a": 0.5, "p": 0.5, "h": 0.5, "c": 0.5}, code=code,
+        norms={"a": 0.5, "p": 0.5, "h": 0.5, "c": 0.5, "v": NORM_VERSION}, code=code,
         created_at=user.code_verified_at
     ))
     
@@ -2890,17 +2896,54 @@ QUIZ_SECTIONS = [
 ]
 
 def _bucket(norm: float) -> int:
-    if norm <= 0.3: return 1
-    if norm <= 0.6: return 2
-    if norm <= 0.8: return 3
+    if norm <= 0.3:
+        return 1
+    if norm <= 0.6:
+        return 2
+    if norm <= 0.8:
+        return 3
     return 4
+
+
+# ESV normalizálás verziója. v1 (2026-07-02 előtt): csak a maximummal osztott
+# (xa/30, 1-xp/30, xh/20), így az A/P/H dimenziók nem használták ki a teljes
+# [0,1] skálát — a P-nél emiatt a 4-es bucket ("erős érzelemszabályozás")
+# érvényes kitöltésből elérhetetlen volt. A v2 a pszichometriában standard
+# POMP-skálázást használja (percent of maximum possible, Cohen és mtsai 1999):
+# (összeg - minimum) / (maximum - minimum). Lineáris transzformáció: a kitöltők
+# sorrendjét és a dimenziók közötti korrelációkat nem változtatja meg.
+# A régi (v1) mérések norms mezőjében nincs "v" kulcs; azok 30 napon belül
+# amúgy is lejárnak, újraszámolásuk nem szükséges.
+NORM_VERSION = 2
+
+
+def _compute_norms(answers: List[int]) -> dict:
+    """A 21 kvízválaszból számolja a négy ESV-dimenzió normalizált értékét (v2, POMP).
+
+    Blokkok és nyers összegtartományok:
+      A: answers[0:6]   6 kérdés, 1-5  -> 6..30
+      P: answers[6:12]  6 kérdés, 1-5  -> 6..30 (fordított: magasabb válasz = gyengébb szabályozás)
+      H: answers[12:16] 4 kérdés, 1-5  -> 4..20
+      C: answers[16:21] 5 kérdés, 0-2  -> 0..10 (már v1-ben is teljes skálájú volt)
+    """
+    xa = sum(answers[0:6])
+    xp = sum(answers[6:12])
+    xh = sum(answers[12:16])
+    xc = sum(answers[16:21])
+    return {
+        "a": (xa - 6) / 24.0,
+        "p": 1.0 - (xp - 6) / 24.0,
+        "h": (xh - 4) / 16.0,
+        "c": xc / 10.0,
+        "v": NORM_VERSION,
+    }
 
 
 @api.get("/quiz/questions")
 async def quiz_questions(_: User = Depends(get_current_user)):
     return {"sections": [
         {"id": s["id"], "title": s["title"], "intro": s["intro"],
-         "scale": [{"value": v, "label": l} for v, l in s["scale"]],
+         "scale": [{"value": v, "label": lbl} for v, lbl in s["scale"]],
          "questions": QUIZ_QUESTIONS[s["id"]]}
         for s in QUIZ_SECTIONS
     ]}
@@ -2917,11 +2960,8 @@ async def quiz_submit(body: QuizSubmitBody, user: User = Depends(get_current_use
     for v in a[16:21]:
         if not isinstance(v, int) or v < 0 or v > 2:
             raise HTTPException(status_code=400, detail="A 17-21. kérdésekre 0 és 2 közötti érték kell.")
-    a_n = sum(a[0:6]) / 30.0
-    p_n = 1.0 - sum(a[6:12]) / 30.0
-    h_n = sum(a[12:16]) / 20.0
-    c_n = sum(a[16:21]) / 10.0
-    code = f"{_bucket(a_n)}{_bucket(p_n)}{_bucket(h_n)}{_bucket(c_n)}"
+    norms = _compute_norms(a)
+    code = f"{_bucket(norms['a'])}{_bucket(norms['p'])}{_bucket(norms['h'])}{_bucket(norms['c'])}"
     res = await db.execute(select(StateCode).where(StateCode.code == code))
     sc = res.scalar_one_or_none()
     if not sc:
@@ -2932,9 +2972,9 @@ async def quiz_submit(body: QuizSubmitBody, user: User = Depends(get_current_use
     session_id = str(uuid.uuid4())
     db.add(QuizSubmission(
         id=session_id, user_id=user.id, answers=a,
-        norms={"a": a_n, "p": p_n, "h": h_n, "c": c_n}, code=code,
+        norms=norms, code=code,
     ))
-    return {"ok": True, "code": code, "session_id": session_id, "state_code": _sc_out(sc), "norms": {"a": a_n, "p": p_n, "h": h_n, "c": c_n}}
+    return {"ok": True, "code": code, "session_id": session_id, "state_code": _sc_out(sc), "norms": norms}
 
 
 @api.get("/quiz/sessions")
@@ -3386,7 +3426,7 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
         mark_timing("llm", phase_started)
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.exception("LLM error")
         raise HTTPException(status_code=502, detail="Váratlan hiba történt a válaszadás során.")
 
@@ -3489,7 +3529,7 @@ async def create_live_token(
                 "http_options": {"api_version": "v1alpha"},
             },
         )
-    except Exception as exc:
+    except Exception:
         logger.exception("Gemini Live token creation failed")
         raise HTTPException(status_code=502, detail="A Live kapcsolat előkészítése sikertelen.")
 
@@ -3864,7 +3904,9 @@ async def admin_force_logout_all(body: EmergencyAdminActionBody, request: Reques
     if not verify_password(body.current_password, admin.password_hash):
         await _admin_audit(db, admin, request, "admin.auth.force_logout_all.failure", "invalid_password")
         raise HTTPException(status_code=400, detail="Hibás jelszó (jelszo).")
-    await db.execute(update(User).where(User.is_admin == False).values(token_version=User.token_version + 1))
+    # SQLAlchemy oszlop-kifejezés: itt a "== False" a helyes forma (nem "not"/"is"),
+    # mert a User.is_admin egy Column objektum, aminek a __eq__ metódusa építi a SQL WHERE-t.
+    await db.execute(update(User).where(User.is_admin == False).values(token_version=User.token_version + 1))  # noqa: E712
     await db.commit()
     await _admin_audit(db, admin, request, "admin.auth.force_logout_all", "")
     return {"ok": True}
@@ -3887,20 +3929,21 @@ async def admin_restart(body: EmergencyAdminActionBody, request: Request, admin:
 async def _delayed_down():
     await asyncio.sleep(1.0)
     logger.info("Emergency system shutdown (docker compose down) triggered via admin API.")
-    try:
-        import socket
+    # A backend konténer nem éri el közvetlenül a hoszt /var/run/docker.sock-ját (ez
+    # gyakorlatilag root-ekvivalens hozzáférést adna a teljes Docker daemonhoz).
+    # Helyette a docker-compose.yml-ben futó, csak "container stop"-ra korlátozott
+    # docker-socket-proxy service-en keresztül állítjuk le a konténereket.
+    async with httpx.AsyncClient(timeout=10.0) as proxy_client:
         for container in ["myra-frontend", "myra-backend"]:
             try:
-                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                s.connect("/var/run/docker.sock")
-                req = f"POST /containers/{container}/stop HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
-                s.sendall(req.encode("utf-8"))
-                s.recv(1024)
-                s.close()
-            except Exception as e:
-                logger.error(f"Failed to stop container {container} via UNIX socket: {e}")
-    except Exception as e:
-        logger.error(f"UNIX socket shutdown error: {e}")
+                resp = await proxy_client.post(f"{DOCKER_SOCKET_PROXY_URL}/containers/{container}/stop")
+                if resp.status_code not in (204, 304):
+                    logger.error(
+                        f"Docker-socket-proxy hiba a(z) {container} leállításakor: "
+                        f"status={resp.status_code} body={resp.text[:200]}"
+                    )
+            except Exception:
+                logger.exception(f"Nem sikerült leállítani a(z) {container} konténert a docker-socket-proxy-n keresztül")
     os._exit(0)
 
 
@@ -3943,7 +3986,7 @@ async def admin_delete_kb_file(filename: str, request: Request, admin: User = De
         pdf_path.unlink()
         await _admin_audit(db, admin, request, "admin.kb.delete_file", f"filename={filename}")
         return {"ok": True}
-    except Exception as e:
+    except Exception:
         logger.exception(f"Failed to delete file: {filename}")
         raise HTTPException(status_code=500, detail="Fájl törlése sikertelen.")
 
@@ -3964,7 +4007,7 @@ async def admin_upload_kb_file(
         pdf_path.write_bytes(content)
         await _admin_audit(db, admin, request, "admin.kb.upload_file", f"filename={filename} size={len(content)}")
         return {"ok": True, "filename": filename, "size": len(content)}
-    except Exception as e:
+    except Exception:
         logger.exception(f"Failed to upload file: {filename}")
         raise HTTPException(status_code=500, detail="Fájl feltöltése sikertelen.")
 
@@ -4191,24 +4234,60 @@ async def set_user_nickname(
     return {"status": "ok", "nickname": clean_nickname}
 
 
+# ---------- Ranglista játék-session tokenek ----------
+# A kliens ezt a tokent kapja a játék indításakor (/leaderboard/start), és ezt kell
+# visszaküldenie a ponttal együtt a /leaderboard/submit hívásnál. A token a
+# backenden, szerver-oldalon generált, egyszer használatos és rövid élettartamú,
+# így a kliens nem tud saját maga érvényes "engedélyt" gyártani tetszőleges
+# pontszámhoz (szemben egy kliens-oldalon is kiszámolható aláírással).
+_game_sessions: dict[str, dict] = {}
+GAME_SESSION_MAX_AGE_S = 30 * 60  # 30 perc: bőven elég egy teljes játékmenethez
+GAME_SESSION_MAX_ENTRIES = 5000
+
+
+def _prune_game_sessions(now: float) -> None:
+    expired = [tok for tok, info in _game_sessions.items() if now - info["issued_at"] > GAME_SESSION_MAX_AGE_S]
+    for tok in expired:
+        _game_sessions.pop(tok, None)
+    if len(_game_sessions) > GAME_SESSION_MAX_ENTRIES:
+        oldest_first = sorted(_game_sessions.items(), key=lambda kv: kv[1]["issued_at"])
+        for tok, _info in oldest_first[: len(_game_sessions) - GAME_SESSION_MAX_ENTRIES]:
+            _game_sessions.pop(tok, None)
+
+
+@api.post("/leaderboard/start")
+async def start_leaderboard_session(
+    body: GameSessionStartBody,
+    user: User = Depends(get_current_user),
+):
+    """A játék indításakor hívandó. A visszaadott, egyszer használatos tokent kell
+    a /leaderboard/submit hívásnál visszaküldeni a pontszámmal együtt. Ezt a
+    backend generálja és tárolja - a kliens nem tudja saját maga előállítani,
+    szemben a korábbi, kliens-oldalon is kiszámolható SHA-256 aláírással."""
+    now = time.time()
+    _prune_game_sessions(now)
+    token = secrets.token_urlsafe(32)
+    _game_sessions[token] = {"user_id": user.id, "game_type": body.game_type, "issued_at": now}
+    return {"session_token": token}
+
+
 @api.post("/leaderboard/submit")
 async def submit_leaderboard_score(
     body: SubmitScoreBody,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # 1. Verify timestamp is recent (within 60 seconds) to prevent replay attacks
-    now_ts = int(time.time())
-    if abs(now_ts - body.timestamp) > 60:
-        raise HTTPException(status_code=400, detail="A kérés lejárt (időbeli eltérés).")
+    # 1. A session token ellenőrzése: csak a backend által, a /leaderboard/start
+    # hívásnál kiadott, még nem felhasznált és nem lejárt token fogadható el.
+    now = time.time()
+    _prune_game_sessions(now)
+    session_info = _game_sessions.pop(body.session_token, None)
+    if not session_info:
+        raise HTTPException(status_code=403, detail="Érvénytelen vagy lejárt játék-munkamenet.")
+    if session_info["user_id"] != user.id or session_info["game_type"] != body.game_type:
+        raise HTTPException(status_code=403, detail="Érvénytelen játék-munkamenet.")
 
-    # 2. Verify signature
-    payload = f"{body.game_type}:{body.score}:{body.timestamp}:{LEADERBOARD_SALT}"
-    expected_sig = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-    if not secrets.compare_digest(body.signature, expected_sig):
-        raise HTTPException(status_code=403, detail="Érvénytelen pontszám aláírás.")
-
-    # 3. Sanity limits validation
+    # 2. Sanity limits validation
     if body.game_type == "match":
         if body.score < 0 or body.score > 35000:
             raise HTTPException(status_code=400, detail="Érvénytelen pontszám (Match limit).")
@@ -4277,19 +4356,31 @@ async def get_leaderboard(db: AsyncSession = Depends(get_db)):
 
 
 # ---------- Forum endpoints ----------
-import re
 
 HUNGARIAN_PROFANITIES = [
-    r"basz\w*", r"szar\w*", r"geci\w*", r"kurva\w*", r"fasz\w*", r"buzi\w*", 
-    r"picsa\w*", r"segg\w*", r"kuki\w*", r"köcsög\w*", r"balfasz\w*", 
-    r"faszfej\w*", r"szarkupac\w*", r"kurváz\w*", r"geciz\w*"
+    r"\bbasz\w*", r"\bszar\w*", r"\bgeci\w*", r"\bkurva\w*", r"\bfasz\w*", r"\bbuzi\w*",
+    r"\bpicsa\w*", r"\bsegg\w*", r"\bkuki\w*", r"\bköcsög\w*", r"\bbalfasz\w*",
+    r"\bfaszfej\w*", r"\bszarkupac\w*", r"\bkurváz\w*", r"\bgeciz\w*"
 ]
+
+# Gyakori, ártatlan magyar szavak, amiket a fenti rövid tövek tévesen trágárságnak
+# jelölnének (pl. "Szarvas" -> "szar", "faszén" -> "fasz", "kukicska" -> "kuki").
+# Előtag-egyezés, hogy a ragozott alakokat (Szarvasra, Szarvason stb.) is lefedje.
+PROFANITY_FILTER_ALLOWLIST_PREFIXES = (
+    "szarvas",
+    "faszén",
+    "kukorica",
+    "kukicsk",
+)
+
 
 def censor_text(text: str) -> str:
     censored = text
     for word_pattern in HUNGARIAN_PROFANITIES:
         def replace_match(match):
             word = match.group(0)
+            if word.lower().startswith(PROFANITY_FILTER_ALLOWLIST_PREFIXES):
+                return word
             if len(word) <= 2:
                 return "*" * len(word)
             return word[0] + "*" * (len(word) - 2) + word[-1]
@@ -4378,49 +4469,3 @@ async def create_forum_post(body: ForumPostCreate, user: User = Depends(get_curr
     db.add(post)
     await db.commit()
     
-    return {
-        "id": post.id,
-        "content": post.content,
-        "created_at": post.created_at.isoformat(),
-        "user_id": user.id,
-        "nickname": user.forum_nickname,
-        "avatar": user.forum_avatar or "🦊"
-    }
-
-
-@api.delete("/forum/posts/{post_id}")
-async def delete_forum_post(post_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(ForumPost).where(ForumPost.id == post_id))
-    post = res.scalar_one_or_none()
-    if not post:
-        raise HTTPException(status_code=404, detail="A bejegyzés nem található.")
-    
-    if post.user_id != user.id and not user.is_admin:
-        raise HTTPException(status_code=403, detail="Nincs jogosultságod a bejegyzés törléséhez.")
-        
-    await db.delete(post)
-    await db.commit()
-    return {"ok": True}
-
-
-@api.get("/config")
-async def public_config(db: AsyncSession = Depends(get_db)):
-    return {
-        "app_name": "Myra-project",
-        "global_notice_text": await get_setting(db, "global_notice_text", ""),
-    }
-
-
-
-app.include_router(api)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "https://www.myra-project.hu",
-        "https://myra-project.hu",
-    ],
-    allow_origin_regex="http://localhost:\\d+",
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
