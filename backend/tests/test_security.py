@@ -583,13 +583,18 @@ async def test_emergency_admin_routes_reject_wrong_current_password(init_db):
 
 
 def test_leaderboard_and_reindex_schemas_reject_invalid_payloads():
-    SubmitScoreBody(game_type="match", score=35000, timestamp=4102444800, signature="a" * 64)
+    # A submit a szerver altal kiadott, egyszer hasznalatos session_tokent varja
+    # (16-128 karakter), a regi timestamp+signature mezok megszuntek.
+    SubmitScoreBody(game_type="match", score=35000, session_token="a" * 32)
 
     with pytest.raises(Exception):
-        SubmitScoreBody(game_type="match", score=1000001, timestamp=1, signature="a" * 64)
+        SubmitScoreBody(game_type="match", score=1000001, session_token="a" * 32)
 
     with pytest.raises(Exception):
-        SubmitScoreBody(game_type="match", score=10, timestamp=1, signature="a" * 257)
+        SubmitScoreBody(game_type="match", score=10, session_token="a" * 8)
+
+    with pytest.raises(Exception):
+        SubmitScoreBody(game_type="match", score=10, session_token="a" * 129)
 
     ReindexPdfKnowledgeBody(source_dir="a" * 500)
     with pytest.raises(Exception):

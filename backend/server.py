@@ -4469,3 +4469,49 @@ async def create_forum_post(body: ForumPostCreate, user: User = Depends(get_curr
     db.add(post)
     await db.commit()
     
+    return {
+        "id": post.id,
+        "content": post.content,
+        "created_at": post.created_at.isoformat(),
+        "user_id": user.id,
+        "nickname": user.forum_nickname,
+        "avatar": user.forum_avatar or "🦊"
+    }
+
+
+@api.delete("/forum/posts/{post_id}")
+async def delete_forum_post(post_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(ForumPost).where(ForumPost.id == post_id))
+    post = res.scalar_one_or_none()
+    if not post:
+        raise HTTPException(status_code=404, detail="A bejegyzés nem található.")
+
+    if post.user_id != user.id and not user.is_admin:
+        raise HTTPException(status_code=403, detail="Nincs jogosultságod a bejegyzés törléséhez.")
+
+    await db.delete(post)
+    await db.commit()
+    return {"ok": True}
+
+
+@api.get("/config")
+async def public_config(db: AsyncSession = Depends(get_db)):
+    return {
+        "app_name": "Myra-project",
+        "global_notice_text": await get_setting(db, "global_notice_text", ""),
+    }
+
+
+
+app.include_router(api)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://www.myra-project.hu",
+        "https://myra-project.hu",
+    ],
+    allow_origin_regex="http://localhost:\\d+",
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)

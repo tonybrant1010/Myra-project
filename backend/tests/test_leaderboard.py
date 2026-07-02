@@ -1,8 +1,6 @@
 import pytest
 import os
 import sys
-import hashlib
-import time
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy import select
@@ -46,9 +44,26 @@ async def init_db():
         await conn.run_sync(Base.metadata.drop_all)
     app.dependency_overrides.clear()
 
-def generate_test_signature(game_type: str, score: int, timestamp: int, salt: str = "myra-default-leaderboard-salt-2026") -> str:
-    payload = f"{game_type}:{score}:{timestamp}:{salt}"
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+def start_game_session(client: TestClient, headers: dict, game_type: str) -> str:
+    """Szerver-oldali jatek-munkamenet inditasa; a visszakapott egyszer
+    hasznalatos session_token kell a /leaderboard/submit hivashoz."""
+    r = client.post("/api/leaderboard/start", json={"game_type": game_type}, headers=headers)
+    assert r.status_code == 200, f"Nem sikerult jatek-sessiont inditani: {r.text}"
+    token = r.json().get("session_token")
+    assert isinstance(token, str) and len(token) >= 16
+    return token
+
+
+def submit_score(client: TestClient, headers: dict, game_type: str, score: int):
+    """Friss session-tokennel bekuldott pontszam (a token egyszer hasznalatos)."""
+    token = start_game_session(client, headers, game_type)
+    return client.post("/api/leaderboard/submit", json={
+        "game_type": game_type,
+        "score": score,
+        "session_token": token,
+    }, headers=headers)
+
 
 @pytest.mark.anyio
 async def test_leaderboard_operations():
@@ -67,6 +82,7 @@ async def test_leaderboard_operations():
         await db.commit()
 
     from fastapi import Depends
+
     async def mock_get_current_user(db: AsyncSession = Depends(get_db)):
         res = await db.execute(select(User).where(User.id == 1))
         return res.scalar_one()
@@ -84,71 +100,33 @@ async def test_leaderboard_operations():
         updated_user = res.scalar_one()
         assert updated_user.nickname == "Gamer123"
 
-    # 3. Test POST /leaderboard/submit
-    # Match game - should submit 150 points
-    now_ts = int(time.time())
-    sig = generate_test_signature("match", 150, now_ts)
-    r = client.post("/api/leaderboard/submit", json={
-        "game_type": "match",
-        "score": 150,
-        "timestamp": now_ts,
-        "signature": sig
-    }, headers=headers)
+    # 3. Test POST /leaderboard/submit (session-tokenes flow)
+    r = submit_score(client, headers, "match", 150)
     assert r.status_code == 200
     assert r.json()["best_score"] == 150
 
     # Submit a lower match score - best score should remain 150
-    sig = generate_test_signature("match", 120, now_ts)
-    r = client.post("/api/leaderboard/submit", json={
-        "game_type": "match",
-        "score": 120,
-        "timestamp": now_ts,
-        "signature": sig
-    }, headers=headers)
+    r = submit_score(client, headers, "match", 120)
     assert r.status_code == 200
     assert r.json()["best_score"] == 150
 
     # Submit a higher match score - best score should update to 200
-    sig = generate_test_signature("match", 200, now_ts)
-    r = client.post("/api/leaderboard/submit", json={
-        "game_type": "match",
-        "score": 200,
-        "timestamp": now_ts,
-        "signature": sig
-    }, headers=headers)
+    r = submit_score(client, headers, "match", 200)
     assert r.status_code == 200
     assert r.json()["best_score"] == 200
 
     # Sudoku game - should submit 3000 points
-    sig = generate_test_signature("sudoku", 3000, now_ts)
-    r = client.post("/api/leaderboard/submit", json={
-        "game_type": "sudoku",
-        "score": 3000,
-        "timestamp": now_ts,
-        "signature": sig
-    }, headers=headers)
+    r = submit_score(client, headers, "sudoku", 3000)
     assert r.status_code == 200
     assert r.json()["best_score"] == 3000
 
-    # Submit a lower sudoku score - best score should remain 3000 (since higher is better now)
-    sig = generate_test_signature("sudoku", 2500, now_ts)
-    r = client.post("/api/leaderboard/submit", json={
-        "game_type": "sudoku",
-        "score": 2500,
-        "timestamp": now_ts,
-        "signature": sig
-    }, headers=headers)
+    # Submit a lower sudoku score - best score should remain 3000 (higher is better)
+    r = submit_score(client, headers, "sudoku", 2500)
     assert r.status_code == 200
     assert r.json()["best_score"] == 3000
 
     # Submit a higher sudoku score - best score should update to 4000
-    sig = generate_test_signature("sudoku", 4000, now_ts)
-    r = client.post("/api/leaderboard/submit", json={
-        "game_type": "sudoku",
-        "score": 4000,
-        "timestamp": now_ts,
-        "signature": sig
-    }, headers=headers)
+    r = submit_score(client, headers, "sudoku", 4000)
     assert r.status_code == 200
     assert r.json()["best_score"] == 4000
 
@@ -172,52 +150,40 @@ async def test_leaderboard_operations():
     assert sudoku_list[0]["name"] == "Gamer123"
     assert sudoku_list[0]["score"] == 4000
 
-    # 5. Security test: Invalid signature should return 403
+    # 5. Security test: ki nem adott (hamis) session token -> 403
     r = client.post("/api/leaderboard/submit", json={
         "game_type": "match",
         "score": 300,
-        "timestamp": now_ts,
-        "signature": "invalid-sig-here"
+        "session_token": "x" * 32,
     }, headers=headers)
     assert r.status_code == 403
 
-    # 6. Security test: Expired timestamp should return 400
-    old_ts = now_ts - 120
-    sig_old = generate_test_signature("match", 300, old_ts)
+    # 6. Security test: a token egyszer hasznalatos - masodszor 403
+    token = start_game_session(client, headers, "match")
     r = client.post("/api/leaderboard/submit", json={
-        "game_type": "match",
-        "score": 300,
-        "timestamp": old_ts,
-        "signature": sig_old
+        "game_type": "match", "score": 300, "session_token": token,
     }, headers=headers)
-    assert r.status_code == 400
+    assert r.status_code == 200
+    r = client.post("/api/leaderboard/submit", json={
+        "game_type": "match", "score": 310, "session_token": token,
+    }, headers=headers)
+    assert r.status_code == 403
 
-    # 7. Security test: Score limits should return 400
-    # Match limit: score > 35000 is invalid
-    sig_limit = generate_test_signature("match", 999999, now_ts)
+    # 7. Security test: masik jatektipusra kiadott token -> 403
+    token = start_game_session(client, headers, "match")
     r = client.post("/api/leaderboard/submit", json={
-        "game_type": "match",
-        "score": 999999,
-        "timestamp": now_ts,
-        "signature": sig_limit
+        "game_type": "snake", "score": 100, "session_token": token,
     }, headers=headers)
+    assert r.status_code == 403
+
+    # 8. Security test: Score limits should return 400
+    # Match limit: score > 35000 is invalid
+    r = submit_score(client, headers, "match", 999999)
     assert r.status_code == 400
 
     # Snake limit: score of 240 is valid, but 1600 is invalid
-    sig_snake_valid = generate_test_signature("snake", 240, now_ts)
-    r = client.post("/api/leaderboard/submit", json={
-        "game_type": "snake",
-        "score": 240,
-        "timestamp": now_ts,
-        "signature": sig_snake_valid
-    }, headers=headers)
+    r = submit_score(client, headers, "snake", 240)
     assert r.status_code == 200
 
-    sig_snake_invalid = generate_test_signature("snake", 1600, now_ts)
-    r = client.post("/api/leaderboard/submit", json={
-        "game_type": "snake",
-        "score": 1600,
-        "timestamp": now_ts,
-        "signature": sig_snake_invalid
-    }, headers=headers)
+    r = submit_score(client, headers, "snake", 1600)
     assert r.status_code == 400
