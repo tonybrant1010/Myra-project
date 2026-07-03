@@ -473,22 +473,16 @@ export default function ChatScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]} testID="chat-screen">
       <ContentBackground>
-        <TopBar title="Myra Project" rightLabel={user?.state_code || undefined} />
+        <TopBar
+          title="Myra Project"
+          rightLabel={user?.state_code || undefined}
+          rightAction={
+            Platform.OS === "web" && messages.length > 0
+              ? { icon: "download-outline", onPress: downloadTranscript, testID: "chat-download-transcript-button" }
+              : undefined
+          }
+        />
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={Platform.OS === "ios" ? 60 : 0}>
-          {messages.length > 0 ? (
-            <View style={styles.exportBar}>
-              <TouchableOpacity
-                onPress={downloadTranscript}
-                style={styles.exportBtn}
-                disabled={Platform.OS !== "web"}
-                activeOpacity={0.8}
-                testID="chat-download-transcript-button"
-              >
-                <Ionicons name="download-outline" size={16} color="rgba(247,251,255,0.78)" />
-                <T variant="small" color="rgba(247,251,255,0.78)">TXT letoltes</T>
-              </TouchableOpacity>
-            </View>
-          ) : null}
           {!isReadOnly && user?.code_days_remaining !== undefined && user.code_days_remaining <= 2 && user.code_days_remaining > 0 ? (
             <View style={styles.warningBanner}>
               <T variant="small" color={theme.white} align="center" style={{ fontWeight: "600" }}>
@@ -646,18 +640,6 @@ function Bubble({ msg, displayText, onSpeak, speaking }: { msg: Msg; displayText
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: theme.primaryDark },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  exportBar: { alignItems: "flex-end", paddingHorizontal: 18, paddingTop: 10 },
-  exportBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.14)",
-    backgroundColor: "rgba(6,19,32,0.42)",
-  },
   emptyWrap: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 36 },
   emptyAvatarRing: {
     width: 120,

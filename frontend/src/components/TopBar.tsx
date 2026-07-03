@@ -12,9 +12,14 @@ type Props = {
   showBack?: boolean;
   backPath?: string;
   rightLabel?: string;
+  rightAction?: {
+    icon: React.ComponentProps<typeof Ionicons>["name"];
+    onPress: () => void;
+    testID?: string;
+  };
 };
 
-export default function TopBar({ title, showBack, backPath, rightLabel }: Props) {
+export default function TopBar({ title, showBack, backPath, rightLabel, rightAction }: Props) {
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -53,7 +58,17 @@ export default function TopBar({ title, showBack, backPath, rightLabel }: Props)
           {title || ""}
         </T>
 
-        <View style={[styles.sideContainer, { alignItems: "flex-end" }]}>
+        <View style={[styles.sideContainer, styles.rightRow]}>
+          {rightAction ? (
+            <TouchableOpacity
+              onPress={rightAction.onPress}
+              style={styles.iconBtn}
+              testID={rightAction.testID}
+              hitSlop={10}
+            >
+              <Ionicons name={rightAction.icon} size={18} color={theme.textOnDark} />
+            </TouchableOpacity>
+          ) : null}
           {rightLabel ? (
             <View style={styles.rightPill}>
               <T variant="caption" color={theme.accentSoft} style={{ fontSize: 10, letterSpacing: 1.5 }}>
@@ -83,6 +98,12 @@ const styles = StyleSheet.create({
   sideContainer: {
     minWidth: 52,
     justifyContent: "center",
+  },
+  rightRow: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    gap: 8,
   },
   title: {
     flex: 1,
