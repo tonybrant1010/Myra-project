@@ -59,6 +59,13 @@ export default function TopBar({ title, showBack, backPath, rightLabel, rightAct
         </T>
 
         <View style={[styles.sideContainer, styles.rightRow]}>
+          {rightLabel ? (
+            <View style={styles.rightPill}>
+              <T variant="caption" color={theme.accentSoft} style={{ fontSize: 10, letterSpacing: 1.5 }}>
+                {rightLabel}
+              </T>
+            </View>
+          ) : null}
           {rightAction ? (
             <TouchableOpacity
               onPress={rightAction.onPress}
@@ -68,13 +75,6 @@ export default function TopBar({ title, showBack, backPath, rightLabel, rightAct
             >
               <Ionicons name={rightAction.icon} size={18} color={theme.textOnDark} />
             </TouchableOpacity>
-          ) : null}
-          {rightLabel ? (
-            <View style={styles.rightPill}>
-              <T variant="caption" color={theme.accentSoft} style={{ fontSize: 10, letterSpacing: 1.5 }}>
-                {rightLabel}
-              </T>
-            </View>
           ) : null}
         </View>
 
@@ -93,7 +93,6 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     minHeight: 66,
     backgroundColor: "transparent",
-    overflow: "hidden",
   },
   sideContainer: {
     minWidth: 52,
