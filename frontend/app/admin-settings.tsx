@@ -284,8 +284,8 @@ export default function AdminSettingsScreen() {
   if (!user?.is_admin) {
     return (
       <SafeAreaView style={styles.safe}>
-        <TopBar title="Beállítások" showBack />
         <ContentBackground>
+          <TopBar title="Beállítások" showBack />
           <View style={styles.center}><T variant="body" color={theme.danger}>Nincs jogosultságod ehhez.</T></View>
         </ContentBackground>
       </SafeAreaView>
@@ -296,8 +296,8 @@ export default function AdminSettingsScreen() {
 
   return (
     <SafeAreaView style={styles.safe} testID="admin-settings-screen">
-      <TopBar title="Admin beállítások" showBack />
       <ContentBackground>
+        <TopBar title="Admin beállítások" showBack />
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           {loading ? (
             <View style={styles.center}><ActivityIndicator color={theme.accent} /></View>

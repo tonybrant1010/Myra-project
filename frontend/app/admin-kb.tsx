@@ -250,8 +250,8 @@ export default function AdminKbScreen() {
   if (!user?.is_admin) {
     return (
       <SafeAreaView style={styles.safe}>
-        <TopBar title="Tudásanyag" showBack />
         <ContentBackground>
+          <TopBar title="Tudásanyag" showBack />
           <View style={styles.center}>
             <T variant="body" color={theme.danger}>Nincs jogosultságod ehhez az oldalhoz.</T>
           </View>
@@ -262,8 +262,8 @@ export default function AdminKbScreen() {
 
   return (
     <SafeAreaView style={styles.safe} testID="admin-kb-screen">
-      <TopBar title="Tudásanyag kezelő" showBack />
       <ContentBackground>
+        <TopBar title="Tudásanyag kezelő" showBack />
         <View style={styles.container}>
           <View style={styles.headerCard}>
             <T variant="small" color="rgba(247,251,255,0.72)" style={{ lineHeight: 20 }}>

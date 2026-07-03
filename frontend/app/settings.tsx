@@ -216,8 +216,8 @@ export default function SettingsScreen() {
 
   return (
     <SafeAreaView style={styles.safe} testID="settings-screen">
-      <TopBar title="Beállítások" showBack />
       <ContentBackground>
+        <TopBar title="Beállítások" showBack />
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
             <LinearGradient colors={["rgba(255,255,255,0.16)", "rgba(255,255,255,0.07)"]} style={[styles.profileCard, shadow.card]}>

@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 import { View, StyleSheet, TouchableOpacity } from "react-native";
-import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { theme } from "@/src/theme";
@@ -21,15 +20,7 @@ export default function TopBar({ title, showBack, backPath, rightLabel }: Props)
 
   return (
     <View>
-      <LinearGradient
-        colors={["#04101D", "#08223B", "#123E66"]}
-        locations={[0, 0.58, 1]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.bar}
-        testID="top-bar"
-      >
-        <View style={[styles.topMist, styles.noPointer]} />
+      <View style={styles.bar} testID="top-bar">
         <View style={styles.sideContainer}>
           {showBack ? (
             <TouchableOpacity
@@ -73,29 +64,22 @@ export default function TopBar({ title, showBack, backPath, rightLabel }: Props)
         </View>
 
         <SideMenu visible={menuOpen} onClose={() => setMenuOpen(false)} />
-      </LinearGradient>
+      </View>
       <GlobalNotice />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  noPointer: { pointerEvents: "none" },
   bar: {
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 16,
     paddingVertical: 12,
     minHeight: 66,
-    backgroundColor: theme.bg,
-    borderBottomWidth: 0,
+    backgroundColor: "transparent",
     overflow: "hidden",
   },
-  topMist: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundImage:
-      "radial-gradient(ellipse at 78% 0%, rgba(87,199,255,0.26), transparent 36%), linear-gradient(118deg, rgba(255,255,255,0.06), transparent 42%, rgba(101,183,242,0.12))",
-  } as any,
   sideContainer: {
     minWidth: 52,
     justifyContent: "center",

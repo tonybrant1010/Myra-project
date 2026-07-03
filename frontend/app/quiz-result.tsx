@@ -40,8 +40,8 @@ export default function QuizResultScreen() {
 
   return (
     <SafeAreaView style={styles.safe} testID="quiz-result-screen">
-      <TopBar title="Mérési eredmény" />
       <ContentBackground>
+        <TopBar title="Mérési eredmény" />
         <View style={styles.container}>
           <LinearGradient colors={["rgba(255,255,255,0.16)", "rgba(255,255,255,0.07)"]} style={[styles.resultPanel, shadow.card]}>
             <View style={[styles.resultSheen, styles.noPointer]} />

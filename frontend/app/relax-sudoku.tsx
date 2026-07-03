@@ -332,8 +332,8 @@ export default function RelaxSudokuScreen() {
 
   return (
     <SafeAreaView style={styles.safe} testID="relax-sudoku-screen">
-      <TopBar title="Sudoku" showBack={true} backPath="/relax" />
       <ContentBackground>
+        <TopBar title="Sudoku" showBack={true} backPath="/relax" />
         <View style={styles.container}>
 
           {isRunning && (

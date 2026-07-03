@@ -14,8 +14,8 @@ export default function RelaxCenterScreen() {
 
   return (
     <SafeAreaView style={styles.safe} testID="relax-center-screen">
-      <TopBar title="Játszótér" showBack={true} />
       <ContentBackground>
+        <TopBar title="Játszótér" showBack={true} />
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
           <T variant="display" color={theme.textOnDark} style={styles.title}>
             Kikapcsolódás

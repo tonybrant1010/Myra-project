@@ -61,8 +61,8 @@ export default function AdminScreen() {
   if (!user?.is_admin) {
     return (
       <SafeAreaView style={styles.safe}>
-        <TopBar title="Admin" showBack />
         <ContentBackground>
+          <TopBar title="Admin" showBack />
           <View style={styles.center}>
             <Text style={styles.empty}>Nincs jogosultságod ehhez az oldalhoz.</Text>
           </View>
@@ -72,8 +72,8 @@ export default function AdminScreen() {
   }
   return (
     <SafeAreaView style={styles.safe} testID="admin-screen">
-      <TopBar title="Állapotkódok" showBack />
       <ContentBackground>
+        <TopBar title="Állapotkódok" showBack />
         <View style={styles.container}>
           <View style={styles.headRow}>
             <Text style={styles.count}>{items.length} kód</Text>

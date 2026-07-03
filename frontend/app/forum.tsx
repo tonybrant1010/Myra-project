@@ -182,8 +182,8 @@ export default function ForumScreen() {
   if (profileLoading || (loading && posts.length === 0)) {
     return (
       <SafeAreaView style={styles.safe}>
-        <TopBar title="Fórum" showBack />
         <ContentBackground>
+          <TopBar title="Fórum" showBack />
           <View style={styles.center}>
             <ActivityIndicator size="large" color={theme.accent} />
           </View>
@@ -194,8 +194,8 @@ export default function ForumScreen() {
 
   return (
     <SafeAreaView style={styles.safe} testID="forum-screen">
-      <TopBar title="Fórum" showBack />
       <ContentBackground>
+        <TopBar title="Fórum" showBack />
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : undefined}
           style={{ flex: 1 }}

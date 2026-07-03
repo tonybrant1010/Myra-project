@@ -472,8 +472,8 @@ export default function ChatScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]} testID="chat-screen">
-      <TopBar title="Myra Project" rightLabel={user?.state_code || undefined} />
       <ContentBackground>
+        <TopBar title="Myra Project" rightLabel={user?.state_code || undefined} />
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={Platform.OS === "ios" ? 60 : 0}>
           {messages.length > 0 ? (
             <View style={styles.exportBar}>

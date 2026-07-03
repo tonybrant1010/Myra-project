@@ -72,8 +72,8 @@ export default function CodeScreen() {
 
   return (
     <SafeAreaView style={styles.safe} testID="code-screen">
-      <TopBar title="Állapotkód" showBack />
       <ContentBackground>
+        <TopBar title="Állapotkód" showBack />
         <KeyboardAvoidingView
           style={{ flex: 1 }}
           behavior={Platform.OS === "ios" ? "padding" : "height"}

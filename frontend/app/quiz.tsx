@@ -105,8 +105,8 @@ export default function QuizScreen() {
   if (loading) {
     return (
       <SafeAreaView style={styles.safe}>
-        <TopBar title="Kérdőív" />
         <ContentBackground>
+          <TopBar title="Kérdőív" />
           <View style={styles.center}><ActivityIndicator color={theme.primary} /></View>
         </ContentBackground>
       </SafeAreaView>
@@ -116,8 +116,8 @@ export default function QuizScreen() {
   if (!section) {
     return (
       <SafeAreaView style={styles.safe}>
-        <TopBar title="Kérdőív" />
         <ContentBackground>
+          <TopBar title="Kérdőív" />
           <View style={styles.center}><T variant="body" color={theme.danger}>Nem sikerült betölteni a kérdőívet.</T></View>
         </ContentBackground>
       </SafeAreaView>
@@ -127,8 +127,8 @@ export default function QuizScreen() {
   if (showConsent) {
     return (
       <SafeAreaView style={styles.safe}>
-        <TopBar title="Kérdőív" />
         <ContentBackground>
+          <TopBar title="Kérdőív" />
           <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
             <LinearGradient colors={["rgba(255,255,255,0.16)", "rgba(255,255,255,0.07)"]} style={[styles.sectionHeader, shadow.card]}>
               <View style={[styles.sectionSheen, styles.noPointer]} />
@@ -174,8 +174,8 @@ export default function QuizScreen() {
 
   return (
     <SafeAreaView style={styles.safe} testID="quiz-screen">
-      <TopBar title={`Kérdőív · ${sectionIdx + 1}/${sections.length}`} />
       <ContentBackground>
+        <TopBar title={`Kérdőív · ${sectionIdx + 1}/${sections.length}`} />
         <View style={styles.progressTrack}>
           <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%` }]} testID="quiz-progress" />
         </View>

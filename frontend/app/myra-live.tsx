@@ -457,8 +457,8 @@ export default function MyraLiveScreen() {
 
   return (
     <SafeAreaView style={styles.safe} testID="myra-live-screen">
-      <TopBar title="Myra Live" showBack rightLabel="BÉTA" />
       <ContentBackground>
+        <TopBar title="Myra Live" showBack rightLabel="BÉTA" />
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
           <View style={styles.stage}>
             <View style={styles.avatarStage}>

@@ -186,8 +186,8 @@ export default function RelaxLeaderboardScreen() {
 
   return (
     <SafeAreaView style={styles.safe} testID="relax-leaderboard-screen">
-      <TopBar title="Globális Ranglista" showBack={true} backPath="/relax" />
       <ContentBackground>
+        <TopBar title="Globális Ranglista" showBack={true} backPath="/relax" />
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
 
 

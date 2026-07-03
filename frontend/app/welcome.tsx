@@ -196,8 +196,8 @@ export default function WelcomeScreen() {
 
   return (
     <SafeAreaView style={styles.safe} testID="welcome-screen">
-      <TopBar title="" />
       <ContentBackground>
+        <TopBar title="" />
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
           <LinearGradient colors={["rgba(255,255,255,0.16)", "rgba(255,255,255,0.07)"]} style={[styles.heroCard, shadow.card]}>
             <View style={[styles.cardSheen, styles.noPointer]} />
