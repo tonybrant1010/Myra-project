@@ -246,6 +246,7 @@ def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
 CHAT_HISTORY_MAX_MESSAGES = _env_int("CHAT_HISTORY_MAX_MESSAGES", 120, 20, 300)
 CHAT_HISTORY_MAX_CHARS = _env_int("CHAT_HISTORY_MAX_CHARS", 45000, 8000, 120000)
 RAG_CANDIDATE_POOL = _env_int("RAG_CANDIDATE_POOL", 20, 5, 50)
+RAG_KEEPWARM_INTERVAL_S = _env_int("RAG_KEEPWARM_INTERVAL_S", 240, 0, 3600)
 try:
     RAG_VECTOR_MAX_DISTANCE = float(os.environ.get("RAG_VECTOR_MAX_DISTANCE", "0.62"))
 except ValueError:
@@ -1542,6 +1543,18 @@ async def set_setting(db: AsyncSession, key: str, value: str) -> None:
         db.add(AppSetting(key=key, value=value))
 
 
+async def _rag_keepwarm_loop() -> None:
+    """4 percenként megérinti az embedding-modellt, hogy a lapjai ne swapoljanak ki
+    (kevés RAM-ú VM-en tétlenség után 30+ mp-es query-embedding tüskét okozna)."""
+    while True:
+        await asyncio.sleep(RAG_KEEPWARM_INTERVAL_S)
+        try:
+            if _fastembed_model is not None:
+                await asyncio.to_thread(lambda: list(_fastembed_model.embed(["keepwarm"])))
+        except Exception as e:
+            logger.warning(f"RAG keepwarm hiba: {e}")
+
+
 async def _warmup_rag_runtime() -> None:
     if DB_DIALECT == "sqlite" or os.environ.get("DISABLE_RAG_STARTUP_WARMUP", "").lower() in {"1", "true", "yes"}:
         return
@@ -1594,7 +1607,16 @@ async def lifespan(app: FastAPI):
                 except Exception as e:
                     print(f"[startup] Figyelmeztetés: default_kb.pdf nem tölthető be: {e}")
     await _warmup_rag_runtime()
+    keepwarm_task = None
+    if DB_DIALECT != "sqlite" and RAG_KEEPWARM_INTERVAL_S > 0:
+        keepwarm_task = asyncio.create_task(_rag_keepwarm_loop())
     yield
+    if keepwarm_task:
+        keepwarm_task.cancel()
+        try:
+            await keepwarm_task
+        except asyncio.CancelledError:
+            pass
     await engine.dispose()
 
 
