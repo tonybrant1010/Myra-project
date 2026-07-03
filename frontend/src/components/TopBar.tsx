@@ -77,9 +77,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     minHeight: 66,
-    backgroundColor: "rgba(255,255,255,0.07)",
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(255,255,255,0.10)",
+    backgroundColor: "transparent",
     overflow: "hidden",
   },
   sideContainer: {
