@@ -179,15 +179,21 @@ def _is_allowed_cors_origin(origin: str) -> bool:
     return False
 
 
-def _build_knowledge_search_query(user_query: str, state: Any) -> str:
-    profile_part = state.profile[:300] if state.profile else ""
-    return f"Kérdés: {user_query} | Profil: {state.title} ({state.severity}) | Leírás: {profile_part}"
-
-
-def _excerpt_knowledge_chunk(text: str, max_chars: int = 500) -> str:
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars] + " [...]"
+def _build_chat_kb_query(user_message: str, history: list, state: Any) -> str:
+    """Rövid/homályos üzenetnél bevonja az előző user-üzenetet és az állapotprofilt,
+    konkrét üzenetnél csak magát az üzenetet keresi (a profil ne torzítsa a találatokat)."""
+    terms = _knowledge_terms(user_message, max_terms=12)
+    if len(terms) >= 4:
+        return user_message.strip()
+    parts: list[str] = []
+    prev_user_texts = [m.text for m in history if getattr(m, "role", "") == "user"]
+    if prev_user_texts:
+        parts.append(prev_user_texts[-1][:400])
+    parts.append(user_message)
+    state_line = f"{getattr(state, 'title', '') or ''} {getattr(state, 'severity', '') or ''}".strip()
+    if state_line:
+        parts.append(state_line)
+    return "\n".join(p for p in parts if p).strip()
 
 
 def _normalize_database_url(url: str) -> str:
@@ -239,6 +245,11 @@ def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
 
 CHAT_HISTORY_MAX_MESSAGES = _env_int("CHAT_HISTORY_MAX_MESSAGES", 120, 20, 300)
 CHAT_HISTORY_MAX_CHARS = _env_int("CHAT_HISTORY_MAX_CHARS", 45000, 8000, 120000)
+RAG_CANDIDATE_POOL = _env_int("RAG_CANDIDATE_POOL", 20, 5, 50)
+try:
+    RAG_VECTOR_MAX_DISTANCE = float(os.environ.get("RAG_VECTOR_MAX_DISTANCE", "0.62"))
+except ValueError:
+    RAG_VECTOR_MAX_DISTANCE = 0.62
 CHAT_MESSAGE_MAX_CHARS = _env_int("CHAT_MESSAGE_MAX_CHARS", 8000, 500, 20000)
 API_REQUEST_MAX_BYTES = _env_int("API_REQUEST_MAX_BYTES", 1 * 1024 * 1024, 64 * 1024, 10 * 1024 * 1024)
 KB_PDF_UPLOAD_MAX_BYTES = _env_int("KB_PDF_UPLOAD_MAX_BYTES", 25 * 1024 * 1024, 1 * 1024 * 1024, 100 * 1024 * 1024)
@@ -961,7 +972,7 @@ def _extract_pdf_text(path: Path) -> str:
     return "\n\n".join(pages).strip()
 
 
-def _chunk_text(text: str, max_chars: int = 2600, overlap: int = 350) -> list[str]:
+def _chunk_text(text: str, max_chars: int = 1400, overlap: int = 200) -> list[str]:
     text = _clean_pdf_text(text)
     if not text:
         return []
@@ -1072,7 +1083,7 @@ async def rebuild_pdf_knowledge_index(db: AsyncSession, source_dir: Optional[str
                 emb = None
                 if DB_DIALECT != "sqlite":
                     try:
-                        emb = await _get_fastembed_embedding(chunk)
+                        emb = await _get_fastembed_embedding(f"{title}\n{chunk}")
                     except Exception as e:
                         logger.warning(f"Nem sikerült az embedding lekérése a chunkhoz ({pdf_path.name} #{idx}): {e}")
                 db.add(KnowledgeChunk(
@@ -1152,15 +1163,62 @@ async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> 
             query_emb = await _get_fastembed_embedding(query)
             query_vector_str = "[" + ",".join(str(f) for f in query_emb) + "]"
             stmt = sql_text("""
-                SELECT id, source_name, source_path, source_hash, chunk_index, title, content
-                FROM knowledge_chunks
-                WHERE embedding_384 IS NOT NULL
-                ORDER BY embedding_384 <=> CAST(:query_vector AS vector)
-                LIMIT :limit
+                WITH vec AS (
+                    SELECT id,
+                           (embedding_384 <=> CAST(:query_vector AS vector)) AS dist,
+                           ROW_NUMBER() OVER (
+                               ORDER BY embedding_384 <=> CAST(:query_vector AS vector)
+                           ) AS rnk
+                    FROM knowledge_chunks
+                    WHERE embedding_384 IS NOT NULL
+                    ORDER BY embedding_384 <=> CAST(:query_vector AS vector)
+                    LIMIT :pool
+                ),
+                txt AS (
+                    SELECT id,
+                           ROW_NUMBER() OVER (
+                               ORDER BY ts_rank_cd(
+                                   to_tsvector('hungarian', coalesce(title, '') || ' ' || content),
+                                   websearch_to_tsquery('hungarian', :ts_query)
+                               ) DESC
+                           ) AS rnk
+                    FROM knowledge_chunks
+                    WHERE to_tsvector('hungarian', coalesce(title, '') || ' ' || content)
+                          @@ websearch_to_tsquery('hungarian', :ts_query)
+                    LIMIT :pool
+                )
+                SELECT kc.id, kc.source_name, kc.source_path, kc.source_hash,
+                       kc.chunk_index, kc.title, kc.content,
+                       vec.dist AS vec_dist, txt.rnk AS txt_rnk,
+                       (COALESCE(1.0 / (60 + vec.rnk), 0) + COALESCE(1.0 / (60 + txt.rnk), 0)) AS rrf
+                FROM knowledge_chunks kc
+                LEFT JOIN vec ON vec.id = kc.id
+                LEFT JOIN txt ON txt.id = kc.id
+                WHERE vec.id IS NOT NULL OR txt.id IS NOT NULL
+                ORDER BY rrf DESC, kc.id ASC
+                LIMIT :pool
             """)
-            res = await db.execute(stmt, {"query_vector": query_vector_str, "limit": limit})
+            res = await db.execute(stmt, {
+                "query_vector": query_vector_str,
+                "ts_query": expanded_query,
+                "pool": RAG_CANDIDATE_POOL,
+            })
             rows = res.mappings().all()
-            if rows:
+            kept = []
+            best_dist = None
+            for row in rows:
+                dist = float(row["vec_dist"]) if row["vec_dist"] is not None else None
+                if dist is not None and (best_dist is None or dist < best_dist):
+                    best_dist = dist
+                if row["txt_rnk"] is not None or (dist is not None and dist <= RAG_VECTOR_MAX_DISTANCE):
+                    kept.append(row)
+                if len(kept) >= limit:
+                    break
+            logger.info(
+                "rag_search candidates=%d kept=%d best_dist=%s",
+                len(rows), len(kept), f"{best_dist:.3f}" if best_dist is not None else "-",
+            )
+            if kept:
                 return [
                     KnowledgeChunk(
                         id=row["id"],
@@ -1171,10 +1229,12 @@ async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> 
                         title=row["title"],
                         content=row["content"],
                     )
-                    for row in rows
+                    for row in kept
                 ]
+            if rows:
+                return []
         except Exception as e:
-            logger.warning(f"pgvector keresési hiba, visszaváltás kulcsszavas keresésre: {e}")
+            logger.warning(f"pgvector hibrid keresési hiba, visszaváltás kulcsszavas keresésre: {e}")
 
     terms = _knowledge_terms(expanded_query)
     if not terms:
@@ -1324,6 +1384,13 @@ async def _run_startup_migrations() -> None:
             await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_embedding_384 ON knowledge_chunks USING hnsw (embedding_384 vector_cosine_ops)"))
         except Exception as _e:
             print(f"[startup] postgresql embedding_384 index warning: {_e}")
+        try:
+            await conn.execute(sql_text(
+                "CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_hu_tsv ON knowledge_chunks "
+                "USING gin (to_tsvector('hungarian', coalesce(title, '') || ' ' || content))"
+            ))
+        except Exception as _e:
+            print(f"[startup] postgresql hungarian tsvector index warning: {_e}")
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_suspended BOOLEAN NOT NULL DEFAULT false"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN NOT NULL DEFAULT false"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 0"))
@@ -3312,12 +3379,6 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
     sys_prompt_base = settings["system_prompt"]
     mark_timing("settings", phase_started)
 
-    kb_query = f"{text}\n{sc.title}\n{sc.profile}\n{sc.severity or ''}"
-    phase_started = time.perf_counter()
-    retrieved_chunks = await search_pdf_knowledge(db, kb_query, limit=5)
-    mark_timing("rag", phase_started)
-    retrieved_kb_context = _build_retrieved_kb_context(retrieved_chunks)
-
     phase_started = time.perf_counter()
     res = await db.execute(
         select(ChatMessage)
@@ -3327,6 +3388,12 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
     )
     db_history = list(reversed(res.scalars().all()))
     mark_timing("history_db", phase_started)
+
+    kb_query = _build_chat_kb_query(text, db_history, sc)
+    phase_started = time.perf_counter()
+    retrieved_chunks = await search_pdf_knowledge(db, kb_query, limit=5)
+    mark_timing("rag", phase_started)
+    retrieved_kb_context = _build_retrieved_kb_context(retrieved_chunks)
     
     recent_user_text = "\n".join(m.text for m in db_history[-6:] if m.role == "user")
     crisis_context = _build_crisis_safety_context() if _is_crisis_message(f"{recent_user_text}\n{text}") else ""

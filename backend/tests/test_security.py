@@ -29,8 +29,7 @@ from server import (
     app,
     hash_password,
     _is_allowed_cors_origin,
-    _build_knowledge_search_query,
-    _excerpt_knowledge_chunk,
+    _build_chat_kb_query,
     _request_body_limit,
     require_admin,
     _should_no_store_response,
@@ -233,7 +232,7 @@ def test_safe_download_filename_strips_unsafe_header_characters():
     assert _safe_download_filename("a" * 200 + ".csv") == "a" * 120
 
 
-def test_rag_search_query_uses_compact_profile_context():
+def test_rag_search_query_stays_compact_for_short_message():
     state = StateCode(
         code="RAGT",
         title="Teszt profil",
@@ -241,7 +240,7 @@ def test_rag_search_query_uses_compact_profile_context():
         severity="kozepes",
     )
 
-    query = _build_knowledge_search_query("aktuális kérdés", state)
+    query = _build_chat_kb_query("aktuális kérdés", [], state)
 
     assert "aktuális kérdés" in query
     assert "Teszt profil" in query
@@ -249,13 +248,19 @@ def test_rag_search_query_uses_compact_profile_context():
     assert len(query) < len(state.profile)
 
 
-def test_retrieved_kb_context_excerpts_large_chunks():
-    long_text = " ".join(["tudasanyag"] * 500)
+def test_rag_search_query_excludes_profile_for_specific_message():
+    state = StateCode(
+        code="RAGT",
+        title="Teszt profil",
+        profile=("profil resz " * 500),
+        severity="kozepes",
+    )
 
-    excerpt = _excerpt_knowledge_chunk(long_text, max_chars=120)
+    message = "Mostanában nagyon nehezen alszom el és feszült vagyok minden este."
+    query = _build_chat_kb_query(message, [], state)
 
-    assert len(excerpt) <= 126
-    assert excerpt.endswith("[...]")
+    assert query == message
+    assert "Teszt profil" not in query
 
 
 def test_fastembed_embedding_cache_reuses_normalized_query():
