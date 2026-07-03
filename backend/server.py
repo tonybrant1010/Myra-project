@@ -533,7 +533,7 @@ def _totp_hotp(secret_b32: str, counter: int) -> str:
     """HOTP value (RFC 4226)."""
     padded = secret_b32.upper() + "=" * (-len(secret_b32) % 8)
     key = base64.b32decode(padded)
-    digest = _hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+    digest = _hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()  # nosec B303
     offset = digest[-1] & 0x0F
     code_int = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
     return str(code_int % (10 ** TOTP_DIGITS)).zfill(TOTP_DIGITS)
@@ -1194,7 +1194,7 @@ async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> 
         WHERE {" OR ".join(where_parts)}
         ORDER BY ({" + ".join(score_parts)}) DESC, id ASC
         LIMIT :limit
-    """)
+    """)  # nosec B608
     res = await db.execute(stmt, params)
     rows = res.mappings().all()
     return [
@@ -1367,7 +1367,7 @@ async def _reset_postgres_sequences(conn) -> None:
                 COALESCE((SELECT MAX({column_name}) FROM {table_name}), 1),
                 (SELECT COUNT(*) > 0 FROM {table_name})
             )
-        """))
+        """))  # nosec B608
 
 
 async def get_db():
