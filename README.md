@@ -44,7 +44,7 @@ A frontend Vercelen fut. A backend Google Cloud VM-en fut Docker konténerben. A
 - felhasználói fiók és adatok végleges önkiszolgáló törlése (GDPR Art. 17);
 - Gemini Live beszélgetés az aktuális kapcsolat idejére korlátozott kontextussal;
 - Fórum (csoportos üzenőfal) egyedi becenevekkel, 12 választható emoji-avatarral, magyar trágárságszűrővel és szerzői/adminisztrátori törlési jogkörökkel;
-- PDF-alapú RAG tudásvisszakeresés;
+- PDF-alapú hibrid (pgvector + magyar full-text, RRF) RAG tudásvisszakeresés relevancia-küszöbbel;
 - FastEmbed in-memory normalizált embedding gyorsítótár a válaszok gyorsításához és erőforrás-takarékossághoz;
 - admin tudásanyag-kezelés PDF feltöltéssel, törléssel és háttérben futó élesítéssel;
 - admin rendszerbeállítások, karbantartási mód és SOS eszközök;
@@ -163,19 +163,34 @@ KB_PDF_UPLOAD_MAX_BYTES=26214400
 KB_TEXT_UPLOAD_MAX_BYTES=2097152
 ```
 
-RAG teljesitmenyhez hangolhato env valtozok:
+### Keresési pipeline (2026-07-03 óta)
+
+Postgres/Supabase alatt a keresés hibrid: pgvector cosine keresés és magyar szótövezett
+full-text ág (`websearch_to_tsquery('hungarian')`, GIN indexszel) fut egy SQL-ben,
+az eredmény RRF-fúzióval áll össze. A csak-vektoros találatokra relevancia-küszöb
+vonatkozik; ha semmi nem elég közeli, a prompt tudásanyag nélkül megy ki.
+SQLite (fejlesztői) módban FTS5/BM25 keresés fut. A chunkolás 1400 karakter / 200
+átfedés, az embedding a dokumentumcímmel együtt készül. A modellt egy háttérfolyamat
+tartja melegen, hogy kevés RAM-ú VM-en se swapoljon ki tétlenség alatt.
+
+RAG-hoz hangolható env változók:
 
 ```env
-RAG_QUERY_PROFILE_MAX_CHARS=900
-RAG_CONTEXT_CHUNK_MAX_CHARS=1800
-RAG_EMBEDDING_CACHE_MAX_ENTRIES=128
+RAG_VECTOR_MAX_DISTANCE=0.62
+RAG_CANDIDATE_POOL=20
+RAG_KEEPWARM_INTERVAL_S=240
 DISABLE_RAG_STARTUP_WARMUP=false
+FASTEMBED_MODEL_NAME=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 ```
 
-- `RAG_QUERY_PROFILE_MAX_CHARS`: a meresi profilbol ennyi karakter kerul a RAG keresesi querybe.
-- `RAG_CONTEXT_CHUNK_MAX_CHARS`: egy talalt PDF chunkbol ennyi karakter kerul a promptba.
-- `RAG_EMBEDDING_CACHE_MAX_ENTRIES`: processzen beluli FastEmbed cache merete; `0` kikapcsolja.
+- `RAG_VECTOR_MAX_DISTANCE`: cosine tavolsag kuszob a csak-vektoros talalatokra; e folott a chunk nem kerul a promptba.
+- `RAG_CANDIDATE_POOL`: a hibrid fuzio jeloltszama aganként.
+- `RAG_KEEPWARM_INTERVAL_S`: keep-warm gyakorisag masodpercben; `0` kikapcsolja.
 - `DISABLE_RAG_STARTUP_WARMUP=true`: kikapcsolja a startup RAG warmupot, ha gyors kontenerinditas fontosabb az elso RAG keresesi kesleltetesnel.
+
+Diagnosztika: minden keresés `rag_search candidates=... kept=... best_dist=...` sort logol
+(kuszob-hangolashoz), a `scripts/bench_embed.py` pedig a konteneren belul meri a
+modell betoltesi idejet, query-latencyt es RAM-igenyt.
 
 A backend a PDF-ekből szöveget nyer ki, chunkokra bontja, FastEmbed embeddinget készít, majd Supabase-ben tárolja:
 
@@ -287,7 +302,6 @@ nem ír át `knowledge_chunks` rekordot.
 ```text
 backend/
   server.py
-  security.py
   requirements.txt
   Dockerfile
   .dockerignore
@@ -296,6 +310,8 @@ backend/
     test_auth_flow.py
     test_compliance.py
     test_owasp.py
+  scripts/
+    bench_embed.py
   data/
     kb_pdfs/
       *.pdf
@@ -485,4 +501,10 @@ backend/rag/
 - A backend és a Vercel frontend alap biztonsági HTTP fejléceket ad: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, éles HTTPS alatt `Strict-Transport-Security`.
 - A Vercel API proxy fail-closed módon működik: hiányzó backend origin vagy proxy secret esetén nem továbbít kérést, és nincs beégetett VM IP fallback.
 - A backend production módban az `OPTIONS` preflight kéréseket is csak engedélyezett originről engedi proxy secret nélkül; ismeretlen origin vagy direkt origin nélküli OPTIONS kérés 403-at kap.
-- A frontend `package.json` célzott `overrides`/`resol
+- A frontend `package.json` célzott `overrides`/`resolutions` réteget használ a magasabb kockázatú transitive build-eszköz sérülékenységek zárására; Expo/React Native főverziót csak külön regressziós teszttel frissíts.
+- Backend dependency frissítés előtt és után futtasd a `pip-audit -r backend/requirements.txt` ellenőrzést; a framework csomagokat (`fastapi`, `starlette`) mindig együtt validáld teljes backend teszttel.
+- Szigorú Content-Security-Policy jelenleg nincs bekapcsolva, mert a Gemini Live/WebSocket és Expo web bundle miatt külön, célzott tesztelést igényelne.
+- Az admin log nézet maszkolja az URL-ben vagy headerben megjelenő API kulcsokat és bearer tokeneket.
+- Az admin audit log `detail` és `user_agent` mezői mentés előtt is maszkolva vannak, és felhasználótörlésnél csak a belső `user_id` kerül naplózásra, email cím nem.
+- A személyes vagy admin jellegű API válaszok `Cache-Control: no-store` fejléccel mennek ki.
+- Supabase/Postgres környezetben az adatbázis backup nem az alkalmazásból készül; a tiltott backup-kérés admin audit logba kerül.
