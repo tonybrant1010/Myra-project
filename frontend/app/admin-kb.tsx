@@ -183,26 +183,6 @@ export default function AdminKbScreen() {
     }
   };
 
-  const handleActivateKnowledge = async () => {
-    setReindexing(true);
-    setStatusMsg(null);
-    setStatusErr(null);
-    try {
-      // 1. Re-index PDFs and rebuild DB chunk index
-      const r1 = await authedFetch(token, "/api/admin/extract-kb", { method: "POST" });
-      const d1 = await r1.json().catch(() => ({}));
-      if (!r1.ok) {
-        throw new Error(d1.detail || "Hiba történt a PDF-ek indexelése során.");
-      }
-
-      setStatusMsg(`Sikeres élesítés: ${d1.pdf_count} PDF szövege kinyerve és indexelve.`);
-    } catch (e: any) {
-      setStatusErr(e.message || "Hiba az élesítés során.");
-    } finally {
-      setReindexing(false);
-    }
-  };
-
   const handleActivateKnowledgeWithPolling = async () => {
     setReindexing(true);
     setStatusMsg(null);

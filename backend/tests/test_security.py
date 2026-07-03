@@ -55,13 +55,11 @@ from server import (
     HTTPException,
 )
 
-# Tell pytest to use anyio for async tests
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
 
 def test_client_ip_no_trust_proxy():
-    # Remove TRUST_PROXY if set
     if "TRUST_PROXY" in os.environ:
         del os.environ["TRUST_PROXY"]
         
@@ -70,7 +68,6 @@ def test_client_ip_no_trust_proxy():
     mock_request.client = Mock()
     mock_request.client.host = "127.0.0.1"
     
-    # Should ignore x-forwarded-for and use request.client.host
     assert _client_ip(mock_request) == "127.0.0.1"
 
 def test_client_ip_with_trust_proxy_true():
@@ -81,7 +78,6 @@ def test_client_ip_with_trust_proxy_true():
         mock_request.client = Mock()
         mock_request.client.host = "127.0.0.1"
         
-        # Should trust x-forwarded-for and return first IP
         assert _client_ip(mock_request) == "1.2.3.4"
     finally:
         del os.environ["TRUST_PROXY"]
@@ -94,7 +90,6 @@ def test_client_ip_with_trust_proxy_false():
         mock_request.client = Mock()
         mock_request.client.host = "127.0.0.1"
         
-        # Should ignore x-forwarded-for
         assert _client_ip(mock_request) == "127.0.0.1"
     finally:
         del os.environ["TRUST_PROXY"]
@@ -583,8 +578,6 @@ async def test_emergency_admin_routes_reject_wrong_current_password(init_db):
 
 
 def test_leaderboard_and_reindex_schemas_reject_invalid_payloads():
-    # A submit a szerver altal kiadott, egyszer hasznalatos session_tokent varja
-    # (16-128 karakter), a regi timestamp+signature mezok megszuntek.
     SubmitScoreBody(game_type="match", score=35000, session_token="a" * 32)
 
     with pytest.raises(Exception):
@@ -642,7 +635,6 @@ def test_state_code_schema_rejects_oversized_profile_fields():
 @pytest.mark.anyio
 @patch("httpx.AsyncClient.post")
 async def test_call_llm_anthropic_error_masking(mock_post):
-    # Mock httpx response to return 500 with sensitive detail
     mock_response = Mock()
     mock_response.status_code = 500
     mock_response.text = "Internal Server Error: API Key expired or invalid signature or secret prompt leaked"
@@ -658,9 +650,7 @@ async def test_call_llm_anthropic_error_masking(mock_post):
             user_message="hello"
         )
     
-    # Verify status code is 502
     assert exc_info.value.status_code == 502
-    # Verify detail is masked and does NOT contain the sensitive response text
     assert "leak" not in exc_info.value.detail
     assert "expired" not in exc_info.value.detail
     assert "Hiba történt az AI szolgáltatónál" in exc_info.value.detail
@@ -668,7 +658,6 @@ async def test_call_llm_anthropic_error_masking(mock_post):
 @pytest.mark.anyio
 @patch("httpx.AsyncClient.post")
 async def test_call_llm_gemini_error_masking(mock_post):
-    # Mock httpx response to return 500
     mock_response = Mock()
     mock_response.status_code = 500
     mock_response.text = "Gemini failure: User quota exceeded, developer info leaked"
@@ -692,48 +681,38 @@ def test_verify_vercel_proxy_middleware():
     from fastapi.testclient import TestClient
     import server
     
-    # Register a dummy endpoint dynamically on the app instance
-    # to test middleware without hitting database dependency
     @server.app.get("/test-middleware-ping")
     def ping():
         return {"ping": "pong"}
     
-    # Preserve original state
     orig_env = os.environ.get("ENVIRONMENT")
     orig_secret = server.MYRA_PROXY_SECRET
     
     client = TestClient(server.app)
     
     try:
-        # Case 1: ENVIRONMENT is development -> bypass check
         os.environ["ENVIRONMENT"] = "development"
         r = client.get("/test-middleware-ping")
         assert r.status_code == 200
         assert r.json() == {"ping": "pong"}
         
-        # Case 2: ENVIRONMENT is production -> enforce check
         os.environ["ENVIRONMENT"] = "production"
         server.MYRA_PROXY_SECRET = "test-proxy-secret-123"
         
-        # Without header -> 403 Forbidden
         r = client.get("/test-middleware-ping")
         assert r.status_code == 403
         assert r.json()["detail"] == "Direct access to origin is forbidden."
         
-        # With incorrect header -> 403 Forbidden
         r = client.get("/test-middleware-ping", headers={"X-Myra-Proxy-Secret": "wrong-secret"})
         assert r.status_code == 403
         
-        # With correct header -> 200 OK
         r = client.get("/test-middleware-ping", headers={"X-Myra-Proxy-Secret": "test-proxy-secret-123"})
         assert r.status_code == 200
         assert r.json() == {"ping": "pong"}
         
-        # Allowed CORS preflight can pass without proxy secret.
         r = client.options("/test-middleware-ping", headers={"Origin": "https://www.myra-project.hu"})
         assert r.status_code != 403 or (r.status_code == 403 and r.json().get("detail") != "Direct access to origin is forbidden.")
 
-        # Direct or unknown-origin OPTIONS requests are still blocked.
         r = client.options("/test-middleware-ping")
         assert r.status_code == 403
         assert r.json()["detail"] == "Direct access to origin is forbidden."
@@ -742,7 +721,6 @@ def test_verify_vercel_proxy_middleware():
         assert r.status_code == 403
 
     finally:
-        # Restore original state
         if orig_env is not None:
             os.environ["ENVIRONMENT"] = orig_env
         else:

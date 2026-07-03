@@ -24,7 +24,7 @@ export default function RelaxCenterScreen() {
             Játssz egy kicsit, csendesítsd el az elméd, és töltődj fel a megnyugtató játékainkkal.
           </T>
 
-          {/* Leaderboard button */}
+
           <TouchableOpacity
             style={[styles.leaderboardButton, shadow.card]}
             onPress={() => router.push("/relax-leaderboard")}
@@ -42,7 +42,7 @@ export default function RelaxCenterScreen() {
             </LinearGradient>
           </TouchableOpacity>
 
-          {/* Activity 1: Myra Match */}
+
           <TouchableOpacity
             style={[styles.card, shadow.card]}
             onPress={() => router.push("/relax-match")}
@@ -73,7 +73,7 @@ export default function RelaxCenterScreen() {
             </LinearGradient>
           </TouchableOpacity>
 
-          {/* Activity 2: Snake */}
+
           <TouchableOpacity
             style={[styles.card, shadow.card]}
             onPress={() => router.push("/relax-snake")}
@@ -104,7 +104,7 @@ export default function RelaxCenterScreen() {
             </LinearGradient>
           </TouchableOpacity>
 
-          {/* Activity 3: Coloring */}
+
           <TouchableOpacity
             style={[styles.card, shadow.card]}
             onPress={() => router.push("/relax-coloring")}
@@ -135,7 +135,7 @@ export default function RelaxCenterScreen() {
             </LinearGradient>
           </TouchableOpacity>
 
-          {/* Activity 4: Sudoku */}
+
           <TouchableOpacity
             style={[styles.card, shadow.card]}
             onPress={() => router.push("/relax-sudoku")}

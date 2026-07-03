@@ -10,19 +10,9 @@ Ellenőrzi:
 import os
 import sys
 import pytest
-import httpx
 
-# A backend mappa a tesztfájl szülőjének szülője
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from server import app
 
-
-# ---------- Fixtures ----------
-
-
-
-
-# ---------- Security Headers tesztek ----------
 
 @pytest.mark.anyio
 async def test_csp_header_present(client):
@@ -103,8 +93,6 @@ async def test_all_security_headers_present(client):
     assert not missing, f"Hiányzó biztonsági fejlécek: {missing}"
 
 
-# ---------- Cache-Control tesztek ----------
-
 @pytest.mark.anyio
 async def test_cache_control_no_store_auth_endpoint(client):
     """Az /api/auth/* endpointoknál Cache-Control: no-store fejléc van."""
@@ -112,7 +100,6 @@ async def test_cache_control_no_store_auth_endpoint(client):
         "/api/auth/login",
         json={"email": "noone@example.com", "password": "irrelevant"},
     )
-    # A válasz státusztól függetlenül a Cache-Control-nak jelen kell lennie
     cache_control = resp.headers.get("cache-control", "")
     assert "no-store" in cache_control, f"Hiányzó no-store az auth endpointon: {cache_control}"
 
@@ -149,12 +136,9 @@ async def test_config_endpoint_no_cache_control_no_store(client):
     """A publikus /api/config endpoint NEM kap no-store Cache-Control-t."""
     resp = await client.get("/api/config")
     cache_control = resp.headers.get("cache-control", "")
-    # A config nem érzékeny, nem várunk no-store-t
     assert "no-store" not in cache_control, \
         f"A /api/config nem kellene no-store-t kapnia, de kapott: {cache_control}"
 
-
-# ---------- CORS tesztek ----------
 
 @pytest.mark.anyio
 async def test_cors_allowed_localhost_origin(client):
@@ -197,7 +181,6 @@ async def test_cors_disallowed_origin(client):
         },
     )
     allow_origin = resp.headers.get("access-control-allow-origin", "")
-    # A CORS middleware nem engedélyezi az ismeretlen origint
     assert allow_origin != "https://evil-site.com", \
         "Az evil-site.com origin NEM kellene, hogy engedélyezve legyen"
 
@@ -212,7 +195,6 @@ async def test_cors_credentials_not_allowed(client):
             "Access-Control-Request-Method": "GET",
         },
     )
-    # access-control-allow-credentials nem lehet "true"
     cred = resp.headers.get("access-control-allow-credentials", "")
     assert cred.lower() != "true", \
         "A credentials nem kellene, hogy engedélyezve legyen (allow_credentials=False)"

@@ -7,7 +7,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 
 import { authedFetch, useAuth } from "@/src/auth/AuthContext";
-import { generateLeaderboardSignature } from "@/src/utils/crypto";
+import { startLeaderboardSession } from "@/src/utils/crypto";
 import ContentBackground from "@/src/components/ContentBackground";
 import TopBar from "@/src/components/TopBar";
 import { T } from "@/src/components/Typography";
@@ -20,17 +20,17 @@ const BOARD_SIZE = width - 32;
 type CellCoord = { r: number; c: number } | null;
 type SudokuSize = 4 | 6 | 9;
 
-// Helper: Check if val is valid in board[r][c]
+
 const isValid = (board: number[][], r: number, c: number, val: number, size: SudokuSize): boolean => {
-  // Check row
+
   for (let i = 0; i < size; i++) {
     if (board[r][i] === val) return false;
   }
-  // Check col
+
   for (let i = 0; i < size; i++) {
     if (board[i][c] === val) return false;
   }
-  // Check box
+
   let boxRows = 3;
   let boxCols = 3;
   if (size === 4) {
@@ -50,13 +50,13 @@ const isValid = (board: number[][], r: number, c: number, val: number, size: Sud
   return true;
 };
 
-// Backtracking solver
+
 const solveSudoku = (board: number[][], size: SudokuSize): boolean => {
   for (let r = 0; r < size; r++) {
     for (let c = 0; c < size; c++) {
       if (board[r][c] === 0) {
         const nums = Array.from({ length: size }, (_, i) => i + 1);
-        // Randomize order for puzzle variance
+
         for (let i = nums.length - 1; i > 0; i--) {
           const j = Math.floor(Math.random() * (i + 1));
           [nums[i], nums[j]] = [nums[j], nums[i]];
@@ -75,16 +75,16 @@ const solveSudoku = (board: number[][], size: SudokuSize): boolean => {
   return true;
 };
 
-// Generates a valid puzzle
+
 const generateSudoku = (size: SudokuSize) => {
   const solved = Array.from({ length: size }, () => Array(size).fill(0));
   solveSudoku(solved, size);
 
   const puzzle = solved.map((row) => [...row]);
   let cellsToRemove = 0;
-  if (size === 4) cellsToRemove = 8; // 8 clues remaining (50%)
-  else if (size === 6) cellsToRemove = 18; // 18 clues remaining (50%)
-  else if (size === 9) cellsToRemove = 42; // 39 clues remaining (~48%)
+  if (size === 4) cellsToRemove = 8;
+  else if (size === 6) cellsToRemove = 18;
+  else if (size === 9) cellsToRemove = 42;
 
   let removed = 0;
   while (removed < cellsToRemove) {
@@ -99,7 +99,7 @@ const generateSudoku = (size: SudokuSize) => {
   return { solved, puzzle };
 };
 
-// Compute conflicts list
+
 const checkConflicts = (currentBoard: (number | null)[][], size: SudokuSize): boolean[][] => {
   const conf = Array.from({ length: size }, () => Array(size).fill(false));
   if (!currentBoard || currentBoard.length < size) return conf;
@@ -118,7 +118,7 @@ const checkConflicts = (currentBoard: (number | null)[][], size: SudokuSize): bo
       const val = currentBoard[r][c];
       if (val === null || val === 0) continue;
 
-      // Row check
+
       for (let i = 0; i < size; i++) {
         if (i !== c && currentBoard[r][i] === val) {
           conf[r][c] = true;
@@ -126,7 +126,7 @@ const checkConflicts = (currentBoard: (number | null)[][], size: SudokuSize): bo
         }
       }
 
-      // Col check
+
       for (let i = 0; i < size; i++) {
         if (i !== r && currentBoard[i][c] === val) {
           conf[r][c] = true;
@@ -134,7 +134,7 @@ const checkConflicts = (currentBoard: (number | null)[][], size: SudokuSize): bo
         }
       }
 
-      // Box check
+
       const boxStartRow = Math.floor(r / boxRows) * boxRows;
       const boxStartCol = Math.floor(c / boxCols) * boxCols;
       for (let i = 0; i < boxRows; i++) {
@@ -159,7 +159,7 @@ export default function RelaxSudokuScreen() {
   const [solvedBoard, setSolvedBoard] = useState<number[][]>([]);
   const [puzzleBoard, setPuzzleBoard] = useState<(number | null)[][]>([]);
   const [playerBoard, setPlayerBoard] = useState<(number | null)[][]>([]);
-  
+
   const [selectedCell, setSelectedCell] = useState<CellCoord>(null);
   const [timer, setTimer] = useState(0);
   const [isRunning, setIsRunning] = useState(false);
@@ -167,8 +167,9 @@ export default function RelaxSudokuScreen() {
   const [bestTime, setBestTime] = useState<number | null>(null);
 
   const timerRef = useRef<any>(null);
+  const sessionTokenRef = useRef<string | null>(null);
 
-  // Load best time for selected size
+
   useEffect(() => {
     const loadBestTime = async () => {
       try {
@@ -184,7 +185,7 @@ export default function RelaxSudokuScreen() {
     loadBestTime();
   }, [boardSize]);
 
-  // Stopwatch timer hook
+
   useEffect(() => {
     if (isRunning && !gameOver) {
       timerRef.current = setInterval(() => {
@@ -199,10 +200,10 @@ export default function RelaxSudokuScreen() {
     };
   }, [isRunning, gameOver]);
 
-  // Generate board cells variables
+
   const cellWidth = Math.floor((BOARD_SIZE - BOARD_PADDING * 2) / boardSize);
 
-  // Box configurations for grid borders
+
   let boxRows = 3;
   let boxCols = 3;
   if (boardSize === 4) {
@@ -215,8 +216,8 @@ export default function RelaxSudokuScreen() {
 
   const startNewGame = (size: SudokuSize) => {
     const { solved, puzzle } = generateSudoku(size);
-    
-    // Replace 0 with null for user interaction
+
+
     const initBoard = puzzle.map((row) => row.map((val) => (val === 0 ? null : val)));
     const playBoard = puzzle.map((row) => row.map((val) => (val === 0 ? null : val)));
 
@@ -227,16 +228,22 @@ export default function RelaxSudokuScreen() {
     setTimer(0);
     setGameOver(false);
     setIsRunning(true);
-    
+    sessionTokenRef.current = null;
+    if (token) {
+      startLeaderboardSession(token, "sudoku").then((sessionToken) => {
+        sessionTokenRef.current = sessionToken;
+      });
+    }
+
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     } catch (e) {}
   };
 
   const handleCellPress = (r: number, c: number) => {
-    // If it's an initial clue, it cannot be modified
+
     if (puzzleBoard[r][c] !== null) return;
-    
+
     setSelectedCell({ r, c });
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -255,18 +262,18 @@ export default function RelaxSudokuScreen() {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch (e) {}
 
-    // Check if fully and correctly solved
+
     const hasConflictsList = checkConflicts(newBoard, boardSize);
     const hasAnyConflict = hasConflictsList.some((row) => row.some((c) => c));
     const isFull = newBoard.every((row) => row.every((val) => val !== null));
 
     if (isFull && !hasAnyConflict) {
-      // Victory!
+
       setGameOver(true);
       setIsRunning(false);
       saveBestTime();
-      
-      // Calculate score based on grid size and completion time
+
+
       let calculatedScore = 100;
       if (boardSize === 4) {
         calculatedScore = Math.max(100, 1000 - 5 * timer);
@@ -276,19 +283,17 @@ export default function RelaxSudokuScreen() {
         calculatedScore = Math.max(1000, 10000 - 2 * timer);
       }
 
-      if (token) {
-        const timestamp = Math.floor(Date.now() / 1000);
-        const signature = generateLeaderboardSignature("sudoku", calculatedScore, timestamp);
+      if (token && sessionTokenRef.current) {
         authedFetch(token, "/api/leaderboard/submit", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             game_type: "sudoku",
             score: calculatedScore,
-            timestamp,
-            signature,
+            session_token: sessionTokenRef.current,
           }),
         }).catch(() => {});
+        sessionTokenRef.current = null;
       }
 
       try {
@@ -305,7 +310,7 @@ export default function RelaxSudokuScreen() {
       const currentBest = await AsyncStorage.getItem(key);
       if (currentBest === null || timer < parseInt(currentBest, 10)) {
         await AsyncStorage.setItem(key, timer.toString());
-        setBestTime(timer); // Update UI state directly to prevent race condition
+        setBestTime(timer);
       }
     } catch (e) {}
   };
@@ -330,7 +335,7 @@ export default function RelaxSudokuScreen() {
       <TopBar title="Sudoku" showBack={true} backPath="/relax" />
       <ContentBackground>
         <View style={styles.container}>
-          {/* Header Stats */}
+
           {isRunning && (
             <View style={styles.statsPanel}>
               <LinearGradient
@@ -355,7 +360,7 @@ export default function RelaxSudokuScreen() {
             </View>
           )}
 
-          {/* Board Grid Wrap */}
+
           {isRunning && (
             <LinearGradient
               colors={["rgba(255, 255, 255, 0.05)", "rgba(255, 255, 255, 0.02)"]}
@@ -368,7 +373,7 @@ export default function RelaxSudokuScreen() {
                     const isSelected = selectedCell?.r === rIdx && selectedCell?.c === cIdx;
                     const hasConflict = conflicts[rIdx][cIdx];
 
-                    // Grid subgrid thicker border conditions
+
                     const isRightBorderThick = (cIdx + 1) % boxCols === 0 && cIdx !== boardSize - 1;
                     const isBottomBorderThick = (rIdx + 1) % boxRows === 0 && rIdx !== boardSize - 1;
 
@@ -403,7 +408,7 @@ export default function RelaxSudokuScreen() {
                 </View>
               ))}
 
-              {/* Game Over victory screen overlay */}
+
               {gameOver && (
                 <View style={styles.overlay}>
                   <LinearGradient
@@ -435,7 +440,7 @@ export default function RelaxSudokuScreen() {
             </LinearGradient>
           )}
 
-          {/* Keypad numbers adapt dynamically */}
+
           {isRunning && !gameOver && (
             <View style={styles.keypadContainer}>
               <View style={styles.keypadRow}>
@@ -479,7 +484,7 @@ export default function RelaxSudokuScreen() {
             </View>
           )}
 
-          {/* Start Size Selection Screen */}
+
           {!isRunning && (
             <View style={styles.startPanel}>
               <LinearGradient
@@ -487,7 +492,7 @@ export default function RelaxSudokuScreen() {
                 style={[styles.startCard, shadow.card]}
               >
                 <Ionicons name="apps-outline" size={48} color={theme.violet} style={{ marginBottom: 12 }} />
-                
+
                 <T variant="h2" color={theme.textOnDark} style={{ marginBottom: 8, fontWeight: "700" }}>
                   Sudoku
                 </T>

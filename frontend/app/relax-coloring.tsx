@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from "react";
-import { StyleSheet, View, TouchableOpacity, Dimensions, Vibration } from "react-native";
+import { StyleSheet, View, TouchableOpacity, Dimensions } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 
 import ContentBackground from "@/src/components/ContentBackground";
@@ -17,24 +16,24 @@ const BOARD_PADDING = 12;
 const BOARD_SIZE = width - 32;
 const CELL_SIZE = Math.floor((BOARD_SIZE - BOARD_PADDING * 2) / GRID_SIZE);
 
-// Calming pastel palette
+
 const PALETTE = [
-  "#FF8A8A", // Soft Red
-  "#FFB38A", // Soft Orange
-  "#FFF58A", // Soft Yellow
-  "#8AFF9C", // Soft Green
-  "#8AE0FF", // Soft Blue
-  "#A08AFF", // Soft Violet
-  "#FF8AE0", // Soft Pink
-  "transparent", // Eraser
+  "#FF8A8A",
+  "#FFB38A",
+  "#FFF58A",
+  "#8AFF9C",
+  "#8AE0FF",
+  "#A08AFF",
+  "#FF8AE0",
+  "transparent",
 ];
 
 type TemplateName = "HEART" | "FLOWER" | "SUN" | "FREE";
 
-// 12x12 Boolean matrix for outlines
+
 const TEMPLATES: Record<TemplateName, boolean[][]> = {
   FREE: Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(false)),
-  
+
   HEART: [
     [false, false, false, false, false, false, false, false, false, false, false, false],
     [false, false, false, false, false, false, false, false, false, false, false, false],
@@ -82,14 +81,13 @@ const TEMPLATES: Record<TemplateName, boolean[][]> = {
 };
 
 export default function RelaxColoringScreen() {
-  const router = useRouter();
 
-  // State
+
   const [activeTemplate, setActiveTemplate] = useState<TemplateName>("HEART");
   const [activeColor, setActiveColor] = useState(PALETTE[0]);
   const [grid, setGrid] = useState<string[][]>([]);
 
-  // Initialize board on load / template switch
+
   useEffect(() => {
     resetGrid();
   }, [activeTemplate]);
@@ -117,7 +115,7 @@ export default function RelaxColoringScreen() {
       <TopBar title="Pixel Színező" showBack={true} backPath="/relax" />
       <ContentBackground>
         <View style={styles.container}>
-          {/* Template Selector Options */}
+
           <View style={styles.templatePanel}>
             {(["HEART", "FLOWER", "SUN", "FREE"] as TemplateName[]).map((name) => {
               const isActive = activeTemplate === name;
@@ -146,7 +144,7 @@ export default function RelaxColoringScreen() {
             })}
           </View>
 
-          {/* Board Grid Wrap */}
+
           <LinearGradient
             colors={["rgba(255, 255, 255, 0.05)", "rgba(255, 255, 255, 0.02)"]}
             style={[styles.boardWrap, shadow.card]}
@@ -167,7 +165,7 @@ export default function RelaxColoringScreen() {
                       onPress={() => handleCellPress(rIdx, cIdx)}
                       activeOpacity={0.75}
                     >
-                      {/* Guide dot for outline template */}
+
                       {!hasColor && isTemplateOutline ? (
                         <View style={styles.outlineDot} />
                       ) : null}
@@ -178,7 +176,7 @@ export default function RelaxColoringScreen() {
             ))}
           </LinearGradient>
 
-          {/* Palette Colors Selector */}
+
           <View style={styles.paletteContainer}>
             <T variant="small" color="rgba(247,251,255,0.5)" style={{ marginBottom: 12 }}>
               Válassz színt és érintsd meg a rácsot:
@@ -213,7 +211,7 @@ export default function RelaxColoringScreen() {
             </View>
           </View>
 
-          {/* Control Footer */}
+
           <View style={styles.footer}>
             <TouchableOpacity
               style={styles.actionButton}

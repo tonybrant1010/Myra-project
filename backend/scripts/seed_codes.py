@@ -1,6 +1,5 @@
 """Seed the 256 ESV state codes from the LibreOffice ODS file into SQLite."""
 import asyncio
-import os
 import re
 import sys
 from pathlib import Path
@@ -11,12 +10,12 @@ ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 sys.path.insert(0, str(ROOT))
 
-from odf.opendocument import load as load_ods  # type: ignore
-from odf.table import Table, TableRow, TableCell  # type: ignore
-from odf.text import P  # type: ignore
+from odf.opendocument import load as load_ods  # type: ignore  # noqa: E402
+from odf.table import Table, TableRow, TableCell  # type: ignore  # noqa: E402
+from odf.text import P  # type: ignore  # noqa: E402
 
-from server import StateCode, SessionLocal, engine, Base, _now  # type: ignore
-from sqlalchemy import select
+from server import StateCode, SessionLocal, engine, Base, _now  # type: ignore  # noqa: E402
+from sqlalchemy import select  # noqa: E402
 
 
 def cell_text(cell) -> str:
@@ -63,7 +62,8 @@ def parse_codes(ods_path: Path):
 async def main():
     ods = ROOT / "data" / "esv_calc.ods"
     if not ods.exists():
-        print("ERROR: data/esv_calc.ods missing", file=sys.stderr); sys.exit(1)
+        print("ERROR: data/esv_calc.ods missing", file=sys.stderr)
+        sys.exit(1)
     items = parse_codes(ods)
     print(f"Parsed {len(items)} codes")
 

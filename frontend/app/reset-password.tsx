@@ -12,7 +12,7 @@ const PASSWORD_MAX_CHARS = 128;
 
 export default function ResetPasswordScreen() {
   const router = useRouter();
-  const { token } = useLocalSearchParams<{ token: string }>(); // Kinyeri a ?token=... részt az URL-ből
+  const { token } = useLocalSearchParams<{ token: string }>();
   const [password, setPassword] = useState("");
   const [passwordConfirm, setPasswordConfirm] = useState("");
   const [busy, setBusy] = useState(false);

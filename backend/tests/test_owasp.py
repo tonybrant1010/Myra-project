@@ -14,16 +14,12 @@ import sys
 import uuid
 import time
 import pytest
-import httpx
 
-# A backend mappa a tesztfájl szülőjének szülője
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import jwt as pyjwt
-from server import app, JWT_SECRET, JWT_ALG
+from server import JWT_SECRET, JWT_ALG
 
-
-# ---------- Segédfüggvények ----------
 
 TEST_PASSWORD = "OwaspTest!2026"
 
@@ -36,11 +32,6 @@ def _unique_email() -> str:
 def _create_fake_jwt(payload: dict, secret: str = JWT_SECRET, algorithm: str = JWT_ALG) -> str:
     """Teszt JWT token generálása megadott payload-dal."""
     return pyjwt.encode(payload, secret, algorithm=algorithm)
-
-
-# ---------- Fixtures ----------
-
-
 
 
 @pytest.fixture
@@ -66,8 +57,6 @@ async def normal_user(client):
     }
 
 
-# ---------- SQL Injection tesztek ----------
-
 @pytest.mark.anyio
 async def test_sql_injection_in_login_email(client):
     """SQL injection kísérlet az email mezőben elutasításra kerül."""
@@ -82,7 +71,6 @@ async def test_sql_injection_in_login_email(client):
             "email": payload,
             "password": "irrelevant",
         })
-        # A Pydantic EmailStr validáció vagy a szerver logika elutasítja
         assert resp.status_code in (401, 422), \
             f"SQL injection nem került elutasításra: '{payload}' -> {resp.status_code}"
 
@@ -98,7 +86,6 @@ async def test_sql_injection_in_register_email(client):
         "accepted_terms_version": "2026-06-15",
         "accepted_privacy_version": "2026-06-15",
     })
-    # A Pydantic EmailStr validáció elutasítja az érvénytelen emailt
     assert resp.status_code in (400, 422), \
         f"SQL injection regisztrációban nem került elutasításra: {resp.status_code}"
 
@@ -115,18 +102,13 @@ async def test_sql_injection_in_register_name(client):
         "accepted_terms_version": "2026-06-15",
         "accepted_privacy_version": "2026-06-15",
     })
-    # A paraméterezett lekérdezések miatt a szerver nem fut bele SQL hibába
-    # Vagy 200 (sikeresen létrejön, de a név egy szöveg), vagy validációs hiba
     assert resp.status_code in (200, 400, 422), \
         f"Váratlan válasz SQL injection a name mezőben: {resp.status_code}"
 
 
-# ---------- XSS tesztek ----------
-
 @pytest.mark.anyio
 async def test_xss_in_register_name(client):
     """XSS payload a name mezőben nem jelenik meg a válaszban védetlenül."""
-    email = _unique_email()
     xss_payloads = [
         "<script>alert('xss')</script>",
         "<img src=x onerror=alert('xss')>",
@@ -135,7 +117,7 @@ async def test_xss_in_register_name(client):
     ]
     for payload in xss_payloads:
         resp = await client.post("/api/auth/register", json={
-            "email": _unique_email(),  # Egyedi email minden kísérlethez
+            "email": _unique_email(),
             "name": payload,
             "password": TEST_PASSWORD,
             "accepted_terms": True,
@@ -143,14 +125,9 @@ async def test_xss_in_register_name(client):
             "accepted_privacy_version": "2026-06-15",
         })
         if resp.status_code == 200:
-            data = resp.json()
-            response_text = str(data)
-            # Ellenőrizzük, hogy a válasz JSON-ben van (nem HTML-ben),
-            # és a Content-Type helyes
             content_type = resp.headers.get("content-type", "")
             assert "application/json" in content_type, \
                 f"A válasz Content-Type-nak JSON-nek kell lennie: {content_type}"
-            # Ellenőrizzük, hogy az X-Content-Type-Options header jelen van
             assert resp.headers.get("x-content-type-options") == "nosniff", \
                 "Hiányzó X-Content-Type-Options: nosniff a válaszból"
 
@@ -162,23 +139,18 @@ async def test_xss_in_login_email(client):
         "email": "<script>alert('xss')</script>",
         "password": TEST_PASSWORD,
     })
-    # A Pydantic EmailStr validáció elutasítja
     assert resp.status_code in (401, 422), \
         f"XSS payload a login emailben nem került elutasításra: {resp.status_code}"
 
 
-# ---------- Túl nagy request (Body Size Limit) tesztek ----------
-
 @pytest.mark.anyio
 async def test_oversized_request_body_rejected(client):
     """Túl nagy request body (>1MB) elutasításra kerül 413-as hibával."""
-    # Generáljunk egy 2MB-os payload-ot
     oversized_data = "A" * (2 * 1024 * 1024)
     resp = await client.post(
         "/api/auth/login",
         json={"email": "test@example.com", "password": oversized_data},
     )
-    # A szerver vagy 413 (too large) vagy 422 (validation, mert max_length=128) hibát ad
     assert resp.status_code in (413, 422), \
         f"Túl nagy request nem került elutasításra: {resp.status_code}"
 
@@ -191,15 +163,12 @@ async def test_oversized_request_with_content_length(client):
         content=b'{"email":"a@b.com","password":"x"}',
         headers={
             "Content-Type": "application/json",
-            "Content-Length": str(20 * 1024 * 1024),  # 20MB
+            "Content-Length": str(20 * 1024 * 1024),
         },
     )
-    # A middleware ellenőrzi a Content-Length-et és 413-at ad
     assert resp.status_code in (413, 422, 400), \
         f"Túl nagy Content-Length nem került elutasításra: {resp.status_code}"
 
-
-# ---------- Érvénytelen JWT tesztek ----------
 
 @pytest.mark.anyio
 async def test_invalid_jwt_signature_rejected(client):
@@ -237,8 +206,8 @@ async def test_expired_jwt_rejected(client):
         "token_version": 0,
         "mfa": False,
         "mfa_at": None,
-        "iat": now - 7200,      # 2 órával ezelőtt kibocsátva
-        "exp": now - 3600,       # 1 órával ezelőtt lejárt
+        "iat": now - 7200,
+        "exp": now - 3600,
         "type": "access",
     })
     resp = await client.get(
@@ -261,7 +230,7 @@ async def test_jwt_wrong_type_rejected(client):
         "mfa_at": None,
         "iat": now,
         "exp": now + 3600,
-        "type": "refresh",  # Hibás típus
+        "type": "refresh",
     })
     resp = await client.get(
         "/api/auth/me",
@@ -278,7 +247,7 @@ async def test_jwt_tampered_payload_rejected(client):
         {
             "sub": "1",
             "email": "tampered@example.com",
-            "is_admin": True,  # Megpróbáljuk admin-nak állítani
+            "is_admin": True,
             "token_version": 0,
             "mfa": True,
             "mfa_at": now,
@@ -306,8 +275,6 @@ async def test_completely_random_jwt_rejected(client):
     assert resp.status_code == 401, \
         f"Véletlenszerű JWT nem került elutasításra: {resp.status_code}"
 
-
-# ---------- Jogosultsági bypass tesztek ----------
 
 @pytest.mark.anyio
 async def test_normal_user_cannot_access_admin_settings(client, normal_user):

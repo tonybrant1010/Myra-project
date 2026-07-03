@@ -58,7 +58,7 @@ export default function AdminSettingsScreen() {
   const [liveModel, setLiveModel] = useState("");
   const [liveApiKey, setLiveApiKey] = useState("");
 
-  // SOS Emergency states
+
   const [maintenance, setMaintenance] = useState(false);
   const [maintenanceLoading, setMaintenanceLoading] = useState(false);
   const [diag, setDiag] = useState<any>(null);
@@ -93,7 +93,7 @@ export default function AdminSettingsScreen() {
         setLiveModel(d.live_model || "gemini-3.1-flash-live-preview");
       }
 
-      // Load maintenance status
+
       const mr = await authedFetch(token, "/api/admin/maintenance");
       if (mr.ok) {
         const md = await mr.json();
@@ -303,8 +303,8 @@ export default function AdminSettingsScreen() {
             <View style={styles.center}><ActivityIndicator color={theme.accent} /></View>
           ) : (
             <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-              
-              {/* GROUP 1: CHATBOT BEÁLLÍTÁSOK */}
+
+
               <Section title="Chatbot & MI Asszisztens" icon="sparkles-outline">
                 <T variant="small" color="rgba(247,251,255,0.66)" style={styles.sectionHelp}>
                   Itt adhatod meg a Myra chatbot és a hangalapú asszisztens működését vezérlő MI modellek adatait és a system promptot.
@@ -412,7 +412,7 @@ export default function AdminSettingsScreen() {
                 />
               </Section>
 
-              {/* GROUP 2: RENDSZER & KÖZLEMÉNYEK */}
+
               <Section title="Rendszer & Karbantartás" icon="construct-outline">
                 <T variant="small" color="rgba(247,251,255,0.66)" style={styles.sectionHelp}>
                   Globális értesítés a felhasználók felé és biztonsági adatbázis mentések.
@@ -442,7 +442,7 @@ export default function AdminSettingsScreen() {
                 </TouchableOpacity>
               </Section>
 
-              {/* GROUP 3: SÜRGŐSSÉGI ESZKÖZÖK */}
+
               <View style={styles.sosCard}>
                 <View style={styles.sosHeader}>
                   <View style={styles.sosIcon}>
@@ -455,7 +455,7 @@ export default function AdminSettingsScreen() {
                   Rendszerdiagnosztika, karbantartási mód, munkamenetek törlése, backend újraindítás és teljes rendszer-leállítás közvetlenül mobilról.
                 </T>
 
-                {/* Diagnostics Panel */}
+
                 <View style={styles.emergencyCard}>
                   <TouchableOpacity style={styles.emergencyRowHeader} onPress={runDiagnostics} disabled={diagLoading}>
                     <T variant="label" color={theme.accent}>Rendszerdiagnosztika futtatása</T>
@@ -512,7 +512,7 @@ export default function AdminSettingsScreen() {
                   testID="sos-admin-password"
                 />
 
-                {/* Maintenance Switch */}
+
                 <TouchableOpacity
                   style={[styles.emergencyActionBtn, maintenance && { backgroundColor: theme.warm }]}
                   onPress={toggleMaintenance}
@@ -528,7 +528,7 @@ export default function AdminSettingsScreen() {
                   )}
                 </TouchableOpacity>
 
-                {/* Force Logout */}
+
                 <TouchableOpacity
                   style={[styles.emergencyActionBtn, { backgroundColor: "#851c1c" }]}
                   onPress={forceLogoutAll}
@@ -542,7 +542,7 @@ export default function AdminSettingsScreen() {
                   )}
                 </TouchableOpacity>
 
-                {/* Backend Restart */}
+
                 <TouchableOpacity
                   style={[styles.emergencyActionBtn, { backgroundColor: theme.danger }]}
                   onPress={restartBackend}
@@ -556,7 +556,7 @@ export default function AdminSettingsScreen() {
                   )}
                 </TouchableOpacity>
 
-                {/* Docker Compose Down (New!) */}
+
                 <TouchableOpacity
                   style={[styles.emergencyActionBtn, { backgroundColor: "#b71c1c", borderWidth: 1, borderColor: "#ffcdd2" }]}
                   onPress={dockerComposeDown}
@@ -570,7 +570,7 @@ export default function AdminSettingsScreen() {
                   )}
                 </TouchableOpacity>
 
-                {/* In-Memory Logs */}
+
                 <View style={[styles.emergencyCard, { marginTop: 12 }]}>
                   <TouchableOpacity
                     style={styles.emergencyRowHeader}
@@ -750,7 +750,7 @@ const styles = StyleSheet.create({
   },
   feedback: { marginBottom: 10, marginTop: 10 },
 
-  // Emergency (SOS) styles
+
   sosCard: {
     marginBottom: 20,
     marginTop: 24,

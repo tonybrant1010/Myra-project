@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { ScrollView, StyleSheet, View, Platform, type LayoutChangeEvent, TouchableOpacity, ActivityIndicator } from "react-native";
+import { ScrollView, StyleSheet, View, type LayoutChangeEvent, TouchableOpacity, ActivityIndicator } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -19,10 +19,10 @@ type SessionItem = {
 };
 
 const chartDimensions = [
-  { key: "a" as const, label: "Érzelem (A)", color: "#57C7FF" }, // Cyan
-  { key: "p" as const, label: "Szabályozás (P)", color: "#ecc94b" }, // Warm Yellow
-  { key: "h" as const, label: "Stressz (H)", color: "#38a169" }, // Calm Green
-  { key: "c" as const, label: "Testi tünetek (C)", color: "#e53e3e" }, // Danger Red
+  { key: "a" as const, label: "Érzelem (A)", color: "#57C7FF" },
+  { key: "p" as const, label: "Szabályozás (P)", color: "#ecc94b" },
+  { key: "h" as const, label: "Stressz (H)", color: "#38a169" },
+  { key: "c" as const, label: "Testi tünetek (C)", color: "#e53e3e" },
 ];
 
 function shortDate(value: string): string {
@@ -91,7 +91,7 @@ function UserTrendChart({ sessions, onNewQuiz }: { sessions: SessionItem[]; onNe
 
         {plotWidth > 0 && (
           <>
-            {/* Draw lines */}
+
             {chartDimensions.map((dimension) => (
               <React.Fragment key={`lines-${dimension.key}`}>
                 {chartSessions.map((session, idx) => {
@@ -118,7 +118,7 @@ function UserTrendChart({ sessions, onNewQuiz }: { sessions: SessionItem[]; onNe
                 })}
               </React.Fragment>
             ))}
-            {/* Draw dots */}
+
             {chartDimensions.map((dimension) => (
               <React.Fragment key={`points-${dimension.key}`}>
                 {chartSessions.map((session, idx) => {
@@ -132,7 +132,7 @@ function UserTrendChart({ sessions, onNewQuiz }: { sessions: SessionItem[]; onNe
                 })}
               </React.Fragment>
             ))}
-            {/* Draw dates under each session point */}
+
             {chartSessions.map((session, idx) => {
               const point = pointFor(session, idx, "a");
               return (

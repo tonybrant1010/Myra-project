@@ -40,7 +40,7 @@ function buildListItems(messages: Msg[], currentCode: string | null | undefined)
 }
 
 function formatMessageTime(value: string): string {
-  // A backend UTC időt ad vissza, de nem mindig Z suffix-szel - explicit UTC-ként kezeljük
+
   const normalized = value.endsWith("Z") || value.includes("+") ? value : value + "Z";
   const d = new Date(normalized);
   if (Number.isNaN(d.getTime())) return "";
@@ -187,8 +187,6 @@ export default function ChatScreen() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [viewSessionId, setViewSessionId] = useState<string | null>(null);
   const listRef = useRef<FlatList>(null);
-  const audioRef = useRef<any>(null);
-  const audioUrlRef = useRef<string | null>(null);
   const recognitionRef = useRef<any>(null);
   const dictationBaseRef = useRef("");
   const revealTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);

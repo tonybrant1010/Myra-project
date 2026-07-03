@@ -12,7 +12,6 @@ import {
   Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth, authedFetch } from "@/src/auth/AuthContext";
 import { useAuthGuard } from "@/src/auth/useAuthGuard";
@@ -35,7 +34,6 @@ const AVAILABLE_AVATARS = ["🦊", "🐱", "🐶", "🐻", "🐼", "🐨", "🐯
 export default function ForumScreen() {
   useAuthGuard();
   const { token, user } = useAuth();
-  const router = useRouter();
 
   const [posts, setPosts] = useState<ForumPost[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,7 +48,7 @@ export default function ForumScreen() {
 
   const flatListRef = useRef<FlatList>(null);
 
-  // Fetch profile settings
+
   const loadProfile = useCallback(async () => {
     if (!token) return;
     try {
@@ -69,7 +67,7 @@ export default function ForumScreen() {
     }
   }, [token]);
 
-  // Fetch forum messages
+
   const loadPosts = useCallback(async (silent = false) => {
     if (!token) return;
     if (!silent) setLoading(true);
@@ -89,7 +87,7 @@ export default function ForumScreen() {
     loadPosts();
   }, [loadProfile, loadPosts]);
 
-  // Auto-refresh posts every 5 seconds for a "live" feel
+
   useEffect(() => {
     const interval = setInterval(() => {
       loadPosts(true);
@@ -97,7 +95,7 @@ export default function ForumScreen() {
     return () => clearInterval(interval);
   }, [loadPosts]);
 
-  // Scroll to bottom helper
+
   const scrollToBottom = () => {
     setTimeout(() => {
       flatListRef.current?.scrollToEnd({ animated: true });
@@ -226,25 +224,28 @@ export default function ForumScreen() {
                     </View>
                     <View style={[styles.messageBubble, isOwn && styles.messageBubbleOwn]}>
                       <View style={styles.messageHeader}>
-                        <T variant="small" color={theme.accent} style={{ fontWeight: "700" }}>
-                          {item.nickname}
-                        </T>
-                        <T variant="small" color="rgba(255,255,255,0.4)" style={{ marginLeft: 6 }}>
-                          {formatTime(item.created_at)}
-                        </T>
+                        <View style={styles.messageHeaderText}>
+                          <T variant="small" color={theme.accent} style={{ fontWeight: "700" }}>
+                            {item.nickname}
+                          </T>
+                          <T variant="small" color="rgba(255,255,255,0.4)" style={{ marginLeft: 6 }}>
+                            {formatTime(item.created_at)}
+                          </T>
+                        </View>
+                        {canDelete && (
+                          <TouchableOpacity
+                            style={styles.deleteBtn}
+                            onPress={() => handleDeletePost(item.id)}
+                            activeOpacity={0.7}
+                            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                          >
+                            <Ionicons name="trash-outline" size={14} color="rgba(255,100,100,0.7)" />
+                          </TouchableOpacity>
+                        )}
                       </View>
                       <T variant="body" color={theme.textOnDark} style={styles.messageText}>
                         {item.content}
                       </T>
-                      {canDelete && (
-                        <TouchableOpacity
-                          style={styles.deleteBtn}
-                          onPress={() => handleDeletePost(item.id)}
-                          activeOpacity={0.7}
-                        >
-                          <Ionicons name="trash-outline" size={14} color="rgba(255,100,100,0.7)" />
-                        </TouchableOpacity>
-                      )}
                     </View>
                   </View>
                 );
@@ -281,7 +282,7 @@ export default function ForumScreen() {
         </KeyboardAvoidingView>
       </ContentBackground>
 
-      {/* Setup Nickname & Avatar Modal */}
+
       <Modal visible={isSetupOpen} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
           <View style={[styles.setupCard, shadow.card]}>
@@ -393,15 +394,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 4,
   },
+  messageHeaderText: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingRight: 8,
+  },
   messageText: {
     lineHeight: 20,
-    paddingRight: 16,
   },
   deleteBtn: {
-    position: "absolute",
-    right: 8,
-    top: 8,
     padding: 4,
+    marginLeft: 4,
   },
   inputContainer: {
     padding: 16,

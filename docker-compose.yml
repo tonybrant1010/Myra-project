@@ -1,10 +1,32 @@
 services:
+  # Szűkre szabott, csak "container stop"-ot engedő proxy a nyers docker.sock elé.
+  # A backend konténer így nem kap közvetlen (gyakorlatilag root-ekvivalens) hozzáférést
+  # a hoszt teljes Docker daemonjához - csak ezen a proxyn keresztül, csak stop hívást
+  # tud indítani. Lásd: https://github.com/Tecnativa/docker-socket-proxy
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: myra-docker-socket-proxy
+    restart: unless-stopped
+    privileged: true
+    environment:
+      # Minden más API szekció (EXEC, IMAGES, NETWORKS, VOLUMES, BUILD, AUTH,
+      # SECRETS, SWARM stb.) alapértelmezetten (0) tiltva marad.
+      - CONTAINERS=1
+      - POST=1
+      - ALLOW_STOP=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # Szándékosan nincs "ports:" - csak a compose belső hálózatáról érhető el,
+    # a hoszton/kívülről nem publikált.
+
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: myra-backend
     restart: unless-stopped
+    depends_on:
+      - docker-socket-proxy
     ports:
       - "8001:8001"
     environment:
@@ -19,9 +41,9 @@ services:
       - MYRA_PROXY_SECRET=${MYRA_PROXY_SECRET:?set in .env}
       - GMAIL_USER=${GMAIL_USER:-}
       - GMAIL_APP_PASSWORD=${GMAIL_APP_PASSWORD:-}
+      - DOCKER_SOCKET_PROXY_URL=http://docker-socket-proxy:2375
     volumes:
       - ./backend/data:/app/data
-      - /var/run/docker.sock:/var/run/docker.sock
 
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/api/config').status==200 else 1)"]

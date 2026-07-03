@@ -21,7 +21,6 @@ def test_norm_version_is_2():
 
 
 def test_all_minimum_answers_reach_scale_edges():
-    # Csupa minimum: A/H/C = 0, P = 1 (legjobb szabályozás)
     norms = _compute_norms(_answers(1, 1, 1, 0))
     assert norms["a"] == 0.0
     assert norms["p"] == 1.0
@@ -32,7 +31,6 @@ def test_all_minimum_answers_reach_scale_edges():
 
 
 def test_all_maximum_answers_reach_scale_edges():
-    # Csupa maximum: A/H/C = 1, P = 0 (leggyengébb szabályozás)
     norms = _compute_norms(_answers(5, 5, 5, 2))
     assert norms["a"] == 1.0
     assert norms["p"] == 0.0
@@ -62,7 +60,6 @@ def test_all_norms_stay_in_unit_interval():
 def test_every_bucket_reachable_in_every_dimension():
     """v1-ben a P dimenzióban a 4-es bucket elérhetetlen volt — v2-ben már nem."""
     reachable = {"a": set(), "p": set(), "h": set(), "c": set()}
-    # A/P blokk: 6 kérdés, összeg 6..30; H: 4 kérdés, 4..20; C: 5 kérdés, 0..10
     for xa in range(6, 31):
         reachable["a"].add(_bucket((xa - 6) / 24.0))
         reachable["p"].add(_bucket(1.0 - (xa - 6) / 24.0))

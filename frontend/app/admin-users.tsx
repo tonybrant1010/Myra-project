@@ -192,7 +192,7 @@ function AdminTrendChart({ sessions }: { sessions: SessionItem[] }) {
 
         {plotWidth > 0 && (
           <>
-            {/* Előbb az összes vonal minden dimenzióra */}
+
             {chartDimensions.map((dimension) => (
               <React.Fragment key={`lines-${dimension.key}`}>
                 {chartSessions.map((session, idx) => {
@@ -219,7 +219,7 @@ function AdminTrendChart({ sessions }: { sessions: SessionItem[] }) {
                 })}
               </React.Fragment>
             ))}
-            {/* Majd az összes pont minden dimenzióra – ezek mindig a vonalak felett */}
+
             {chartDimensions.map((dimension) => (
               <React.Fragment key={`points-${dimension.key}`}>
                 {chartSessions.map((session, idx) => {
@@ -439,7 +439,7 @@ export default function AdminUsersScreen() {
                       </T>
                     )}
 
-                    {/* Akció gombok */}
+
                     <View style={styles.actionRow}>
                       <TouchableOpacity
                         style={styles.actionBtn}
@@ -496,7 +496,7 @@ export default function AdminUsersScreen() {
         </View>
       </ContentBackground>
 
-      {/* Mérések modal */}
+
       <Modal
         visible={!!selectedUser}
         transparent
@@ -522,7 +522,7 @@ export default function AdminUsersScreen() {
             ) : (
               <ScrollView showsVerticalScrollIndicator={false}>
                 <AdminTrendChart sessions={sessions} />
-                {sessions.map((s, idx) => (
+                {sessions.map((s) => (
                   <View key={s.id} style={styles.sessionRow}>
                     <View style={styles.sessionHead}>
                       <T variant="label" color={theme.textOnDark} style={{ fontWeight: "700" }}>{s.code}</T>

@@ -1,7 +1,4 @@
-// Native storage (Metro picks index.web.ts on web).
-// Helpers never throw: reads return `fallback`, writes return `false`.
-// Values supported: string | number | boolean | null (JSON-serialized on disk).
-// Usage: import { storage } from "@/src/utils/storage"; await storage.getItem(key, fallback);
+
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
@@ -9,7 +6,7 @@ import * as SecureStore from "expo-secure-store";
 import { AssertNoExtras, StorageBase, StorageItemValue } from "./storage-base";
 
 export class Storage extends StorageBase {
-  // General KV — backed by AsyncStorage.
+
   async getItem<Fallback extends StorageItemValue>(
     key: string,
     fallback: Fallback,
@@ -46,7 +43,7 @@ export class Storage extends StorageBase {
     }
   }
 
-  // Sensitive values — Keychain (iOS) / EncryptedSharedPreferences (Android).
+
   async secureGet<Fallback extends StorageItemValue>(
     key: string,
     fallback: Fallback,
@@ -86,5 +83,5 @@ export class Storage extends StorageBase {
 
 export const storage = new Storage();
 
-// Compile-time guard: any new method must be declared in storage-base.ts first.
+
 type _NoExtras = AssertNoExtras<Exclude<keyof Storage, keyof StorageBase>>;

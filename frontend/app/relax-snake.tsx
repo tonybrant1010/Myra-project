@@ -3,11 +3,10 @@ import { StyleSheet, View, TouchableOpacity, Dimensions, Vibration } from "react
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import { authedFetch, useAuth } from "@/src/auth/AuthContext";
-import { generateLeaderboardSignature } from "@/src/utils/crypto";
+import { startLeaderboardSession } from "@/src/utils/crypto";
 
 import ContentBackground from "@/src/components/ContentBackground";
 import TopBar from "@/src/components/TopBar";
@@ -24,10 +23,9 @@ type Coord = { x: number; y: number };
 type Direction = "UP" | "DOWN" | "LEFT" | "RIGHT";
 
 export default function RelaxSnakeScreen() {
-  const router = useRouter();
   const { token } = useAuth();
 
-  // State
+
   const [snake, setSnake] = useState<Coord[]>([
     { x: 6, y: 6 },
     { x: 6, y: 7 },
@@ -43,8 +41,9 @@ export default function RelaxSnakeScreen() {
 
   const directionRef = useRef<Direction>("UP");
   const lastDirectionRef = useRef<Direction>("UP");
+  const sessionTokenRef = useRef<string | null>(null);
 
-  // Load high score
+
   useEffect(() => {
     const loadHighScore = async () => {
       try {
@@ -57,7 +56,7 @@ export default function RelaxSnakeScreen() {
     loadHighScore();
   }, []);
 
-  // Save high score
+
   useEffect(() => {
     if (score > highScore) {
       setHighScore(score);
@@ -65,7 +64,7 @@ export default function RelaxSnakeScreen() {
     }
   }, [score, highScore]);
 
-  // Main Game Loop
+
   useEffect(() => {
     if (!isRunning || gameOver) return;
 
@@ -82,7 +81,7 @@ export default function RelaxSnakeScreen() {
     return () => clearInterval(interval);
   }, [isRunning, gameOver, snake, direction, speed]);
 
-  // Generate random food coordinates not on the snake
+
   const generateFood = (currentSnake: Coord[]): Coord => {
     let newFood: Coord;
     let isOnSnake = true;
@@ -117,13 +116,13 @@ export default function RelaxSnakeScreen() {
         break;
     }
 
-    // Check Wall Collisions
+
     if (newHead.x < 0 || newHead.x >= GRID_SIZE || newHead.y < 0 || newHead.y >= GRID_SIZE) {
       triggerGameOver();
       return;
     }
 
-    // Check Self Collisions (excluding the tail if it's going to move, but standard self-collision checks body)
+
     const hitSelf = snake.some((segment) => segment.x === newHead.x && segment.y === newHead.y);
     if (hitSelf) {
       triggerGameOver();
@@ -132,9 +131,9 @@ export default function RelaxSnakeScreen() {
 
     const newSnake = [newHead, ...snake];
 
-    // Check Food Collision
+
     if (newHead.x === food.x && newHead.y === food.y) {
-      // Eat food
+
       setScore((prev) => prev + 10);
       setFood(generateFood(newSnake));
       try {
@@ -143,7 +142,7 @@ export default function RelaxSnakeScreen() {
         Vibration.vibrate(40);
       }
     } else {
-      // Move forward (pop tail)
+
       newSnake.pop();
     }
 
@@ -153,19 +152,17 @@ export default function RelaxSnakeScreen() {
   const triggerGameOver = () => {
     setIsRunning(false);
     setGameOver(true);
-    if (token) {
-      const timestamp = Math.floor(Date.now() / 1000);
-      const signature = generateLeaderboardSignature("snake", score, timestamp);
+    if (token && sessionTokenRef.current) {
       authedFetch(token, "/api/leaderboard/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           game_type: "snake",
           score,
-          timestamp,
-          signature,
+          session_token: sessionTokenRef.current,
         }),
       }).catch(() => {});
+      sessionTokenRef.current = null;
     }
     try {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
@@ -202,6 +199,12 @@ export default function RelaxSnakeScreen() {
     setScore(0);
     setGameOver(false);
     setIsRunning(true);
+    sessionTokenRef.current = null;
+    if (token) {
+      startLeaderboardSession(token, "snake").then((sessionToken) => {
+        sessionTokenRef.current = sessionToken;
+      });
+    }
   };
 
   const resetToStartScreen = () => {
@@ -239,7 +242,7 @@ export default function RelaxSnakeScreen() {
       <TopBar title="Kígyó Játék" showBack={true} backPath="/relax" />
       <ContentBackground>
         <View style={styles.container}>
-          {/* Header Stats */}
+
           <View style={styles.statsPanel}>
             <LinearGradient
               colors={["rgba(255, 255, 255, 0.08)", "rgba(255, 255, 255, 0.03)"]}
@@ -262,12 +265,12 @@ export default function RelaxSnakeScreen() {
             </LinearGradient>
           </View>
 
-          {/* Board Wrap */}
+
           <LinearGradient
             colors={["rgba(255, 255, 255, 0.05)", "rgba(255, 255, 255, 0.02)"]}
             style={[styles.boardWrap, shadow.card]}
           >
-            {/* Render cells */}
+
             {Array(GRID_SIZE)
               .fill(null)
               .map((_, r) => (
@@ -295,7 +298,7 @@ export default function RelaxSnakeScreen() {
                 </View>
               ))}
 
-            {/* Game overlays */}
+
             {gameOver && (
               <View style={styles.overlay}>
                 <LinearGradient
@@ -330,18 +333,18 @@ export default function RelaxSnakeScreen() {
                   <T variant="h2" color={theme.textOnDark} style={{ marginBottom: 20, fontWeight: "700" }}>
                     Kígyó Játék
                   </T>
-                  
+
                   <T variant="small" color="rgba(247,251,255,0.6)" style={{ marginBottom: 8 }}>
                     Sebesség kiválasztása:
                   </T>
-                  
+
                   <View style={styles.speedRow}>
                     {(["SLOW", "MEDIUM", "FAST"] as const).map((s) => {
                       const isActive = speed === s;
                       let label = "Közepes";
                       if (s === "SLOW") label = "Lassú";
                       if (s === "FAST") label = "Gyors";
-                      
+
                       return (
                         <TouchableOpacity
                           key={s}
@@ -377,7 +380,7 @@ export default function RelaxSnakeScreen() {
             )}
           </LinearGradient>
 
-          {/* D-Pad Controller */}
+
           <View style={styles.controlsContainer}>
             <View style={styles.dpadRow}>
               <View style={styles.dpadCell} />
@@ -399,7 +402,7 @@ export default function RelaxSnakeScreen() {
               >
                 <Ionicons name="chevron-back" size={28} color={theme.textOnDark} />
               </TouchableOpacity>
-              {/* Pause/Play Button in the center */}
+
               <TouchableOpacity
                 style={[styles.dpadButton, styles.dpadCenterButton]}
                 onPress={toggleGame}

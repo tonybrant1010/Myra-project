@@ -5,14 +5,9 @@ import os
 import sys
 import uuid
 import pytest
-import httpx
 
-# A backend mappa a tesztfájl szülőjének szülője
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from server import app
 
-
-# ---------- Segédfüggvények ----------
 
 TEST_PASSWORD = "ComplianceTest!2026"
 
@@ -20,9 +15,6 @@ TEST_PASSWORD = "ComplianceTest!2026"
 def _unique_email() -> str:
     """Egyedi teszt email generálása."""
     return f"compliance_{uuid.uuid4().hex[:12]}@example.com"
-
-
-# ---------- Fixtures ----------
 
 
 @pytest.fixture
@@ -43,8 +35,6 @@ async def auth_headers(client):
     token = resp.json()["access_token"]
     return {"Authorization": f"Bearer {token}", "_email": email}
 
-
-# ---------- Data Export tesztek ----------
 
 @pytest.mark.anyio
 async def test_data_export_returns_200(client, auth_headers):
@@ -83,8 +73,6 @@ async def test_data_export_contains_user_data(client, auth_headers):
     assert data["user_profile"]["email"] == auth_headers["_email"]
 
 
-# ---------- Data Delete tesztek ----------
-
 @pytest.mark.anyio
 async def test_data_delete_with_password_confirmation(client, auth_headers):
     """DELETE /api/user/data-delete jelszó megerősítéssel törli a fiókot."""
@@ -120,8 +108,6 @@ async def test_data_delete_requires_auth(client):
     assert resp.status_code == 401, f"Várt 401, kapott: {resp.status_code}"
 
 
-# ---------- Legal / Privacy tesztek ----------
-
 @pytest.mark.anyio
 async def test_privacy_endpoint_returns_version(client):
     """GET /api/legal/privacy visszaadja az adatkezelési tájékoztató verzióját."""
@@ -143,8 +129,6 @@ async def test_privacy_version_format(client):
     assert len(parts) == 3, f"A verziónak YYYY-MM-DD formátumúnak kell lennie, kapott: {version}"
 
 
-# ---------- Legal / Terms tesztek ----------
-
 @pytest.mark.anyio
 async def test_terms_endpoint_returns_version(client):
     """GET /api/legal/terms visszaadja a felhasználási feltételek verzióját."""
@@ -165,8 +149,6 @@ async def test_terms_version_format(client):
     parts = version.split("-")
     assert len(parts) == 3, f"A verziónak YYYY-MM-DD formátumúnak kell lennie, kapott: {version}"
 
-
-# ---------- Consent tesztek ----------
 
 @pytest.mark.anyio
 async def test_consent_post_success(client, auth_headers):

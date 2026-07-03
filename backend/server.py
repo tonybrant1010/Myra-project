@@ -51,7 +51,6 @@ try:
 except ImportError:
     GOOGLE_GENAI_AVAILABLE = False
 
-# ---------- Config ----------
 JWT_SECRET = os.environ.get("JWT_SECRET", "")
 JWT_ALG = os.environ.get("JWT_ALG", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "10080"))
@@ -62,18 +61,14 @@ ADMIN_EMAIL_ALLOWLIST = {
     e.strip().lower() for e in os.environ.get("ADMIN_EMAIL_ALLOWLIST", "").split(",") if e.strip()
 }
 
-# Gmail SMTP Config
 GMAIL_USER = os.environ.get("GMAIL_USER", "")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 
-# Docker-socket-proxy: lásd docker-compose.yml. A backend csak ezen a szűkre szabott
-# proxyn keresztül tud konténert leállítani, a nyers docker.sock-ot nem éri el.
 DOCKER_SOCKET_PROXY_URL = os.environ.get("DOCKER_SOCKET_PROXY_URL", "http://docker-socket-proxy:2375").rstrip("/")
 
 if not JWT_SECRET or len(JWT_SECRET) < 32:
     raise RuntimeError("JWT_SECRET must be set in .env and be at least 32 chars long")
 
-# Ensure data dir
 DB_FILE_DIR = ROOT_DIR / "data"
 DB_FILE_DIR.mkdir(parents=True, exist_ok=True)
 (DB_FILE_DIR / "kb_pdfs").mkdir(parents=True, exist_ok=True)
@@ -195,7 +190,6 @@ def _excerpt_knowledge_chunk(text: str, max_chars: int = 500) -> str:
     return text[:max_chars] + " [...]"
 
 
-# ---------- DB ----------
 def _normalize_database_url(url: str) -> str:
     if url.startswith("postgresql+asyncpg://") or url.startswith("sqlite+aiosqlite://"):
         return url
@@ -267,7 +261,6 @@ class pgvector_type(UserDefinedType):
                 return None
             if isinstance(value, str):
                 return value
-            # Convert list of floats/numbers to '[0.123, -0.456, ...]' string
             return "[" + ",".join(str(f) for f in value) + "]"
         return process
 
@@ -277,7 +270,6 @@ class pgvector_type(UserDefinedType):
                 return None
             if isinstance(value, list):
                 return value
-            # Convert '[0.123, -0.456, ...]' string to list of floats
             clean = value.strip("[]").strip()
             if not clean:
                 return []
@@ -306,22 +298,18 @@ class User(Base):
     
     nickname = Column(String(50), nullable=True)
     
-    # Jelszó-visszaállító kód hash-e, nem a felhasználónak kiküldött plaintext kód.
     reset_token = Column(String(80), nullable=True)
     token_expires_at = Column(DateTime(timezone=True), nullable=True)
     
     last_login_ip = Column(String(80), nullable=True)
     last_login_at = Column(DateTime(timezone=True), nullable=True)
 
-    # TOTP MFA (pure Python RFC 6238)
-    totp_secret = Column(Text, nullable=True)  # Will store encrypted key
+    totp_secret = Column(Text, nullable=True)
     totp_enabled = Column(Boolean, nullable=False, default=False)
 
-    # GDPR / CCPA Consent Management
     consent_given = Column(Boolean, nullable=False, default=False)
     consent_updated_at = Column(DateTime(timezone=True), nullable=True)
 
-    # Legal Compliance version tracking
     terms_version = Column(String(50), nullable=True)
     privacy_version = Column(String(50), nullable=True)
     terms_accepted_at = Column(DateTime(timezone=True), nullable=True)
@@ -428,18 +416,16 @@ class AdminAuditLog(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
-
 class LeaderboardEntry(Base):
     __tablename__ = "leaderboard"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    game_type = Column(String(40), nullable=False, index=True) # "match", "snake", "sudoku"
-    score = Column(Integer, nullable=False) # stores scores or times (seconds)
+    game_type = Column(String(40), nullable=False, index=True)
+    score = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
 
-# ---------- Security ----------
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
@@ -480,7 +466,6 @@ async def _create_unique_reset_token(db: AsyncSession) -> tuple[str, str]:
     raise HTTPException(status_code=503, detail="Nem sikerült biztonsági kódot előállítani. Próbáld újra később.")
 
 
-# ---------- HKDF / Field Encryption ----------
 def _hkdf_sha256(ikm: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes:
     """Simplified HKDF-SHA256 (RFC 5869) — extract-then-expand, stdlib only."""
     prk = _hmac.new(salt or b"\x00" * 32, ikm, hashlib.sha256).digest()
@@ -533,10 +518,9 @@ def _decrypt_field(token: str, purpose: str = "totp") -> str:
         raise ValueError(f"Decryption failed: {e}")
 
 
-# ---------- TOTP (RFC 6238) — pure Python ----------
 TOTP_DIGITS = 6
 TOTP_PERIOD = 30
-TOTP_WINDOW = 1  # accept ±1 time step
+TOTP_WINDOW = 1
 TOTP_ISSUER = "Myra-Project"
 
 
@@ -549,7 +533,7 @@ def _totp_hotp(secret_b32: str, counter: int) -> str:
     """HOTP value (RFC 4226)."""
     padded = secret_b32.upper() + "=" * (-len(secret_b32) % 8)
     key = base64.b32decode(padded)
-    digest = _hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()  # nosec B303
+    digest = _hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
     offset = digest[-1] & 0x0F
     code_int = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
     return str(code_int % (10 ** TOTP_DIGITS)).zfill(TOTP_DIGITS)
@@ -575,7 +559,6 @@ def _totp_provisioning_uri(secret_b32: str, email: str) -> str:
     return f"otpauth://totp/{label}?{params}"
 
 
-# ---------- Token Blacklist (in-memory, bounded) ----------
 _token_blacklist: OrderedDict[str, float] = OrderedDict()
 TOKEN_BLACKLIST_MAX = 10000
 
@@ -600,7 +583,6 @@ def _is_jti_blacklisted(jti: str) -> bool:
 def create_access_token(user: User, *, mfa_verified: bool = False) -> str:
     now = _now()
     jti = str(uuid.uuid4())
-    # Access token lejárati idő: admin: 1 óra, átlag user: 7 nap
     if user.is_admin:
         exp = int((now + timedelta(hours=1)).timestamp())
     else:
@@ -623,7 +605,6 @@ def create_access_token(user: User, *, mfa_verified: bool = False) -> str:
 def create_refresh_token(user: User) -> str:
     now = _now()
     jti = str(uuid.uuid4())
-    # Refresh token expires in 30 days
     exp = int((now + timedelta(days=30)).timestamp())
     payload = {
         "sub": str(user.id),
@@ -645,7 +626,6 @@ def _client_ip(request: Request) -> str:
     return (request.client.host if request.client else "")[:80]
 
 
-# In-memory throttle (per-process)
 _attempts: dict[tuple[str, str], dict] = {}
 THROTTLE_WINDOW_S = 60
 THROTTLE_MAX = 8
@@ -670,10 +650,9 @@ def _prune_rate_limit_map(store: dict, now: float, max_age_s: int, *, max_entrie
         store.pop(key, None)
 
 
-# Regisztrációs IP-limit
 _reg_attempts: dict[str, dict] = {}
-REG_WINDOW_S = 3600   # 1 óra
-REG_MAX = 5           # max 5 regisztráció / IP / óra
+REG_WINDOW_S = 3600
+REG_MAX = 5
 
 
 def _throttle_key(request: Request, email: str) -> tuple[str, str]:
@@ -736,10 +715,9 @@ def _record_reg(request: Request) -> None:
     _reg_attempts[ip] = s
 
 
-# Elfelejtett jelszó limit (IP + Email)
 _forgot_attempts: dict[str, dict] = {}
-FORGOT_WINDOW_S = 300  # 5 perc
-FORGOT_MAX = 3        # max 3 kérés / 5 perc
+FORGOT_WINDOW_S = 300
+FORGOT_MAX = 3
 
 def _check_forgot_limit(request: Request, email: str) -> None:
     if _is_testing():
@@ -766,10 +744,9 @@ def _record_forgot(request: Request, email: str) -> None:
     _forgot_attempts[key] = s
 
 
-# Jelszó visszaállítás brute-force limit (IP)
 _reset_attempts: dict[str, dict] = {}
-RESET_WINDOW_S = 900  # 15 perc
-RESET_MAX = 5         # max 5 sikertelen próbálkozás / 15 perc
+RESET_WINDOW_S = 900
+RESET_MAX = 5
 
 def _check_reset_throttle(request: Request) -> None:
     if _is_testing():
@@ -795,7 +772,6 @@ def _record_reset_failure(request: Request) -> None:
     _reset_attempts[ip] = s
 
 
-# MFA/admin biztonsági kód kiküldési limit
 _mfa_issue_attempts: dict[str, dict] = {}
 MFA_ISSUE_WINDOW_S = 600
 MFA_ISSUE_MAX = 3
@@ -911,7 +887,6 @@ async def _read_upload_with_limit(file: UploadFile, max_bytes: int) -> bytes:
 def _validate_pdf_bytes(content: bytes) -> None:
     if not content.startswith(b"%PDF-"):
         raise HTTPException(status_code=400, detail="A fájl kiterjesztése .pdf, de a tartalma nem PDF.")
-
 
 
 def _ensure_knowledge_fts(conn) -> None:
@@ -1219,7 +1194,7 @@ async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> 
         WHERE {" OR ".join(where_parts)}
         ORDER BY ({" + ".join(score_parts)}) DESC, id ASC
         LIMIT :limit
-    """)  # nosec B608
+    """)
     res = await db.execute(stmt, params)
     rows = res.mappings().all()
     return [
@@ -1392,10 +1367,9 @@ async def _reset_postgres_sequences(conn) -> None:
                 COALESCE((SELECT MAX({column_name}) FROM {table_name}), 1),
                 (SELECT COUNT(*) > 0 FROM {table_name})
             )
-        """))  # nosec B608
+        """))
 
 
-# ---------- DB session ----------
 async def get_db():
     async with SessionLocal() as session:
         try:
@@ -1445,7 +1419,6 @@ async def require_admin(user: User = Depends(get_current_user)) -> User:
     return user
 
 
-# ---------- App settings helpers ----------
 DEFAULT_SYSTEM_PROMPT = """Működési elv – Myra-modell (Adaptív-Relációs verzió):
 A neved Myra. A működésed a Myra-modell alapján zajlik: egy mesterséges analitikus rendszer vagy, amely az önismereti folyamatokat támogatja, de a beszélgetés stílusa természetes, hétköznapi, emberi és ritmuskövető. Mindig azon a nyelven válaszolj, amelyen a felhasználó megszólít. Kerüld az okoskodást és a túlzott szakkifejezések használatát. Ne megoldani akard a helyzetet, hanem jelen lenni benne: adj teret a felhasználó csendjeinek és bizonytalanságának, tükrözve, hogy a megértés közös folyamat. Mindig igazodj a felhasználóhoz – a kevesebb néha több.
 
@@ -1516,14 +1489,11 @@ async def _warmup_rag_runtime() -> None:
         print(f"[startup] RAG warmup figyelmeztetés: {e}")
 
 
-# ---------- App ----------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await _run_startup_migrations()
-    # Alapértelmezett beállítások inicializálása
     async with SessionLocal() as db:
         for k, v in [
             ("llm_provider", "gemini"),
@@ -1538,7 +1508,6 @@ async def lifespan(app: FastAPI):
             if res.scalar_one_or_none() is None:
                 db.add(AppSetting(key=k, value=v))
         await db.commit()
-    # Ha a kb_text üres, betöltjük a default_kb.pdf-ből
     async with SessionLocal() as db:
         kb_res = await db.execute(select(AppSetting).where(AppSetting.key == "kb_text"))
         kb_setting = kb_res.scalar_one_or_none()
@@ -1559,7 +1528,6 @@ async def lifespan(app: FastAPI):
                     print(f"[startup] Figyelmeztetés: default_kb.pdf nem tölthető be: {e}")
     await _warmup_rag_runtime()
     yield
-    # Shutdown
     await engine.dispose()
 
 
@@ -1656,7 +1624,6 @@ async def verify_vercel_proxy(request: Request, call_next):
             content={"detail": "Direct access to origin is forbidden."}
         )
 
-    # Allow local development and localhost requests
     if os.environ.get("ENVIRONMENT") == "development":
         return await call_next(request)
     if request.client and request.client.host in ("127.0.0.1", "localhost"):
@@ -1664,7 +1631,6 @@ async def verify_vercel_proxy(request: Request, call_next):
 
     incoming_secret = request.headers.get("X-Myra-Proxy-Secret", "")
 
-    # Time-constant comparison to protect against timing attacks
     if not MYRA_PROXY_SECRET or not secrets.compare_digest(incoming_secret, MYRA_PROXY_SECRET):
         logger.warning(f"Unauthorized direct access attempt from: {request.client.host if request.client else 'Unknown'}")
         return JSONResponse(
@@ -1677,7 +1643,6 @@ async def verify_vercel_proxy(request: Request, call_next):
 api = APIRouter(prefix="/api")
 
 
-# ---------- Schemas ----------
 class RegisterBody(BaseModel):
     email: EmailStr
     name: str = Field(min_length=1, max_length=120)
@@ -1872,7 +1837,6 @@ def _synthesize_tts_wav(text_value: str) -> Path:
     raise HTTPException(status_code=503, detail="A felolvasó motor nincs megfelelően konfigurálva.")
 
 
-
 def _diagnostic_file_status(path: Path, name: str) -> str:
     if not path.exists():
         return f"error: {name} not found"
@@ -1939,7 +1903,6 @@ def _synthesize_piper_wav(text_value: str) -> Path:
     return out_path
 
 
-# ---------- Email Helper ----------
 def _send_gmail_reset(to_email: str, token: str):
     if not GMAIL_USER or not GMAIL_APP_PASSWORD:
         logger.error("Gmail SMTP credentials are not configured in .env")
@@ -2041,7 +2004,7 @@ Myra-project biztonsági rendszer""", "plain", "utf-8")
 
     msg["Subject"] = f"Biztonsági riasztás: Belépés - {role_str} ({user_email})"
     msg["From"] = GMAIL_USER
-    msg["To"] = GMAIL_USER  # Küldés a saját email címre
+    msg["To"] = GMAIL_USER
 
     try:
         with smtplib.SMTP("smtp.gmail.com", 587) as server:
@@ -2052,8 +2015,6 @@ Myra-project biztonsági rendszer""", "plain", "utf-8")
     except Exception as e:
         logger.error(f"Gmail biztonsági riasztás küldési hiba: {e}")
         return False
-
-
 
 
 def _client_label(request: Request) -> str:
@@ -2214,7 +2175,6 @@ async def auth_register(body: RegisterBody, request: Request, db: AsyncSession =
     await db.flush()
     _record_reg(request)
     
-    # Registration logs in automatically
     access_token = create_access_token(user, mfa_verified=is_admin)
     refresh_token = create_refresh_token(user)
     return {
@@ -2364,7 +2324,6 @@ async def auth_reset_password(body: ResetPasswordBody, request: Request, db: Asy
     token_str = body.token.strip()
     token_hash = _hash_reset_token(token_str)
     
-    # The plaintext fallback only keeps already-issued codes usable during a rolling deploy.
     res = await db.execute(select(User).where(User.reset_token.in_([token_hash, token_str])))
     user = res.scalar_one_or_none()
     
@@ -2506,7 +2465,6 @@ async def auth_delete_account(body: DeleteAccountBody, request: Request, user: U
     return {"ok": True}
 
 
-# ---------- Refresh Token Rotation ----------
 @api.post("/auth/refresh")
 async def auth_refresh(body: RefreshTokenBody, db: AsyncSession = Depends(get_db)):
     try:
@@ -2536,7 +2494,6 @@ async def auth_refresh(body: RefreshTokenBody, db: AsyncSession = Depends(get_db
     }
 
 
-# ---------- TOTP MFA (pure Python RFC 6238) ----------
 class TotpLoginBody(BaseModel):
     email: EmailStr
     password: str = Field(min_length=1, max_length=128)
@@ -2632,7 +2589,6 @@ async def auth_totp_login(body: TotpLoginBody, request: Request, db: AsyncSessio
 LEGAL_PRIVACY_VERSION = "2026-06-15"
 LEGAL_TERMS_VERSION = "2026-06-15"
 
-# ---------- GDPR / Compliance (Art. 15, 17, 20) ----------
 @api.get("/legal/privacy")
 async def get_legal_privacy():
     return {"version": LEGAL_PRIVACY_VERSION, "last_updated": "2026-06-15", "url": "/privacy.html"}
@@ -2692,7 +2648,6 @@ async def post_user_data_delete(body: ExportDataBody, request: Request, user: Us
     return {"ok": True, "detail": "Minden adatod véglegesen törölve lett a rendszerünkből."}
 
 
-# ---------- AI-Driven Suggestions (Custom UX Feature) ----------
 _suggest_attempts: dict[str, list[float]] = {}
 
 
@@ -2718,14 +2673,12 @@ async def post_ai_suggest(body: AiSuggestBody, user: User = Depends(get_current_
     if not sc:
         raise HTTPException(status_code=400, detail="Nem található állapotkód profil.")
 
-    # Call Gemini model using settings
     settings = await get_settings(db, {
         "llm_provider": "gemini",
         "llm_model": "gemini-2.5-flash",
         "llm_api_key": "",
     })
     
-    # We construct a swift suggestion system prompt
     prompt = (
         "Te a Myra önismereti asszisztens AI modulja vagy. "
         f"A felhasználó aktuális ESV állapota: {sc.title} (kód: {sc.code}). "
@@ -2734,7 +2687,6 @@ async def post_ai_suggest(body: AiSuggestBody, user: User = Depends(get_current_
     )
 
     try:
-        # _call_llm(provider, model, api_key, system_prompt, history, user_message)
         raw_response = await _call_llm(
             settings["llm_provider"],
             settings["llm_model"],
@@ -2743,14 +2695,12 @@ async def post_ai_suggest(body: AiSuggestBody, user: User = Depends(get_current_
             [],
             "Kérem a javaslatokat."
         )
-        # Parse JSON
         parsed = _json.loads(re.sub(r"```json|```", "", raw_response).strip())
         if isinstance(parsed, list):
             return {"suggestions": parsed[:3]}
     except Exception as e:
         logger.error(f"AI Suggest failed: {e}")
         
-    # Fallbacks based on severity
     if "magas" in sc.severity.lower() or sc.h >= 3:
         return {"suggestions": ["Tarts egy rövid, lassú légzésszünetet.", "Figyeld meg a testi feszültséget.", "Írd le a gondolataidat egy lapra."]}
     return {"suggestions": ["Figyeld meg a jelenlegi érzéseidet.", "Írj le 3 dolgot, amiért hálás vagy.", "Sétálj egy pár percet a friss levegőn."]}
@@ -2782,7 +2732,6 @@ def _user_out(u: User) -> dict:
     }
 
 
-# ---------- Codes ----------
 def _clean_code(s: str) -> str:
     return "".join(ch for ch in (s or "") if ch.isdigit())
 
@@ -2801,7 +2750,6 @@ async def codes_verify(body: CodeVerifyBody, user: User = Depends(get_current_us
     user.state_code = code
     user.code_verified_at = _now()
     
-    # Create a QuizSubmission session so they have a valid active session for chat
     session_id = str(uuid.uuid4())
     db.add(QuizSubmission(
         id=session_id, user_id=user.id, answers=[3]*21,
@@ -2855,7 +2803,6 @@ def _sc_out(sc: StateCode) -> dict:
     }
 
 
-# ---------- Quiz ----------
 QUIZ_QUESTIONS = {
     "A": [
         "Idegesnek érzem magam", "Aggódom valami miatt", "Úgy érzem, nem tudok megnyugodni",
@@ -2905,15 +2852,6 @@ def _bucket(norm: float) -> int:
     return 4
 
 
-# ESV normalizálás verziója. v1 (2026-07-02 előtt): csak a maximummal osztott
-# (xa/30, 1-xp/30, xh/20), így az A/P/H dimenziók nem használták ki a teljes
-# [0,1] skálát — a P-nél emiatt a 4-es bucket ("erős érzelemszabályozás")
-# érvényes kitöltésből elérhetetlen volt. A v2 a pszichometriában standard
-# POMP-skálázást használja (percent of maximum possible, Cohen és mtsai 1999):
-# (összeg - minimum) / (maximum - minimum). Lineáris transzformáció: a kitöltők
-# sorrendjét és a dimenziók közötti korrelációkat nem változtatja meg.
-# A régi (v1) mérések norms mezőjében nincs "v" kulcs; azok 30 napon belül
-# amúgy is lejárnak, újraszámolásuk nem szükséges.
 NORM_VERSION = 2
 
 
@@ -3030,7 +2968,6 @@ async def quiz_delete_session(
     user.state_code = latest.code if latest else None
     user.code_verified_at = latest.created_at if latest else None
 
-    # Calculate updated expiration status
     is_expired = False
     days_remaining = 0
     if user.state_code and user.code_verified_at:
@@ -3054,7 +2991,6 @@ async def quiz_delete_session(
     }
 
 
-# ---------- Chat (pluggable LLM provider) ----------
 def _first_name(full_name: str) -> str:
     cleaned = " ".join((full_name or "").strip().split())
     parts = cleaned.split()
@@ -3097,7 +3033,6 @@ def _build_system_prompt(
 ) -> str:
     state_block = _build_state_block(sc, user_name)
     
-    # Dynamic time context in Hungarian
     now = _now()
     months = ["január", "február", "március", "április", "május", "június",
               "július", "augusztus", "szeptember", "október", "november", "december"]
@@ -3162,7 +3097,6 @@ def _sync_get_fastembed_embedding(text: str) -> list[float]:
 
 async def _get_fastembed_embedding(text: str) -> list[float]:
     return await asyncio.to_thread(_sync_get_fastembed_embedding, text)
-
 
 
 async def _unused_external_embedding(api_key: str, text: str) -> list[float]:
@@ -3230,7 +3164,6 @@ async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str,
             if r.status_code == 200:
                 return r.json()["choices"][0]["message"]["content"]
             last_error = r.text[:300]
-            # 5xx vagy 429: átmeneti hiba, újrapróbálkozunk
             if (r.status_code == 429 or r.status_code >= 500) and attempt < max_retries - 1:
                 await asyncio.sleep(8)
                 continue
@@ -3276,7 +3209,6 @@ async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str,
                     raise HTTPException(status_code=502, detail="Üres válasz érkezett az AI szolgáltatótól.")
                 return "".join(p.get("text", "") for p in cands[0].get("content", {}).get("parts", []))
             last_error = r.text[:300]
-            # 5xx vagy 429: átmeneti hiba, újrapróbálkozunk
             if (r.status_code == 429 or r.status_code >= 500) and attempt < max_retries - 1:
                 await asyncio.sleep(8)
                 continue
@@ -3337,7 +3269,6 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
     if not user.state_code:
         raise HTTPException(status_code=400, detail="Először töltsd ki a kérdőívet.")
     
-    # Check if measurement is expired
     if user.code_verified_at:
         now = _now()
         verified_at = user.code_verified_at
@@ -3356,7 +3287,6 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
     if not text:
         raise HTTPException(status_code=400, detail="Üres üzenet.")
 
-    # Session validálás: csak a legújabb sessionbe lehet írni
     latest_res = await db.execute(
         select(QuizSubmission)
         .where(QuizSubmission.user_id == user.id)
@@ -3398,7 +3328,6 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
     db_history = list(reversed(res.scalars().all()))
     mark_timing("history_db", phase_started)
     
-    # Keep raw text for crisis check
     recent_user_text = "\n".join(m.text for m in db_history[-6:] if m.role == "user")
     crisis_context = _build_crisis_safety_context() if _is_crisis_message(f"{recent_user_text}\n{text}") else ""
 
@@ -3419,9 +3348,6 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
         now_ts_str = _now().strftime("%Y.%m.%d %H:%M")
         phase_started = time.perf_counter()
         reply = await _call_llm(provider, model, api_key, sys_prompt, history, f"[{now_ts_str}] {text}")
-        # Védőháló: az időbélyeg marad az előzményben (kell az időbeli kontextus),
-        # de ha a modell mégis a saját válasza elé tenné (pl. [2026.06.18 09:00]),
-        # determinisztikusan levágjuk, mielőtt mentjük/visszaküldjük.
         reply = re.sub(r"^\s*\[\d{4}\.\d{2}\.\d{2}\s+\d{1,2}:\d{2}\]\s*", "", str(reply))
         mark_timing("llm", phase_started)
     except HTTPException:
@@ -3544,7 +3470,6 @@ async def create_live_token(
     }
 
 
-# ---------- Admin: state codes ----------
 @api.get("/admin/codes")
 async def admin_list_codes(_: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     res = await db.execute(select(StateCode).order_by(StateCode.code))
@@ -3581,7 +3506,6 @@ async def admin_delete_code(code: str, _: User = Depends(require_admin), db: Asy
     return {"deleted": r.rowcount or 0}
 
 
-# ---------- Admin: app settings ----------
 SUGGESTED_MODELS = {
     "openai": [
         "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano",
@@ -3744,7 +3668,6 @@ async def admin_upload_kb(request: Request, file: UploadFile = File(...), admin:
     return {"ok": True, "added_chars": len(text), "total_chars": len(joined)}
 
 
-# ---------- Admin: extract KB from server PDFs ----------
 async def _run_pdf_reindex_job(source_dir: Optional[str] = None) -> None:
     try:
         async with SessionLocal() as job_db:
@@ -3840,8 +3763,6 @@ async def admin_extract_kb(request: Request, admin: User = Depends(require_admin
     return {"ok": True, "pdf_count": len(pdf_files), "total_chars": len(combined)}
 
 
-# ---------- Admin: Emergency Tools & KB Files ----------
-
 class MaintenanceModeBody(BaseModel):
     maintenance_mode: bool
     current_password: str = Field(min_length=1, max_length=128)
@@ -3904,8 +3825,6 @@ async def admin_force_logout_all(body: EmergencyAdminActionBody, request: Reques
     if not verify_password(body.current_password, admin.password_hash):
         await _admin_audit(db, admin, request, "admin.auth.force_logout_all.failure", "invalid_password")
         raise HTTPException(status_code=400, detail="Hibás jelszó (jelszo).")
-    # SQLAlchemy oszlop-kifejezés: itt a "== False" a helyes forma (nem "not"/"is"),
-    # mert a User.is_admin egy Column objektum, aminek a __eq__ metódusa építi a SQL WHERE-t.
     await db.execute(update(User).where(User.is_admin == False).values(token_version=User.token_version + 1))  # noqa: E712
     await db.commit()
     await _admin_audit(db, admin, request, "admin.auth.force_logout_all", "")
@@ -3929,10 +3848,6 @@ async def admin_restart(body: EmergencyAdminActionBody, request: Request, admin:
 async def _delayed_down():
     await asyncio.sleep(1.0)
     logger.info("Emergency system shutdown (docker compose down) triggered via admin API.")
-    # A backend konténer nem éri el közvetlenül a hoszt /var/run/docker.sock-ját (ez
-    # gyakorlatilag root-ekvivalens hozzáférést adna a teljes Docker daemonhoz).
-    # Helyette a docker-compose.yml-ben futó, csak "container stop"-ra korlátozott
-    # docker-socket-proxy service-en keresztül állítjuk le a konténereket.
     async with httpx.AsyncClient(timeout=10.0) as proxy_client:
         for container in ["myra-frontend", "myra-backend"]:
             try:
@@ -4012,7 +3927,6 @@ async def admin_upload_kb_file(
         raise HTTPException(status_code=500, detail="Fájl feltöltése sikertelen.")
 
 
-# ---------- Admin: users ----------
 @api.get("/admin/users")
 async def admin_list_users(_: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     res = await db.execute(select(User).order_by(User.created_at.desc()))
@@ -4215,14 +4129,12 @@ async def admin_backup_db(request: Request, admin: User = Depends(require_admin)
     )
 
 
-# ---------- Config (public) ----------
 @api.post("/user/nickname")
 async def set_user_nickname(
     body: NicknameBody,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Strip HTML tags to prevent XSS
     clean_nickname = re.sub(r"<[^>]*>", "", body.nickname.strip())
     if not clean_nickname:
         raise HTTPException(status_code=400, detail="A becenév nem lehet üres vagy érvvénytelen.")
@@ -4234,14 +4146,8 @@ async def set_user_nickname(
     return {"status": "ok", "nickname": clean_nickname}
 
 
-# ---------- Ranglista játék-session tokenek ----------
-# A kliens ezt a tokent kapja a játék indításakor (/leaderboard/start), és ezt kell
-# visszaküldenie a ponttal együtt a /leaderboard/submit hívásnál. A token a
-# backenden, szerver-oldalon generált, egyszer használatos és rövid élettartamú,
-# így a kliens nem tud saját maga érvényes "engedélyt" gyártani tetszőleges
-# pontszámhoz (szemben egy kliens-oldalon is kiszámolható aláírással).
 _game_sessions: dict[str, dict] = {}
-GAME_SESSION_MAX_AGE_S = 30 * 60  # 30 perc: bőven elég egy teljes játékmenethez
+GAME_SESSION_MAX_AGE_S = 30 * 60
 GAME_SESSION_MAX_ENTRIES = 5000
 
 
@@ -4277,8 +4183,6 @@ async def submit_leaderboard_score(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # 1. A session token ellenőrzése: csak a backend által, a /leaderboard/start
-    # hívásnál kiadott, még nem felhasznált és nem lejárt token fogadható el.
     now = time.time()
     _prune_game_sessions(now)
     session_info = _game_sessions.pop(body.session_token, None)
@@ -4287,7 +4191,6 @@ async def submit_leaderboard_score(
     if session_info["user_id"] != user.id or session_info["game_type"] != body.game_type:
         raise HTTPException(status_code=403, detail="Érvénytelen játék-munkamenet.")
 
-    # 2. Sanity limits validation
     if body.game_type == "match":
         if body.score < 0 or body.score > 35000:
             raise HTTPException(status_code=400, detail="Érvénytelen pontszám (Match limit).")
@@ -4309,7 +4212,6 @@ async def submit_leaderboard_score(
     entry = res.scalar_one_or_none()
 
     if entry:
-        # All games now use score system where higher is better
         if body.score > entry.score:
             entry.score = body.score
             entry.updated_at = _now()
@@ -4330,7 +4232,6 @@ async def get_leaderboard(db: AsyncSession = Depends(get_db)):
     results = {}
     
     for game in ["match", "snake", "sudoku"]:
-        # Unified descending order for all games
         q = (
             select(LeaderboardEntry, User)
             .join(User, LeaderboardEntry.user_id == User.id)
@@ -4355,17 +4256,12 @@ async def get_leaderboard(db: AsyncSession = Depends(get_db)):
     return results
 
 
-# ---------- Forum endpoints ----------
-
 HUNGARIAN_PROFANITIES = [
     r"\bbasz\w*", r"\bszar\w*", r"\bgeci\w*", r"\bkurva\w*", r"\bfasz\w*", r"\bbuzi\w*",
     r"\bpicsa\w*", r"\bsegg\w*", r"\bkuki\w*", r"\bköcsög\w*", r"\bbalfasz\w*",
     r"\bfaszfej\w*", r"\bszarkupac\w*", r"\bkurváz\w*", r"\bgeciz\w*"
 ]
 
-# Gyakori, ártatlan magyar szavak, amiket a fenti rövid tövek tévesen trágárságnak
-# jelölnének (pl. "Szarvas" -> "szar", "faszén" -> "fasz", "kukicska" -> "kuki").
-# Előtag-egyezés, hogy a ragozott alakokat (Szarvasra, Szarvason stb.) is lefedje.
 PROFANITY_FILTER_ALLOWLIST_PREFIXES = (
     "szarvas",
     "faszén",
@@ -4414,7 +4310,6 @@ async def update_forum_profile(body: ForumProfileUpdate, user: User = Depends(ge
     if len(nick) > 30:
         raise HTTPException(status_code=400, detail="A becenév legfeljebb 30 karakter lehet.")
     
-    # Check uniqueness
     res = await db.execute(select(User).where(User.forum_nickname == nick, User.id != user.id))
     if res.scalar_one_or_none() is not None:
         raise HTTPException(status_code=400, detail="Ez a becenév már foglalt.")
@@ -4500,7 +4395,6 @@ async def public_config(db: AsyncSession = Depends(get_db)):
         "app_name": "Myra-project",
         "global_notice_text": await get_setting(db, "global_notice_text", ""),
     }
-
 
 
 app.include_router(api)

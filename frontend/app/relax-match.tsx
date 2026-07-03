@@ -1,13 +1,12 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { StyleSheet, View, TouchableOpacity, Dimensions, Vibration } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import { authedFetch, useAuth } from "@/src/auth/AuthContext";
-import { generateLeaderboardSignature } from "@/src/utils/crypto";
+import { startLeaderboardSession } from "@/src/utils/crypto";
 
 import ContentBackground from "@/src/components/ContentBackground";
 import TopBar from "@/src/components/TopBar";
@@ -17,15 +16,15 @@ import { shadow, theme, radii, spacing } from "@/src/theme";
 const GRID_SIZE = 6;
 const EMOJIS = ["🌸", "💎", "🍀", "☀️", "💧", "⭐"];
 const { width } = Dimensions.get("window");
-const TILE_SIZE = Math.floor((width - 48) / GRID_SIZE); // Dynamically size tiles to fit screen
+const TILE_SIZE = Math.floor((width - 48) / GRID_SIZE);
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export default function RelaxMatchScreen() {
-  const router = useRouter();
   const { token } = useAuth();
+  const sessionTokenRef = useRef<string | null>(null);
 
-  // State
+
   const [board, setBoard] = useState<string[][]>([]);
   const [selected, setSelected] = useState<{ r: number; c: number } | null>(null);
   const [score, setScore] = useState(0);
@@ -36,7 +35,7 @@ export default function RelaxMatchScreen() {
   const [combo, setCombo] = useState(1);
   const [showShuffleBanner, setShowShuffleBanner] = useState(false);
 
-  // Load High Score on Mount
+
   useEffect(() => {
     const loadHighScore = async () => {
       try {
@@ -50,7 +49,7 @@ export default function RelaxMatchScreen() {
     startNewGame();
   }, []);
 
-  // Check and save high score when score updates
+
   useEffect(() => {
     if (score > highScore) {
       setHighScore(score);
@@ -58,14 +57,14 @@ export default function RelaxMatchScreen() {
     }
   }, [score, highScore]);
 
-  // Generate random emoji
+
   const getRandomEmoji = () => EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
 
-  // Match finder (3 or more of same emojis horizontally or vertically)
+
   const findMatches = (currentBoard: string[][]): Set<string> => {
     const matchedCoords = new Set<string>();
 
-    // Horizontal check
+
     for (let r = 0; r < GRID_SIZE; r++) {
       let matchCount = 1;
       let matchEmoji = currentBoard[r][0];
@@ -92,7 +91,7 @@ export default function RelaxMatchScreen() {
       }
     }
 
-    // Vertical check
+
     for (let c = 0; c < GRID_SIZE; c++) {
       let matchCount = 1;
       let matchEmoji = currentBoard[0][c];
@@ -122,19 +121,19 @@ export default function RelaxMatchScreen() {
     return matchedCoords;
   };
 
-  // Check if any valid moves exist on the board
+
   const hasValidMoves = (currentBoard: string[][]): boolean => {
     if (currentBoard.length === 0) return false;
     for (let r = 0; r < GRID_SIZE; r++) {
       for (let c = 0; c < GRID_SIZE; c++) {
-        // Swap with right neighbor
+
         if (c + 1 < GRID_SIZE) {
           const tempBoard = performSwap(currentBoard, r, c, r, c + 1);
           if (findMatches(tempBoard).size > 0) {
             return true;
           }
         }
-        // Swap with down neighbor
+
         if (r + 1 < GRID_SIZE) {
           const tempBoard = performSwap(currentBoard, r, c, r + 1, c);
           if (findMatches(tempBoard).size > 0) {
@@ -146,14 +145,14 @@ export default function RelaxMatchScreen() {
     return false;
   };
 
-  // Shuffle the board until a valid move exists and there are no pre-existing match-3s
+
   const shuffleBoardUntilValid = (currentBoard: string[][]): string[][] => {
     let copy = currentBoard.map((row) => [...row]);
     let attempts = 0;
     const flat = copy.flat();
 
     while (attempts < 150) {
-      // Fisher-Yates shuffle
+
       for (let i = flat.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         const temp = flat[i];
@@ -161,7 +160,7 @@ export default function RelaxMatchScreen() {
         flat[j] = temp;
       }
 
-      // Reconstruct 2D board
+
       const newBoard: string[][] = [];
       for (let r = 0; r < GRID_SIZE; r++) {
         newBoard.push(flat.slice(r * GRID_SIZE, (r + 1) * GRID_SIZE));
@@ -172,10 +171,10 @@ export default function RelaxMatchScreen() {
       }
       attempts++;
     }
-    return currentBoard; // Fallback
+    return currentBoard;
   };
 
-  // Start a new game with a matchless board
+
   const startNewGame = () => {
     let newBoard: string[][] = [];
     let attempts = 0;
@@ -208,7 +207,7 @@ export default function RelaxMatchScreen() {
     }
 
     if (newBoard.length === 0) {
-      // Fallback
+
       newBoard = Array(GRID_SIZE)
         .fill(null)
         .map(() => Array(GRID_SIZE).fill(getRandomEmoji()));
@@ -222,9 +221,15 @@ export default function RelaxMatchScreen() {
     setAnimating(false);
     setCombo(1);
     setShowShuffleBanner(false);
+    sessionTokenRef.current = null;
+    if (token) {
+      startLeaderboardSession(token, "match").then((sessionToken) => {
+        sessionTokenRef.current = sessionToken;
+      });
+    }
   };
 
-  // Asynchronous gravity, clear, refill cascade loop
+
   const animateCascade = async (currentBoard: string[][], initialCombo = 1) => {
     let boardCopy = currentBoard.map((row) => [...row]);
     let currentCombo = initialCombo;
@@ -232,14 +237,14 @@ export default function RelaxMatchScreen() {
     let currentScore = score;
 
     while (matches.size > 0) {
-      // 1. Highlight matches as Sparkles
+
       for (const coord of matches) {
         const [r, c] = coord.split(",").map(Number);
         boardCopy[r][c] = "✨";
       }
       setBoard(boardCopy.map((row) => [...row]));
 
-      // Haptics Feedback based on combo level
+
       try {
         if (currentCombo === 1) {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -252,21 +257,21 @@ export default function RelaxMatchScreen() {
 
       await sleep(220);
 
-      // 2. Clear matches
+
       for (const coord of matches) {
         const [r, c] = coord.split(",").map(Number);
         boardCopy[r][c] = "";
       }
       setBoard(boardCopy.map((row) => [...row]));
 
-      // Update Score: matches count * 10 * combo multiplier
+
       const pointsEarned = matches.size * 10 * currentCombo;
       currentScore += pointsEarned;
       setScore(currentScore);
 
       await sleep(150);
 
-      // 3. Apply Gravity (tiles fall down)
+
       for (let c = 0; c < GRID_SIZE; c++) {
         let emptySlots = 0;
         for (let r = GRID_SIZE - 1; r >= 0; r--) {
@@ -282,7 +287,7 @@ export default function RelaxMatchScreen() {
 
       await sleep(150);
 
-      // 4. Refill empty spaces at the top
+
       for (let c = 0; c < GRID_SIZE; c++) {
         for (let r = 0; r < GRID_SIZE; r++) {
           if (boardCopy[r][c] === "") {
@@ -294,7 +299,7 @@ export default function RelaxMatchScreen() {
 
       await sleep(220);
 
-      // 5. Look for cascade matches
+
       matches = findMatches(boardCopy);
       if (matches.size > 0) {
         currentCombo++;
@@ -302,7 +307,7 @@ export default function RelaxMatchScreen() {
       }
     }
 
-    // Check for deadlock after refilling and cascades finish
+
     if (!hasValidMoves(boardCopy) && moves > 0) {
       const shuffled = shuffleBoardUntilValid(boardCopy);
       boardCopy = shuffled;
@@ -318,23 +323,21 @@ export default function RelaxMatchScreen() {
     setSelected(null);
     setCombo(1);
 
-    // Game Over condition
+
     setMoves((currentMoves) => {
       if (currentMoves <= 0) {
         setGameOver(true);
-        if (token) {
-          const timestamp = Math.floor(Date.now() / 1000);
-          const signature = generateLeaderboardSignature("match", currentScore, timestamp);
+        if (token && sessionTokenRef.current) {
           authedFetch(token, "/api/leaderboard/submit", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               game_type: "match",
               score: currentScore,
-              timestamp,
-              signature,
+              session_token: sessionTokenRef.current,
             }),
           }).catch(() => {});
+          sessionTokenRef.current = null;
         }
         try {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
@@ -344,7 +347,7 @@ export default function RelaxMatchScreen() {
     });
   };
 
-  // Swap function helper
+
   const performSwap = (
     currentBoard: string[][],
     r1: number,
@@ -359,7 +362,7 @@ export default function RelaxMatchScreen() {
     return copy;
   };
 
-  // Handle tile selection and swap mechanics
+
   const handleTilePress = async (r: number, c: number) => {
     if (animating || gameOver) return;
 
@@ -376,19 +379,19 @@ export default function RelaxMatchScreen() {
 
     if (isAdjacent) {
       setAnimating(true);
-      // Swap tiles in temp board
+
       let swappedBoard = performSwap(board, prev.r, prev.c, r, c);
       setBoard(swappedBoard);
 
-      // Check if matches are formed
+
       const matches = findMatches(swappedBoard);
 
       if (matches.size > 0) {
-        // Valid move
+
         setMoves((prevMoves) => prevMoves - 1);
         await animateCascade(swappedBoard, 1);
       } else {
-        // Invalid swap - Swap back after a short animation delay
+
         try {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         } catch (e) {
@@ -401,7 +404,7 @@ export default function RelaxMatchScreen() {
         setSelected(null);
       }
     } else {
-      // Not adjacent, switch selection to new tile
+
       setSelected({ r, c });
       try {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -414,7 +417,7 @@ export default function RelaxMatchScreen() {
       <TopBar title="Myra Match" showBack={true} backPath="/relax" />
       <ContentBackground>
         <View style={styles.container}>
-          {/* Header Stats Panel */}
+
           <View style={styles.statsPanel}>
             <LinearGradient
               colors={["rgba(255, 255, 255, 0.08)", "rgba(255, 255, 255, 0.03)"]}
@@ -447,7 +450,7 @@ export default function RelaxMatchScreen() {
             </LinearGradient>
           </View>
 
-          {/* Combo / Cascade Indicator */}
+
           <View style={styles.indicatorRow}>
             {combo > 1 ? (
               <View style={styles.comboBadge}>
@@ -462,7 +465,7 @@ export default function RelaxMatchScreen() {
             )}
           </View>
 
-          {/* Game Board Grid */}
+
           <LinearGradient
             colors={["rgba(255, 255, 255, 0.06)", "rgba(255, 255, 255, 0.02)"]}
             style={[styles.boardWrap, shadow.card]}
@@ -491,7 +494,7 @@ export default function RelaxMatchScreen() {
               </View>
             ))}
 
-            {/* Game Over Screen Overlay */}
+
             {gameOver && (
               <View style={styles.overlay}>
                 <LinearGradient
@@ -516,7 +519,7 @@ export default function RelaxMatchScreen() {
               </View>
             )}
 
-            {/* Shuffle Overlay when no moves left */}
+
             {showShuffleBanner && (
               <View style={styles.overlay}>
                 <LinearGradient
@@ -535,7 +538,7 @@ export default function RelaxMatchScreen() {
             )}
           </LinearGradient>
 
-          {/* Controls Footer */}
+
           <View style={styles.footer}>
             <TouchableOpacity
               style={styles.actionButton}

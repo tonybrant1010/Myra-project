@@ -4,10 +4,8 @@ import pytest
 import httpx
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
-# Add backend directory to sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Set test environment
 os.environ["DB_DIALECT"] = "sqlite"
 os.environ["ENVIRONMENT"] = "development"
 
@@ -36,7 +34,6 @@ def anyio_backend():
 @pytest.fixture(autouse=True)
 def configure_rate_limits(request):
     """Automatikusan beállítja a rate limit környezeti változót a tesztfájl alapján."""
-    # Ha a test_security.py fájlban vagyunk, engedélyezzük a rate limit teszteket (eltávolítjuk a bypass-t)
     if "test_security.py" in request.node.fspath.strpath:
         os.environ.pop("DISABLE_RATE_LIMITS", None)
     else:

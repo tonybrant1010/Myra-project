@@ -14,7 +14,6 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 
 import { authedFetch, useAuth } from "@/src/auth/AuthContext";
@@ -38,28 +37,27 @@ type LeaderboardData = {
 };
 
 export default function RelaxLeaderboardScreen() {
-  const router = useRouter();
   const { user, token, setUserLocal } = useAuth();
 
   const [nicknameInput, setNicknameInput] = useState("");
   const [isEditingNickname, setIsEditingNickname] = useState(false);
   const [savingNickname, setSavingNickname] = useState(false);
-  
+
   const [leaderboard, setLeaderboard] = useState<LeaderboardData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Initialize input with current nickname on mount / user change
+
   useEffect(() => {
     if (user?.nickname) {
       setNicknameInput(user.nickname);
     } else {
       setNicknameInput("");
-      setIsEditingNickname(true); // Default to editing if none exists
+      setIsEditingNickname(true);
     }
   }, [user]);
 
-  // Load leaderboard data
+
   const loadLeaderboard = async () => {
     if (!token) return;
     setLoading(true);
@@ -101,14 +99,14 @@ export default function RelaxLeaderboardScreen() {
         body: JSON.stringify({ nickname: cleanNickname }),
       });
       if (response.ok) {
-        // Update local user state
+
         setUserLocal((u) => (u ? { ...u, nickname: cleanNickname } : u));
         setIsEditingNickname(false);
         try {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         } catch (e) {}
         Keyboard.dismiss();
-        // Reload leaderboard to show updated name
+
         loadLeaderboard();
       } else {
         const d = await response.json().catch(() => ({}));
@@ -153,21 +151,17 @@ export default function RelaxLeaderboardScreen() {
             </T>
           ) : (
             list.map((row, idx) => {
-              let rankStyle: any = styles.rankCircle;
               let medal = "🥇";
               let nameColor = theme.white;
-              
+
               if (row.rank === 1) {
-                rankStyle = [styles.rankCircle, styles.rankGold];
-                nameColor = "#FFE066"; // Soft Gold
+                nameColor = "#FFE066";
               } else if (row.rank === 2) {
-                rankStyle = [styles.rankCircle, styles.rankSilver];
                 medal = "🥈";
-                nameColor = "#E6E6E6"; // Soft Silver
+                nameColor = "#E6E6E6";
               } else if (row.rank === 3) {
-                rankStyle = [styles.rankCircle, styles.rankBronze];
                 medal = "🥉";
-                nameColor = "#CD7F32"; // Soft Bronze
+                nameColor = "#CD7F32";
               }
 
               return (
@@ -195,8 +189,8 @@ export default function RelaxLeaderboardScreen() {
       <TopBar title="Globális Ranglista" showBack={true} backPath="/relax" />
       <ContentBackground>
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
-          
-          {/* Nickname preset section */}
+
+
           <LinearGradient
             colors={["rgba(139,143,232,0.08)", "rgba(18,58,98,0.2)"]}
             style={[styles.nicknameCard, shadow.card]}
@@ -231,7 +225,7 @@ export default function RelaxLeaderboardScreen() {
             </View>
           </LinearGradient>
 
-          {/* Nickname input popup modal window */}
+
           <Modal
             visible={isEditingNickname}
             transparent={true}
@@ -303,7 +297,7 @@ export default function RelaxLeaderboardScreen() {
             </View>
           </Modal>
 
-          {/* Leaderboard lists header */}
+
           <View style={styles.listsHeaderRow}>
             <T variant="h2" color={theme.textOnDark} style={{ fontWeight: "700" }}>
               Dobogós Helyezettek (Top 3)
@@ -336,7 +330,7 @@ export default function RelaxLeaderboardScreen() {
             </View>
           )}
 
-          {/* Render individual leaderboards */}
+
           {!error && (
             <View style={styles.listsContainer}>
               {renderLeaderboardList(

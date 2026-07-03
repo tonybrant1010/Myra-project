@@ -1,7 +1,7 @@
 import { Platform } from "react-native";
 
 export const theme = {
-  // Aurora Deep Blue system
+
   bg: "#040b14",
   background: "#040b14",
   surface: "rgba(255,255,255,0.96)",
@@ -10,12 +10,12 @@ export const theme = {
   surfaceGlass: "rgba(255,255,255,0.08)",
   surfaceGlassStrong: "rgba(255,255,255,0.15)",
 
-  // Brand
+
   primary: "#071b30",
   primaryDark: "#030c16",
   primarySoft: "#0f2d4e",
   secondary: "#7ea3ff",
-  accent: "#4fd1c5", // Neon mint/teal
+  accent: "#4fd1c5",
   accentDeep: "#2baba0",
   accentSoft: "#e6fffa",
   info: "#4299e1",
@@ -23,18 +23,18 @@ export const theme = {
   calm: "#319795",
   violet: "#9f7aea",
 
-  // Text
+
   textPrimary: "#0d1f35",
   textSecondary: "#4a5d73",
   textMuted: "#718096",
   textOnDark: "#f7fafc",
 
-  // Borders & dividers
-  border: "rgba(79,209,197,0.3)", // Teal border
+
+  border: "rgba(79,209,197,0.3)",
   borderSoft: "rgba(79,209,197,0.15)",
   borderOnDark: "rgba(255,255,255,0.12)",
 
-  // Status
+
   danger: "#e53e3e",
   success: "#38a169",
   white: "#FFFFFF",

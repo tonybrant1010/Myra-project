@@ -13,14 +13,11 @@ import { Feather } from "@expo/vector-icons";
 import { theme } from "@/src/theme";
 
 type Props = TextInputProps & {
-  /** Extra style for the outer box (e.g. { flex: 1 } inside a row). */
+
   containerStyle?: StyleProp<ViewStyle>;
 };
 
-/**
- * Jelszómező beépített láthatóság-kapcsolóval (szem ikon).
- * A téma tokeneit használja, így a teljes app átszínezésekor automatikusan követi a palettát.
- */
+
 export default function PasswordInput({
   containerStyle,
   style,

@@ -14,14 +14,9 @@ import os
 import sys
 import uuid
 import pytest
-import httpx
 
-# A backend mappa a tesztfájl szülőjének szülője
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from server import app
 
-
-# ---------- Segédfüggvények ----------
 
 def _unique_email() -> str:
     """Egyedi teszt email generálása ütközések elkerülésére."""
@@ -30,9 +25,6 @@ def _unique_email() -> str:
 
 TEST_PASSWORD = "SecureTest!2026"
 NEW_PASSWORD = "NewSecure!2026x"
-
-
-# ---------- Fixtures ----------
 
 
 @pytest.fixture
@@ -64,8 +56,6 @@ async def auth_token(registered_user):
     assert data is not None, "A regisztráció sikertelen volt, nem lehet tokent kinyerni"
     return data["access_token"]
 
-
-# ---------- Regisztrációs tesztek ----------
 
 @pytest.mark.anyio
 async def test_register_success(client):
@@ -105,7 +95,6 @@ async def test_register_without_accepted_terms_rejected(client):
 async def test_register_duplicate_email_rejected(client):
     """Duplikált email regisztráció elutasításra kerül."""
     email = _unique_email()
-    # Első regisztráció — sikeresnek kell lennie
     resp1 = await client.post("/api/auth/register", json={
         "email": email,
         "name": "Első Felhasználó",
@@ -116,7 +105,6 @@ async def test_register_duplicate_email_rejected(client):
     })
     assert resp1.status_code == 200, f"Első regisztráció sikertelen: {resp1.text}"
 
-    # Második regisztráció ugyanazzal az emaillel — elutasításra kell kerülnie
     resp2 = await client.post("/api/auth/register", json={
         "email": email,
         "name": "Duplikált Felhasználó",
@@ -146,8 +134,6 @@ async def test_register_short_password_rejected(client):
     assert resp.status_code == 422, f"Várt 422 validációs hiba, kapott: {resp.status_code}"
 
 
-# ---------- Bejelentkezési tesztek ----------
-
 @pytest.mark.anyio
 async def test_login_success(client, registered_user):
     """Sikeres bejelentkezés regisztrált felhasználóval."""
@@ -157,7 +143,6 @@ async def test_login_success(client, registered_user):
     })
     assert resp.status_code == 200, f"Sikertelen bejelentkezés: {resp.text}"
     data = resp.json()
-    # A válasz vagy access_token-t vagy mfa_required-et tartalmaz
     assert "access_token" in data or "mfa_required" in data, \
         f"Sem access_token, sem mfa_required nincs a válaszban: {data}"
 
@@ -181,8 +166,6 @@ async def test_login_nonexistent_email_rejected(client):
     })
     assert resp.status_code == 401, f"Várt 401, kapott: {resp.status_code}"
 
-
-# ---------- Token / Auth header tesztek ----------
 
 @pytest.mark.anyio
 async def test_auth_me_with_valid_token(client, registered_user, auth_token):
@@ -224,12 +207,9 @@ async def test_auth_me_with_malformed_auth_header(client):
     assert resp.status_code == 401, f"Várt 401, kapott: {resp.status_code}"
 
 
-# ---------- Jelszóváltás tesztek ----------
-
 @pytest.mark.anyio
 async def test_change_password_success(client):
     """Sikeres jelszóváltás helyes régi jelszóval."""
-    # Regisztráljunk egy új felhasználót kifejezetten erre a tesztre
     email = _unique_email()
     reg_resp = await client.post("/api/auth/register", json={
         "email": email,
@@ -242,7 +222,6 @@ async def test_change_password_success(client):
     assert reg_resp.status_code == 200
     token = reg_resp.json()["access_token"]
 
-    # Jelszóváltás
     change_resp = await client.post(
         "/api/auth/change-password",
         json={
@@ -289,7 +268,7 @@ async def test_change_password_same_as_current_rejected(client):
         "/api/auth/change-password",
         json={
             "current_password": TEST_PASSWORD,
-            "new_password": TEST_PASSWORD,  # Ugyanaz mint a jelenlegi
+            "new_password": TEST_PASSWORD,
         },
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -316,7 +295,6 @@ async def test_login_after_password_change(client):
     original_pw = "Original!Pass2026"
     changed_pw = "Changed!Pass2026x"
 
-    # Regisztráció
     reg_resp = await client.post("/api/auth/register", json={
         "email": email,
         "name": "Jelszóváltás Teszt",
@@ -328,7 +306,6 @@ async def test_login_after_password_change(client):
     assert reg_resp.status_code == 200
     token = reg_resp.json()["access_token"]
 
-    # Jelszóváltás
     change_resp = await client.post(
         "/api/auth/change-password",
         json={
@@ -339,7 +316,6 @@ async def test_login_after_password_change(client):
     )
     assert change_resp.status_code == 200
 
-    # Bejelentkezés az új jelszóval
     login_resp = await client.post("/api/auth/login", json={
         "email": email,
         "password": changed_pw,

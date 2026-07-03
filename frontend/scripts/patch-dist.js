@@ -15,8 +15,7 @@ function copyDir(src, dst) {
   return true;
 }
 
-// 0. Copy static icons + manifest back into dist because expo export clears them.
-//    Source of truth lives in-repo at frontend/web-icons/ (regenerate via scripts/gen-icons.js).
+
 const ICONS_SRC = path.join(__dirname, "../web-icons");
 const iconFiles = [
   "apple-touch-icon.png",
@@ -38,14 +37,14 @@ for (const f of iconFiles) {
   }
 }
 
-// 1. Vercel routing source of truth is frontend/vercel.json.
+
 const vercelJson = JSON.parse(
   fs.readFileSync(path.join(__dirname, "../vercel.json"), "utf8"),
 );
 fs.writeFileSync(path.join(distDir, "vercel.json"), JSON.stringify(vercelJson, null, 2));
 console.log("OK dist/vercel.json patched");
 
-// Create dist/api directory and write proxy.js
+
 const apiDir = path.join(distDir, "api");
 if (!fs.existsSync(apiDir)) {
   fs.mkdirSync(apiDir, { recursive: true });
@@ -106,7 +105,7 @@ module.exports = async function handler(req, res) {
   }
   while (backendOrigin.endsWith('/')) backendOrigin = backendOrigin.slice(0, -1);
   const targetUrl = new URL(\`\${backendOrigin}/\${cleanPath}\`);
-  
+
   for (const [key, value] of Object.entries(req.query)) {
     if (key !== 'path') {
       const values = Array.isArray(value) ? value : [value];
@@ -219,7 +218,6 @@ fs.writeFileSync(path.join(apiDir, "proxy.js"), proxyCode.trim());
 console.log("OK dist/api/proxy.js written");
 
 
-// 1/b. Move font/icon assets out of an assets/node_modules URL.
 const nodeAssetSrc = path.join(distDir, "assets/node_modules");
 const vendorAssetDst = path.join(distDir, "vendor-assets");
 if (copyDir(nodeAssetSrc, vendorAssetDst)) {
@@ -234,7 +232,7 @@ if (copyDir(nodeAssetSrc, vendorAssetDst)) {
   console.log("OK font and icon assets moved to dist/vendor-assets/");
 }
 
-// 2. index.html patch: iOS / PWA meta tags.
+
 const indexPath = path.join(distDir, "index.html");
 let html;
 let retries = 5;
@@ -260,7 +258,7 @@ html = html.replace(
   '$1width=device-width, initial-scale=1, maximum-scale=1"'
 );
 
-// Tab / "Add to Home Screen" default name.
+
 html = html.replace(/<title>[^<]*<\/title>/, "<title>Myra Project</title>");
 
 const iosTags = [

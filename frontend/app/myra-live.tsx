@@ -88,7 +88,6 @@ export default function MyraLiveScreen() {
   const [myraTranscript, setMyraTranscript] = useState("");
   const pulse = useRef(new Animated.Value(0)).current;
   const sessionRef = useRef<Session | null>(null);
-  const socketRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const inputContextRef = useRef<AudioContext | null>(null);
   const outputContextRef = useRef<AudioContext | null>(null);

@@ -1,9 +1,7 @@
-import pytest
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 
-# Set environment variables for testing
 os.environ["DB_DIALECT"] = "sqlite"
 os.environ["ENVIRONMENT"] = "development"
 
@@ -12,7 +10,6 @@ sys.path.append(os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 from server import _build_system_prompt, StateCode, _now
 
 def test_build_system_prompt_time_awareness():
-    # Setup test StateCode
     sc = StateCode(
         code="1234",
         a="A1",
@@ -24,14 +21,12 @@ def test_build_system_prompt_time_awareness():
         severity="Enyhe"
     )
     
-    # 1. Test without code_verified_at
     prompt = _build_system_prompt("Rendszer üzenet", "Tudásbázis tartalom", sc, "János")
     assert "János" in prompt
     assert "Teszt Állapot" in prompt
     assert "[IDŐ KONTEXTUS]" in prompt
     assert "FONTOS: A beszélgetés előzményeiben szereplő üzenetek" in prompt
     
-    # 2. Test with code_verified_at (e.g. 10 days ago)
     now = _now()
     verified_at = now - timedelta(days=10)
     prompt_with_date = _build_system_prompt("Rendszer üzenet", "Tudásbázis tartalom", sc, "János", verified_at)

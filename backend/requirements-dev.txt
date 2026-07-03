@@ -1,6 +1,7 @@
 -r requirements.txt
 
 # Security and test tooling for local/CI checks. Do not install this file in the production VM image.
-bandit
-pip-audit
-pytest
+# Verzióhoz kötve a reprodukálható CI futások érdekében (időnként érdemes szándékosan frissíteni).
+bandit==1.9.4
+pip-audit==2.10.1
+pytest==9.0.3
