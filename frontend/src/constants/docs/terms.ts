@@ -1,6 +1,6 @@
 export const termsText = `FELHASZNÁLÁSI FELTÉTELEK
 
-Hatályos: 2026. június 30.
+Hatályos: 2026. július 22.
 
 1. A szolgáltatás jellege
 A Myra egy magánszemély által, nem kereskedelmi célból fejlesztett, mérésvezérelt, reflektív mentálhigiénés önismereti alkalmazás. A rendszer az ESV-modell (Érzelem-Stressz-Viselkedés) alapján működik: önkitöltős állapotfelmérést, belső állapotkódot és mesterséges intelligenciával támogatott beszélgetési keretet biztosít.
@@ -14,6 +14,8 @@ A Myra által megjelenített állapotkódok, kategóriák, chatbot-válaszok és
 
 A Myra nem helyettesíti a szakemberrel történő konzultációt, orvosi vizsgálatot, pszichológiai vagy pszichiátriai ellátást, sürgősségi segítségnyújtást vagy bármely hivatalos egészségügyi szolgáltatást.
 
+Ugyanez érvényes a felhasználó kérésére letölthető, szakembernek szánt mérési összefoglalóra (ESV25 PDF-kivonat): az tájékoztató jellegű, önbeszámolón alapuló kivonat, nem diagnózis és nem szakvélemény. Az összefoglaló megosztásáról a felhasználó maga dönt, és a megosztásból eredő következményekért a felhasználó felel.
+
 3. Krízishelyzet és sürgős segítség
 A Myra nem sürgősségi szolgáltatás. Közvetlen veszély, öngyilkossági gondolat, önsértési késztetés, bántalmazás, súlyos rosszullét vagy más akut krízis esetén a felhasználónak haladéktalanul élő segítséget kell kérnie.
 
@@ -22,7 +24,9 @@ Magyarországon sürgős veszély esetén hívható a 112. Lelki krízis esetén
 4. Mesterséges intelligencia használatából eredő korlátok
 A Myra válaszait részben mesterséges intelligencia alapú rendszer állítja elő. Az AI-válaszok pontossága, teljessége, időszerűsége vagy megfelelősége nem garantálható. Előfordulhat téves, hiányos, félreérthető vagy a felhasználó helyzetéhez nem megfelelő válasz.
 
-A válaszadás során a rendszer az aktuális üzenet mellett a beszélgetés korábbi részleteit, a mérési állapotkódhoz kapcsolódó kontextust és a PDF alapú tudásanyagból visszakeresett releváns részleteket is felhasználhatja. Ez a beszélgetés folytonosságát szolgálja, de nem jelent diagnózist, szakvéleményt vagy terápiás döntést.
+A válaszadás során a rendszer az aktuális üzenet mellett a beszélgetés korábbi részleteit, a mérési állapotkódhoz kapcsolódó kontextust, a felhasználó által vállalt mikro-célokat és a PDF alapú tudásanyagból visszakeresett releváns részleteket is felhasználhatja. Ez a beszélgetés folytonosságát szolgálja, de nem jelent diagnózist, szakvéleményt vagy terápiás döntést.
+
+A rendszer néhány nap kihagyás után a beszélgetést egy rövid, támogató visszakérdezéssel magától is újranyithatja. Ez ugyanazon beszélgetési kontextus alapján történik, tájékoztató és önismereti célú, és szintén nem minősül diagnózisnak vagy szakvéleménynek.
 
 A felhasználó tudomásul veszi, hogy a Myra nem dönt helyette, nem vállal felelősséget a felhasználó döntéseiért, és nem alkalmas önálló egészségügyi, jogi, pénzügyi vagy egyéb nagy kockázatú döntéshozatalra.
 

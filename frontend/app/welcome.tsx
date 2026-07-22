@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { ScrollView, StyleSheet, View, type LayoutChangeEvent, TouchableOpacity, ActivityIndicator } from "react-native";
+import { Platform, ScrollView, StyleSheet, View, type LayoutChangeEvent, TouchableOpacity, ActivityIndicator } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -16,6 +16,14 @@ type SessionItem = {
   code: string;
   norms: { a: number; p: number; h: number; c: number };
   created_at: string;
+};
+
+type Goal = {
+  id: number;
+  text: string;
+  scale: string;
+  scale_label: string;
+  status: string;
 };
 
 const chartDimensions = [
@@ -167,14 +175,143 @@ function UserTrendChart({ sessions, onNewQuiz }: { sessions: SessionItem[]; onNe
   );
 }
 
+function GoalsCard({ token }: { token: string | null }) {
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    if (!token) return;
+    try {
+      const r = await authedFetch(token, "/api/goals");
+      if (r.ok) {
+        const data = await r.json();
+        setGoals(data.goals || []);
+      }
+    } catch {
+      // opcionális kártya — hiba esetén egyszerűen nem jelenik meg
+    } finally {
+      setLoaded(true);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const markDone = useCallback(async (id: number) => {
+    if (!token || busyId !== null) return;
+    setBusyId(id);
+    try {
+      const r = await authedFetch(token, `/api/goals/${id}/done`, { method: "POST" });
+      if (r.ok) setGoals((gs) => gs.map((g) => (g.id === id ? { ...g, status: "done" } : g)));
+    } catch {
+    } finally {
+      setBusyId(null);
+    }
+  }, [busyId, token]);
+
+  const removeGoal = useCallback(async (id: number) => {
+    if (!token || busyId !== null) return;
+    setBusyId(id);
+    try {
+      const r = await authedFetch(token, `/api/goals/${id}`, { method: "DELETE" });
+      if (r.ok) setGoals((gs) => gs.filter((g) => g.id !== id));
+    } catch {
+    } finally {
+      setBusyId(null);
+    }
+  }, [busyId, token]);
+
+  const active = goals.filter((g) => g.status === "active");
+  const doneCount = goals.filter((g) => g.status === "done").length;
+  if (!loaded || (active.length === 0 && doneCount === 0)) return null;
+
+  return (
+    <View style={[styles.infoCard, shadow.card]} testID="welcome-goals-card">
+      <View style={styles.infoHead}>
+        <View style={styles.infoIcon}>
+          <Ionicons name="flag-outline" size={18} color={theme.accentSoft} />
+        </View>
+        <T variant="caption" color={theme.accentSoft} style={styles.infoTitle}>
+          Apró céljaim
+        </T>
+        {doneCount > 0 ? (
+          <T variant="small" color="rgba(247,251,255,0.6)">{doneCount} teljesítve</T>
+        ) : null}
+      </View>
+      {active.length === 0 ? (
+        <T variant="body" color="rgba(247,251,255,0.72)" style={styles.infoText}>
+          Minden vállalt célodat teljesítetted. Új célokat a következő mérés után választhatsz.
+        </T>
+      ) : (
+        active.map((g) => (
+          <View key={g.id} style={styles.goalRow}>
+            <TouchableOpacity
+              onPress={() => markDone(g.id)}
+              disabled={busyId !== null}
+              activeOpacity={0.7}
+              testID={`welcome-goal-done-${g.id}`}
+              accessibilityLabel="Cél teljesítve"
+            >
+              <Ionicons name="ellipse-outline" size={22} color={theme.accent} />
+            </TouchableOpacity>
+            <View style={{ flex: 1 }}>
+              <T variant="small" color="rgba(247,251,255,0.82)" style={{ lineHeight: 19 }}>{g.text}</T>
+              {g.scale_label ? (
+                <T variant="small" color="rgba(247,251,255,0.45)" style={{ fontSize: 10, marginTop: 2 }}>
+                  {g.scale_label}
+                </T>
+              ) : null}
+            </View>
+            <TouchableOpacity
+              onPress={() => removeGoal(g.id)}
+              disabled={busyId !== null}
+              activeOpacity={0.7}
+              testID={`welcome-goal-delete-${g.id}`}
+              accessibilityLabel="Cél törlése"
+            >
+              <Ionicons name="close-outline" size={18} color="rgba(247,251,255,0.4)" />
+            </TouchableOpacity>
+          </View>
+        ))
+      )}
+    </View>
+  );
+}
+
 export default function WelcomeScreen() {
   useAuthGuard();
   const { user, token } = useAuth();
   const router = useRouter();
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [reportBusy, setReportBusy] = useState(false);
 
   const greeting = user?.name ? `Szia ${user.name}!` : "Szia!";
+
+  const downloadReport = useCallback(async () => {
+    if (Platform.OS !== "web" || !token || reportBusy) return;
+    setReportBusy(true);
+    try {
+      const r = await authedFetch(token, "/api/quiz/report.pdf");
+      if (!r.ok) return;
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `myra_esv25_osszefoglalo_${stamp}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      // csendes hiba — a letöltés újrapróbálható
+    } finally {
+      setReportBusy(false);
+    }
+  }, [reportBusy, token]);
 
   const loadSessions = useCallback(async () => {
     if (!token) return;
@@ -220,6 +357,33 @@ export default function WelcomeScreen() {
           ) : (
             <UserTrendChart sessions={sessions} onNewQuiz={() => router.push("/quiz")} />
           )}
+
+          {!loading && sessions.length > 0 && Platform.OS === "web" ? (
+            <TouchableOpacity
+              style={styles.reportBtn}
+              onPress={downloadReport}
+              disabled={reportBusy}
+              activeOpacity={0.85}
+              testID="welcome-download-report"
+            >
+              {reportBusy ? (
+                <ActivityIndicator color={theme.accentSoft} size="small" />
+              ) : (
+                <Ionicons name="document-attach-outline" size={17} color={theme.accentSoft} />
+              )}
+              <View style={{ flex: 1 }}>
+                <T variant="label" color={theme.textOnDark} style={{ fontWeight: "700" }}>
+                  ESV25 összefoglaló szakembernek (PDF)
+                </T>
+                <T variant="small" color="rgba(247,251,255,0.6)" style={{ fontSize: 11, marginTop: 1 }}>
+                  Mérési előzményeid átlátható kivonata módszertani magyarázattal — megoszthatod pszichológusoddal.
+                </T>
+              </View>
+              <Ionicons name="download-outline" size={17} color="rgba(247,251,255,0.55)" />
+            </TouchableOpacity>
+          ) : null}
+
+          <GoalsCard token={token} />
 
           <InfoCard
             icon="chatbubble-ellipses-outline"
@@ -316,6 +480,30 @@ const styles = StyleSheet.create({
   },
   infoTitle: { flex: 1, fontFamily: "Manrope_600SemiBold" },
   infoText: { lineHeight: 23 },
+  goalRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    backgroundColor: "rgba(255,255,255,0.05)",
+    marginBottom: 8,
+  },
+  reportBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginTop: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(87,199,255,0.28)",
+    backgroundColor: "rgba(87,199,255,0.10)",
+  },
   supportBlock: {
     marginTop: 18,
     alignItems: "center",

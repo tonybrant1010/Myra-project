@@ -1,6 +1,6 @@
 export const gdprText = `ADATKEZELÉSI TÁJÉKOZTATÓ
 
-Hatályos: 2026. június 30.
+Hatályos: 2026. július 22.
 
 1. Az adatkezelő
 Név: Ódor Antal
@@ -15,6 +15,9 @@ A Myra egy mérésvezérelt, reflektív mentálhigiénés önismereti alkalmazá
 - belső állapotkód képzése és megjelenítése,
 - személyre szabott chatbot-beszélgetés biztosítása,
 - korábbi mérési és beszélgetési adatok visszanézhetősége,
+- a felhasználó által önkéntesen vállalt apró önismereti célok (mikro-célok) rögzítése és követése,
+- néhány nap kihagyás után a beszélgetés Myra általi, támogató visszakérdezéssel történő újranyitása,
+- a felhasználó kérésére szakembernek szánt, letölthető mérési összefoglaló (PDF) előállítása,
 - visszaélések, túlterhelés és jogosulatlan hozzáférés megelőzése,
 - hibakeresés, biztonsági ellenőrzés és működésfenntartás.
 
@@ -26,6 +29,7 @@ Az alkalmazás az alábbi adatokat kezelheti:
 - regisztráció és bejelentkezés időpontja,
 - kérdőívre adott válaszok,
 - belső állapotkód és mérési eredmények,
+- a felhasználó által vállalt mikro-célok szövege és állapota (aktív/teljesített),
 - chat üzenetek tartalma,
 - chatbot-válaszok,
 - a beszélgetéshez kapcsolódó, az alkalmazás által visszakeresett tudásanyag-részletek technikai felhasználása,
@@ -69,7 +73,7 @@ A szolgáltatás működéséhez igényve vett külső szolgáltatók lehetnek k
 8. Adatmegőrzési idő
 Az adatok a felhasználói fiók aktív fennállásáig kerülnek megőrzésre. Mivel a Myra egy nonprofit kutatási és önismereti projekt, jogszabály nem írja elő az adatok kötelező megőrzési idejét.
 
-A felhasználó bármikor kezdeményezheti fiókja és kapcsolódó adatainak azonnali és végleges törlését a Beállítások menüben a "Fiók törlése" gombbal, vagy e-mailben: odor-antal@research.hu. A törlés során a felhasználói profil, a mérési eredmények (kérdőívek), a megbízható eszközök és az összes chat beszélgetés előzménye véglegesen törlődik a futó adatbázisból. A hozzájárulás visszavonása a fiók és az adatok törlésének kérésével történhet. A hozzájárulás visszavonása nem érinti a visszavonás előtti adatkezelés jogszerűségét.
+A felhasználó bármikor kezdeményezheti fiókja és kapcsolódó adatainak azonnali és végleges törlését a Beállítások menüben a "Fiók törlése" gombbal, vagy e-mailben: odor-antal@research.hu. A törlés során a felhasználói profil, a mérési eredmények (kérdőívek), a vállalt mikro-célok, a megbízható eszközök és az összes chat beszélgetés előzménye véglegesen törlődik a futó adatbázisból. A hozzájárulás visszavonása a fiók és az adatok törlésének kérésével történhet. A hozzájárulás visszavonása nem érinti a visszavonás előtti adatkezelés jogszerűségét.
 
 9. A felhasználó jogai
 A felhasználó a GDPR alapján jogosult:
@@ -77,7 +81,7 @@ A felhasználó a GDPR alapján jogosult:
 - hozzáférni a róla kezelt adatokhoz,
 - kérni az adatok helyesbítését,
 - kérni az adatok törlését (a Beállítások menüben közvetlenül és azonnal végrehajtható),
-- kérni az adathordozhatóságot (a GDPR 20. cikke alapján a Beállítások -> 'Adatok letöltése' menüpontban közvetlenül letölthető a teljes profil és chat előzmény gépileg olvasható JSON formátumban),
+- kérni az adathordozhatóságot (a GDPR 20. cikke alapján a Beállítások -> 'Adatok letöltése' menüpontban közvetlenül letölthető a teljes profil, a mérési előzmények, a vállalt mikro-célok és a chat előzmény gépileg olvasható JSON formátumban),
 - kérni az adatkezelés korlátozását,
 - tiltakozni a jogos érdeken alapuló adatkezelés ellen,
 - hozzájárulását visszavonni,

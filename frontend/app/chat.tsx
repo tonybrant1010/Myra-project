@@ -324,6 +324,32 @@ export default function ChatScreen() {
   const isExpired = !!user?.is_code_expired;
   const isReadOnly = (viewSessionId !== null && viewSessionId !== activeSessionId) || isExpired;
 
+  // Proaktív Myra check-in: pár nap kihagyás után Myra nyitja újra a beszélgetést.
+  // A backend dönti el, kell-e (best effort); szálanként legfeljebb egyszer kérjük le.
+  const checkinRequestedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (loading || !token) return;
+    if (!viewSessionId || !activeSessionId || viewSessionId !== activeSessionId) return;
+    if (isReadOnly || messages.length === 0) return;
+    if (checkinRequestedRef.current === viewSessionId) return;
+    checkinRequestedRef.current = viewSessionId;
+    (async () => {
+      try {
+        const r = await authedFetch(token, "/api/chat/checkin", { method: "POST" });
+        if (!r.ok) return;
+        const data = await r.json().catch(() => null);
+        const msg = (data?.message || null) as Msg | null;
+        if (msg && msg.id) {
+          setMessages((m) => (m.some((x) => x.id === msg.id) ? m : [...m, msg]));
+          animateAssistantMessage(msg);
+          scrollToBottom(true);
+        }
+      } catch {
+        // csendes hiba — a check-in opcionális kényelmi funkció
+      }
+    })();
+  }, [loading, token, viewSessionId, activeSessionId, isReadOnly, messages.length, animateAssistantMessage, scrollToBottom]);
+
   const stopSpeech = useCallback(() => {
     if (Platform.OS === "web") {
       (globalThis as any).speechSynthesis?.cancel?.();

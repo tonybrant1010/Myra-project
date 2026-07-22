@@ -35,7 +35,10 @@ A frontend Vercelen fut. A backend Google Cloud VM-en fut Docker konténerben. A
 
 - felhasználói regisztráció, bejelentkezés és MFA email kód;
 - ESV-modell alapú kérdőív és állapotkód-számítás;
-- mérési eredményoldal;
+- mérési eredményoldal sávonkénti szöveges eredmény-értelmezéssel;
+- mérés utáni mikro-cél javaslatok, cél-követés a főoldalon, a célok chat-kontextusba illesztésével;
+- proaktív Myra check-in: néhány nap kihagyás után Myra támogató visszakérdezéssel nyitja újra a beszélgetést (admin-beállítás: proactive_checkin_days, 0 = ki);
+- ESV25 Inventory szakemberi PDF-összefoglaló (Myra Project arculat, kiemelt figyelmeztetés, teljes módszertani és POMP-transzparencia);
 - méréshez kötött Myra chat;
 - chat- és mérési előzmények;
 - bővített chat kontextus ugyanazon mérési szálon belül;

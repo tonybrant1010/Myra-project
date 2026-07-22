@@ -30,11 +30,18 @@ import httpx
 import jwt
 from dotenv import load_dotenv
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Header, Request, UploadFile, File, BackgroundTasks, Query
-from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from pypdf import PdfReader
+
+try:
+    from fpdf import FPDF  # noqa: E402
+    from fpdf.enums import XPos, YPos  # noqa: E402
+    FPDF_AVAILABLE = True
+except ImportError:
+    FPDF_AVAILABLE = False
 from sqlalchemy import (
     Boolean, Column, DateTime, ForeignKey, Integer, String, Text, JSON, func, select, delete, update,
     text as sql_text,
@@ -85,6 +92,7 @@ TTS_ENGINE = os.environ.get("TTS_ENGINE", "none").strip().lower()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("myra")
+logging.getLogger("fontTools").setLevel(logging.WARNING)  # PDF-riport fontbeágyazás INFO-zaja
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
@@ -370,6 +378,19 @@ class QuizSubmission(Base):
     norms = Column(JSON, nullable=False)
     code = Column(String(4), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class UserGoal(Base):
+    """A felhasználó által vállalt mikro-célok (a mérés leggyengébb skálája alapján javasolva)."""
+    __tablename__ = "user_goals"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    session_id = Column(String(40), ForeignKey("quiz_submissions.id", ondelete="SET NULL"), nullable=True, index=True)
+    scale = Column(String(1), nullable=False, default="")
+    text = Column(String(300), nullable=False)
+    status = Column(String(12), nullable=False, default="active")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    done_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class AppSetting(Base):
@@ -1583,6 +1604,7 @@ async def lifespan(app: FastAPI):
             ("kb_text", ""),
             ("live_api_key", ""),
             ("live_model", "gemini-3.1-flash-live-preview"),
+            ("proactive_checkin_days", "3"),
         ]:
             res = await db.execute(select(AppSetting).where(AppSetting.key == k))
             if res.scalar_one_or_none() is None:
@@ -1737,8 +1759,8 @@ class RegisterBody(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     password: str = Field(min_length=8, max_length=128)
     accepted_terms: bool = False
-    accepted_terms_version: str = Field(default="2026-06-15", max_length=40)
-    accepted_privacy_version: str = Field(default="2026-06-15", max_length=40)
+    accepted_terms_version: str = Field(default="2026-07-22", max_length=40)
+    accepted_privacy_version: str = Field(default="2026-07-22", max_length=40)
 
 
 class LoginBody(BaseModel):
@@ -1820,6 +1842,23 @@ class QuizSubmitBody(BaseModel):
 class ChatSendBody(BaseModel):
     message: str = Field(min_length=1, max_length=CHAT_MESSAGE_MAX_CHARS)
     session_id: Optional[str] = Field(None, max_length=40)
+
+
+class GoalItemIn(BaseModel):
+    text: str = Field(min_length=3, max_length=300)
+    scale: str = Field("", max_length=1)
+
+    @field_validator("scale")
+    @classmethod
+    def _valid_scale(cls, v: str) -> str:
+        v = (v or "").lower().strip()
+        if v and v not in ("a", "p", "h", "c"):
+            raise ValueError("Érvénytelen skála.")
+        return v
+
+
+class GoalsCreateBody(BaseModel):
+    items: List[GoalItemIn] = Field(min_length=1, max_length=3)
 
 
 class StateCodeIn(BaseModel):
@@ -2547,6 +2586,7 @@ async def auth_delete_account(body: DeleteAccountBody, request: Request, user: U
     await db.flush()
     await _admin_audit(db, user, request, "user.account.delete", f"user_id={deleted_user_id}")
     await db.execute(delete(ChatMessage).where(ChatMessage.user_id == user.id))
+    await db.execute(delete(UserGoal).where(UserGoal.user_id == user.id))
     await db.execute(delete(QuizSubmission).where(QuizSubmission.user_id == user.id))
     await db.execute(delete(MfaChallenge).where(MfaChallenge.user_id == user.id))
     await db.execute(delete(TrustedDevice).where(TrustedDevice.user_id == user.id))
@@ -2675,17 +2715,17 @@ async def auth_totp_login(body: TotpLoginBody, request: Request, db: AsyncSessio
     }
 
 
-LEGAL_PRIVACY_VERSION = "2026-06-15"
-LEGAL_TERMS_VERSION = "2026-06-15"
+LEGAL_PRIVACY_VERSION = "2026-07-22"
+LEGAL_TERMS_VERSION = "2026-07-22"
 
 @api.get("/legal/privacy")
 async def get_legal_privacy():
-    return {"version": LEGAL_PRIVACY_VERSION, "last_updated": "2026-06-15", "url": "/privacy.html"}
+    return {"version": LEGAL_PRIVACY_VERSION, "last_updated": "2026-07-22", "url": "/privacy.html"}
 
 
 @api.get("/legal/terms")
 async def get_legal_terms():
-    return {"version": LEGAL_TERMS_VERSION, "last_updated": "2026-06-15", "url": "/terms.html"}
+    return {"version": LEGAL_TERMS_VERSION, "last_updated": "2026-07-22", "url": "/terms.html"}
 
 
 @api.post("/user/consent")
@@ -2707,7 +2747,12 @@ async def post_user_data_export(body: ExportDataBody, request: Request, user: Us
     
     sub_res = await db.execute(select(QuizSubmission).where(QuizSubmission.user_id == user.id))
     submissions = [{"id": s.id, "answers": s.answers, "norms": s.norms, "code": s.code, "created_at": s.created_at.isoformat()} for s in sub_res.scalars().all()]
-    
+
+    goal_res = await db.execute(select(UserGoal).where(UserGoal.user_id == user.id))
+    goals = [{"id": g.id, "text": g.text, "scale": g.scale, "status": g.status,
+              "created_at": g.created_at.isoformat() if g.created_at else None,
+              "done_at": g.done_at.isoformat() if g.done_at else None} for g in goal_res.scalars().all()]
+
     return {
         "user_profile": {
             "name": user.name,
@@ -2718,7 +2763,8 @@ async def post_user_data_export(body: ExportDataBody, request: Request, user: Us
             "consent_updated_at": user.consent_updated_at.isoformat() if user.consent_updated_at else None,
         },
         "chat_messages": messages,
-        "quiz_submissions": submissions
+        "quiz_submissions": submissions,
+        "goals": goals
     }
 
 
@@ -2730,6 +2776,7 @@ async def post_user_data_delete(body: ExportDataBody, request: Request, user: Us
     await _admin_audit(db, user, request, "user.data.delete", f"Data delete requested by user {user.id}")
     
     await db.execute(delete(ChatMessage).where(ChatMessage.user_id == user.id))
+    await db.execute(delete(UserGoal).where(UserGoal.user_id == user.id))
     await db.execute(delete(QuizSubmission).where(QuizSubmission.user_id == user.id))
     await db.execute(delete(MfaChallenge).where(MfaChallenge.user_id == user.id))
     await db.execute(delete(TrustedDevice).where(TrustedDevice.user_id == user.id))
@@ -3045,6 +3092,11 @@ async def quiz_delete_session(
             ChatMessage.session_id == session_id,
         )
     )
+    await db.execute(
+        update(UserGoal)
+        .where(UserGoal.user_id == user.id, UserGoal.session_id == session_id)
+        .values(session_id=None)
+    )
     await db.execute(delete(QuizSubmission).where(QuizSubmission.id == session_id))
 
     latest_res = await db.execute(
@@ -3078,6 +3130,643 @@ async def quiz_delete_session(
         "is_code_expired": is_expired,
         "code_days_remaining": days_remaining
     }
+
+
+# ---------------------------------------------------------------------------
+# Mikro-célok: a mérés leggyengébb skálája alapján javasolt apró, heti vállalások
+# ---------------------------------------------------------------------------
+
+GOAL_SCALE_LABELS = {"a": "érzelmi állapot", "p": "érzelemszabályozás", "h": "stresszterhelés", "c": "testi jelzések"}
+
+GOAL_TEMPLATES: dict[str, list[str]] = {
+    "a": [
+        "Naponta egyszer megállok egy percre, és megnevezem magamban, mit érzek éppen.",
+        "Lefekvés előtt leírok egy dolgot, ami aznap megnyugtatott vagy jólesett.",
+        "Ha feszültséget veszek észre, három lassú, mély levegőt veszek, mielőtt továbblépek.",
+        "Minden nap szánok 5 percet valamire, ami csak az enyém (zene, séta, tea).",
+        "Ha aggodalom jön, felírom egy papírra, és kijelölök rá egy 10 perces „aggódó időt”.",
+    ],
+    "p": [
+        "Erős érzelemnél 10 másodpercet várok, mielőtt reagálok vagy válaszolok.",
+        "Naponta egyszer megkérdezem magamtól: „Mire lenne most szükségem valójában?”",
+        "Ha felhúzom magam, kilépek a helyzetből 2 percre (másik szoba, ablak, víz).",
+        "Este visszanézek egy nehezebb pillanatot, és leírom, mi segített vagy segített volna.",
+        "Egy nehéz beszélgetés előtt előre eldöntöm, mi az az egy dolog, amit el akarok mondani.",
+    ],
+    "h": [
+        "A napomba beiktatok egy 10 perces szünetet, amit tényleg megtartok.",
+        "Ezen a héten egyszer nemet mondok valamire, ami nem fér bele.",
+        "Munka vagy tanulás közben óránként felállok és nyújtózom egyet.",
+        "Este 30 perccel lefekvés előtt leteszem a telefont.",
+        "Hetente egyszer előre megtervezem a másnapom három legfontosabb teendőjét.",
+    ],
+    "c": [
+        "Naponta egyszer végigpásztázom a testem fejtől talpig, és megfigyelem, hol van feszültség.",
+        "Minden nap sétálok legalább 10 percet a szabadban.",
+        "Figyelek rá, hogy napközben rendszeresen igyak vizet.",
+        "Lefekvés előtt 5 perc lassú, hasi légzéssel készülök az alvásra.",
+        "Ha testi tünetet veszek észre (pl. feszülés, fejfájás), felírom, milyen helyzetben jelent meg.",
+    ],
+}
+
+MAX_ACTIVE_GOALS = 3
+
+
+def _scale_badness(norms: dict) -> list[tuple[str, float]]:
+    """Skálák a „legrosszabb elöl” sorrendben. P fordított: alacsony norm = gyengébb szabályozás."""
+    try:
+        badness = {
+            "a": float(norms.get("a", 0.0)),
+            "p": 1.0 - float(norms.get("p", 1.0)),
+            "h": float(norms.get("h", 0.0)),
+            "c": float(norms.get("c", 0.0)),
+        }
+    except (TypeError, ValueError):
+        badness = {"a": 0.0, "p": 0.0, "h": 0.0, "c": 0.0}
+    return sorted(badness.items(), key=lambda kv: kv[1], reverse=True)
+
+
+def _goal_suggestions_for(norms: dict, session_seed: str, existing_texts: set[str]) -> list[dict]:
+    ranked = _scale_badness(norms)
+    seed = int(hashlib.sha256((session_seed or "").encode("utf-8")).hexdigest()[:8], 16)
+    out: list[dict] = []
+    plan = [(ranked[0][0], 2), (ranked[1][0], 1)] if len(ranked) > 1 else [(ranked[0][0], 3)]
+    for scale, count in plan:
+        pool = GOAL_TEMPLATES.get(scale, [])
+        if not pool:
+            continue
+        start = seed % len(pool)
+        picked = 0
+        for i in range(len(pool)):
+            candidate = pool[(start + i) % len(pool)]
+            if candidate in existing_texts:
+                continue
+            out.append({"scale": scale, "text": candidate})
+            picked += 1
+            if picked >= count:
+                break
+    return out[:3]
+
+
+async def _get_active_goals(db: AsyncSession, user_id: int) -> list["UserGoal"]:
+    res = await db.execute(
+        select(UserGoal)
+        .where(UserGoal.user_id == user_id, UserGoal.status == "active")
+        .order_by(UserGoal.created_at.asc())
+        .limit(MAX_ACTIVE_GOALS)
+    )
+    return list(res.scalars().all())
+
+
+def _build_goals_block(goals: list["UserGoal"]) -> str:
+    if not goals:
+        return ""
+    lines = "\n".join(f"- {g.text}" for g in goals)
+    return (
+        "AKTUÁLIS MIKRO-CÉLOK – a felhasználó által vállalt apró célok. Belső kontextus, ne sorold fel kéretlenül.\n"
+        f"{lines}\n"
+        "- Ha természetes alkalom adódik, egy célra kérdezz rá finoman, támogatóan. Soha ne számon kérően, és ne minden üzenetben.\n"
+    )
+
+
+def _goal_out(g: "UserGoal") -> dict:
+    return {
+        "id": g.id,
+        "text": g.text,
+        "scale": g.scale,
+        "scale_label": GOAL_SCALE_LABELS.get(g.scale, ""),
+        "status": g.status,
+        "session_id": g.session_id,
+        "created_at": g.created_at.isoformat() if g.created_at else None,
+        "done_at": g.done_at.isoformat() if g.done_at else None,
+    }
+
+
+@api.get("/goals/suggest")
+async def goals_suggest(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    latest_res = await db.execute(
+        select(QuizSubmission)
+        .where(QuizSubmission.user_id == user.id)
+        .order_by(QuizSubmission.created_at.desc())
+        .limit(1)
+    )
+    latest = latest_res.scalar_one_or_none()
+    if not latest:
+        raise HTTPException(status_code=400, detail="Először töltsd ki a kérdőívet.")
+    goals_res = await db.execute(select(UserGoal).where(UserGoal.user_id == user.id))
+    existing = {g.text for g in goals_res.scalars().all()}
+    active_count = len(await _get_active_goals(db, user.id))
+    suggestions = _goal_suggestions_for(latest.norms or {}, latest.id, existing)
+    ranked = _scale_badness(latest.norms or {})
+    return {
+        "suggestions": suggestions,
+        "focus_scale": ranked[0][0] if ranked else "",
+        "focus_scale_label": GOAL_SCALE_LABELS.get(ranked[0][0], "") if ranked else "",
+        "active_count": active_count,
+        "max_active": MAX_ACTIVE_GOALS,
+        "session_id": latest.id,
+    }
+
+
+@api.get("/goals")
+async def goals_list(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    res = await db.execute(
+        select(UserGoal)
+        .where(UserGoal.user_id == user.id)
+        .order_by(UserGoal.status.asc(), UserGoal.created_at.desc())
+        .limit(30)
+    )
+    return {"goals": [_goal_out(g) for g in res.scalars().all()], "max_active": MAX_ACTIVE_GOALS}
+
+
+@api.post("/goals")
+async def goals_create(body: GoalsCreateBody, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    active = await _get_active_goals(db, user.id)
+    if len(active) + len(body.items) > MAX_ACTIVE_GOALS:
+        raise HTTPException(status_code=400, detail=f"Egyszerre legfeljebb {MAX_ACTIVE_GOALS} aktív célod lehet.")
+    active_texts = {g.text for g in active}
+    latest_res = await db.execute(
+        select(QuizSubmission)
+        .where(QuizSubmission.user_id == user.id)
+        .order_by(QuizSubmission.created_at.desc())
+        .limit(1)
+    )
+    latest = latest_res.scalar_one_or_none()
+    created: list[UserGoal] = []
+    for item in body.items:
+        text_value = " ".join(item.text.split())
+        if not text_value or text_value in active_texts:
+            continue
+        goal = UserGoal(
+            user_id=user.id,
+            session_id=latest.id if latest else None,
+            scale=item.scale,
+            text=text_value[:300],
+            status="active",
+        )
+        db.add(goal)
+        created.append(goal)
+        active_texts.add(text_value)
+    await db.flush()
+    return {"ok": True, "created": [_goal_out(g) for g in created]}
+
+
+@api.post("/goals/{goal_id}/done")
+async def goals_mark_done(goal_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(UserGoal).where(UserGoal.id == goal_id, UserGoal.user_id == user.id))
+    goal = res.scalar_one_or_none()
+    if not goal:
+        raise HTTPException(status_code=404, detail="A cél nem található.")
+    goal.status = "done"
+    goal.done_at = _now()
+    await db.flush()
+    return {"ok": True, "goal": _goal_out(goal)}
+
+
+@api.delete("/goals/{goal_id}")
+async def goals_delete(goal_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(UserGoal).where(UserGoal.id == goal_id, UserGoal.user_id == user.id))
+    goal = res.scalar_one_or_none()
+    if not goal:
+        raise HTTPException(status_code=404, detail="A cél nem található.")
+    await db.execute(delete(UserGoal).where(UserGoal.id == goal_id))
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Szöveges eredmény-értelmezés: determinisztikus, sávonkénti magyarázatok
+# (szándékosan nem LLM-alapú: reprodukálható, és nem "hallucinálhat")
+# ---------------------------------------------------------------------------
+
+SCALE_INTERPRETATION: dict[str, dict] = {
+    "a": {
+        "label": "A – Érzelmi állapot",
+        "bands": {
+            1: ("alacsony szorongás", "Az érzelmi állapot kiegyensúlyozottnak tűnik; a szorongásos élmények ritkák vagy enyhék."),
+            2: ("enyhe szorongás", "Enyhe szorongásos jelzések látszanak; ezek a mindennapokban általában még jól kezelhetők."),
+            3: ("emelkedett szorongás", "Emelkedett szorongásszintre utal; érdemes megfigyelni, mely helyzetek erősítik fel."),
+            4: ("magas szorongás", "Kifejezett szorongásos terhelésre utal; ha tartósan fennáll, indokolt lehet szakemberrel átbeszélni."),
+        },
+    },
+    "p": {
+        "label": "P – Érzelemszabályozás",
+        "bands": {
+            1: ("gyenge érzelemszabályozás", "Az érzelmek szabályozása jelenleg nehezített lehet; az érzelmi hullámok könnyen elsodorhatnak."),
+            2: ("ingadozó érzelemszabályozás", "Az érzelemszabályozás ingadozó; nyugodt időszakban jól működik, terhelés alatt gyengülhet."),
+            3: ("stabil érzelemszabályozás", "Az érzelemszabályozás összességében stabil; a nehezebb érzésekkel való megküzdés többnyire működik."),
+            4: ("erős érzelemszabályozás", "Erős, megbízható érzelemszabályozásra utal; ez fontos védőfaktor a terheléssel szemben."),
+        },
+    },
+    "h": {
+        "label": "H – Észlelt stressz",
+        "bands": {
+            1: ("alacsony stressz", "Az észlelt stresszterhelés alacsony; a mindennapi terhek jelenleg jól viselhetők."),
+            2: ("enyhe stressz", "Mérsékelt stresszterhelést jelez; időnkénti feszültség mellett az egyensúly többnyire megvan."),
+            3: ("emelkedett stressz", "Emelkedett stresszterhelésre utal; a pihenés és a határok tudatosabb védelme segíthet."),
+            4: ("magas stressz", "Magas észlelt stresszt jelez; a tartós túlterhelés kimerüléshez vezethet, érdemes tehermentesíteni."),
+        },
+    },
+    "c": {
+        "label": "C – Testi tünetek",
+        "bands": {
+            1: ("kevés testi tünet", "A kérdőívben alig jelent meg testi tünet; a feszültség kevéssé mutatkozik testi szinten."),
+            2: ("enyhe testi tünetek", "Enyhe testi jelzések (pl. feszülés, fáradtság) jelentek meg; érdemes figyelni rájuk."),
+            3: ("fokozott testi tünetek", "Fokozott testi tünetterhelésre utal; a tartós feszültség gyakran a testen keresztül jelez."),
+            4: ("kifejezett testi tünetek", "Kifejezett testi tünetterhelésre utal; tartós panaszok esetén orvosi kivizsgálás is indokolt lehet."),
+        },
+    },
+}
+
+INTERPRETATION_DISCLAIMER = (
+    "Az értelmezés önbeszámolós kérdőíven alapuló tájékoztatás, nem diagnózis, "
+    "és nem helyettesíti a szakemberrel való konzultációt."
+)
+
+
+def _build_interpretation(norms: dict, sc: Optional[StateCode] = None) -> dict:
+    scales = []
+    for key in ("a", "p", "h", "c"):
+        try:
+            val = float((norms or {}).get(key, 0.0))
+        except (TypeError, ValueError):
+            val = 0.0
+        val = max(0.0, min(1.0, val))
+        band = _bucket(val)
+        band_label, text = SCALE_INTERPRETATION[key]["bands"][band]
+        scales.append({
+            "key": key,
+            "label": SCALE_INTERPRETATION[key]["label"],
+            "pomp": round(val * 100),
+            "band": band,
+            "band_label": band_label,
+            "text": text,
+        })
+    overall = None
+    if sc is not None:
+        overall = {"code": sc.code, "title": sc.title, "severity": sc.severity}
+    return {"scales": scales, "overall": overall, "disclaimer": INTERPRETATION_DISCLAIMER}
+
+
+@api.get("/quiz/interpretation")
+async def quiz_interpretation(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    latest_res = await db.execute(
+        select(QuizSubmission)
+        .where(QuizSubmission.user_id == user.id)
+        .order_by(QuizSubmission.created_at.desc())
+        .limit(1)
+    )
+    latest = latest_res.scalar_one_or_none()
+    if not latest:
+        raise HTTPException(status_code=400, detail="Még nincs mérési eredményed.")
+    sc_res = await db.execute(select(StateCode).where(StateCode.code == latest.code))
+    sc = sc_res.scalar_one_or_none()
+    data = _build_interpretation(latest.norms or {}, sc)
+    return {
+        "session_id": latest.id,
+        "code": latest.code,
+        "created_at": latest.created_at.isoformat() if latest.created_at else None,
+        **data,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Szakember részére készült PDF-összefoglaló a mérési előzményekről
+# ---------------------------------------------------------------------------
+
+REPORT_FONT_DIR = ROOT_DIR / "assets" / "fonts"
+REPORT_MAX_SESSIONS = 24
+
+
+def _report_date(dt: Optional[datetime]) -> str:
+    if not dt:
+        return "-"
+    value = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    try:
+        from zoneinfo import ZoneInfo
+        value = value.astimezone(ZoneInfo("Europe/Budapest"))
+    except Exception:
+        pass
+    return value.strftime("%Y.%m.%d.")
+
+
+# Aurora Blue palettából származtatott nyomtatási színek (design_guidelines.json / theme.ts)
+_R_NAVY = (10, 35, 64)          # Deep Navy #0A2340
+_R_NAVY_DARK = (5, 17, 31)      # Primary Dark #05111F
+_R_CYAN = (87, 199, 255)        # Aurora Cyan #57C7FF
+_R_BLUE = (29, 142, 216)        # Action Blue #1D8ED8
+_R_VIOLET = (139, 143, 232)     # Aurora köd-lila
+_R_TEXT = (13, 31, 53)          # textPrimary
+_R_TEXT_SOFT = (74, 93, 115)    # textSecondary
+_R_BG_SOFT = (234, 247, 255)    # accentSoft háttér #EAF7FF
+_R_ROW_ALT = (244, 249, 252)
+_R_RULE = (206, 228, 242)
+
+
+class _EsvReportPDF(FPDF):
+    """Myra Project arculatú riport: lábléc oldalszámmal."""
+
+    def footer(self):
+        try:
+            self.set_font("Manrope", "", 7)
+        except Exception:
+            return
+        self.set_y(-13)
+        self.set_text_color(122, 138, 154)
+        half = (self.w - self.l_margin - self.r_margin) / 2
+        self.set_x(self.l_margin)
+        self.cell(half, 5, "Myra Project · ESV25 Inventory")
+        self.cell(half, 5, f"{self.page_no()}/{{nb}}", align="R")
+
+
+def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], titles: dict[str, StateCode]) -> bytes:
+    pdf = _EsvReportPDF(format="A4")
+    pdf.alias_nb_pages()
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.add_font("Manrope", "", str(REPORT_FONT_DIR / "Manrope_400Regular.ttf"))
+    pdf.add_font("Manrope", "B", str(REPORT_FONT_DIR / "Manrope_700Bold.ttf"))
+    pdf.add_font("ManropeSB", "", str(REPORT_FONT_DIR / "Manrope_600SemiBold.ttf"))
+    pdf.set_margins(15, 15, 15)
+    pdf.add_page()
+    epw = pdf.w - pdf.l_margin - pdf.r_margin
+
+    def section(title_txt: str) -> None:
+        pdf.ln(2.5)
+        y = pdf.get_y()
+        pdf.set_fill_color(*_R_CYAN)
+        pdf.rect(pdf.l_margin, y + 1.2, 2.4, 3.6, style="F")
+        pdf.set_x(pdf.l_margin + 5.2)
+        pdf.set_font("ManropeSB", "", 10.5)
+        pdf.set_text_color(*_R_NAVY)
+        pdf.cell(epw - 5.2, 6, title_txt, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_draw_color(*_R_RULE)
+        pdf.line(pdf.l_margin, pdf.get_y() + 0.6, pdf.l_margin + epw, pdf.get_y() + 0.6)
+        pdf.ln(3.2)
+
+    # --- Aurora fejléc-sáv (a webes ContentBackground nyomtatási megfelelője) ---
+    band_h = 40.0
+    pdf.set_fill_color(*_R_NAVY_DARK)
+    pdf.rect(0, 0, pdf.w, band_h, style="F")
+    pdf.set_fill_color(*_R_NAVY)
+    pdf.rect(0, 0, pdf.w, band_h - 3.0, style="F")
+    try:
+        with pdf.local_context(fill_opacity=0.16):
+            pdf.set_fill_color(*_R_CYAN)
+            pdf.ellipse(pdf.w - 78, -14, 84, 34, style="F")
+        with pdf.local_context(fill_opacity=0.10):
+            pdf.set_fill_color(*_R_VIOLET)
+            pdf.ellipse(-20, 16, 90, 32, style="F")
+        with pdf.local_context(fill_opacity=0.22):
+            pdf.set_fill_color(*_R_CYAN)
+            pdf.ellipse(pdf.w - 40, 6, 46, 22, style="F")
+    except Exception:
+        pass
+    pdf.set_fill_color(*_R_CYAN)
+    pdf.rect(0, band_h, pdf.w, 1.1, style="F")
+
+    pdf.set_xy(pdf.l_margin, 8.5)
+    pdf.set_font("Manrope", "B", 8)
+    pdf.set_text_color(*_R_CYAN)
+    try:
+        pdf.set_char_spacing(1.6)
+    except Exception:
+        pass
+    pdf.cell(epw, 5, "MYRA PROJECT", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    try:
+        pdf.set_char_spacing(0)
+    except Exception:
+        pass
+    pdf.set_font("Manrope", "B", 19)
+    pdf.set_text_color(255, 255, 255)
+    pdf.cell(epw, 10, "ESV25 Inventory — mérési összefoglaló", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font("ManropeSB", "", 9)
+    pdf.set_text_color(200, 226, 245)
+    pdf.cell(epw, 6, "Szakember részére készült kivonat · Érzelem–Stressz–Viselkedés (ESV) modell",
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    # --- Kiemelt figyelmeztetés — szándékosan minden tartalom előtt ---
+    pdf.set_y(band_h + 8)
+    warn_y0 = pdf.get_y()
+    pdf.set_fill_color(*_R_BG_SOFT)
+    pdf.set_font("Manrope", "B", 9)
+    pdf.set_text_color(*_R_NAVY)
+    pdf.multi_cell(epw, 6.4, "  FONTOS FIGYELMEZTETÉS", fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font("Manrope", "", 8.6)
+    pdf.set_text_color(52, 72, 94)
+    pdf.multi_cell(
+        epw, 4.9,
+        "  Ez a dokumentum nem diagnózis, és nem orvostechnikai eszköz. Az ESV25 Inventory a Myra Project "
+        "önismereti, edukációs célú önbecslő kérdőíve; nem alkalmas betegség vagy állapot megállapítására, "
+        "kizárására, monitorozására vagy kezelésére, és nem helyettesíti a klinikai vizsgálatot vagy a "
+        "szakemberrel való konzultációt. Minden érték kizárólag önbeszámolón alapul. Az eredmények értelmezése "
+        "képzett szakember feladata, a kliens tágabb kontextusának ismeretében. A kivonat a felhasználó saját "
+        "kezdeményezésére készült.  ",
+        fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT,
+    )
+    warn_y1 = pdf.get_y()
+    pdf.set_fill_color(*_R_CYAN)
+    pdf.rect(pdf.l_margin, warn_y0, 1.6, warn_y1 - warn_y0, style="F")
+    pdf.ln(4)
+
+    # --- Meta blokk ---
+    pdf.set_text_color(*_R_TEXT)
+    meta_rows = [
+        ("Név:", user.name or "-"),
+        ("E-mail:", user.email or "-"),
+        ("Kérdőív:", "ESV25 Inventory (21 tételes önkitöltő kérdőív)"),
+        ("Mérések száma:", str(len(sessions))),
+        ("Kivonat kelte:", _report_date(_now())),
+    ]
+    for label, value in meta_rows:
+        pdf.set_font("ManropeSB", "", 9.5)
+        pdf.cell(36, 5.8, label)
+        pdf.set_font("Manrope", "", 9.5)
+        pdf.set_text_color(*_R_TEXT)
+        pdf.cell(epw - 36, 5.8, value, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    section("Mérési előzmények")
+
+    col_w = {"date": 26, "code": 16, "dim": 15, "title": 0.0}
+    col_w["title"] = epw - (col_w["date"] + col_w["code"] + 4 * col_w["dim"])
+    pdf.set_font("ManropeSB", "", 8.6)
+    pdf.set_fill_color(*_R_NAVY)
+    pdf.set_text_color(255, 255, 255)
+    pdf.cell(col_w["date"], 7, "Dátum", border=0, align="C", fill=True)
+    pdf.cell(col_w["code"], 7, "Kód", border=0, align="C", fill=True)
+    for h in ("A", "P", "H", "C"):
+        pdf.cell(col_w["dim"], 7, h, border=0, align="C", fill=True)
+    pdf.cell(col_w["title"], 7, "Állapot", border=0, align="C", fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    pdf.set_font("Manrope", "", 8.6)
+    for idx, s in enumerate(sessions):
+        norms = s.norms or {}
+        fill = idx % 2 == 1
+        pdf.set_fill_color(*_R_ROW_ALT)
+        pdf.set_text_color(*_R_TEXT)
+        sc = titles.get(s.code)
+        title_txt = f"{sc.title} ({sc.severity})" if sc and sc.severity else (sc.title if sc else "-")
+        if len(title_txt) > 58:
+            title_txt = title_txt[:57] + "…"
+        pdf.cell(col_w["date"], 6.4, _report_date(s.created_at), border=0, align="C", fill=fill)
+        pdf.set_font("ManropeSB", "", 8.6)
+        pdf.set_text_color(*_R_BLUE)
+        pdf.cell(col_w["code"], 6.4, s.code, border=0, align="C", fill=fill)
+        pdf.set_font("Manrope", "", 8.6)
+        pdf.set_text_color(*_R_TEXT)
+        for key in ("a", "p", "h", "c"):
+            try:
+                val = f"{float(norms.get(key, 0.0)) * 100:.0f}"
+            except (TypeError, ValueError):
+                val = "-"
+            pdf.cell(col_w["dim"], 6.4, val, border=0, align="C", fill=fill)
+        pdf.cell(col_w["title"], 6.4, title_txt, border=0, align="L", fill=fill,
+                 new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font("Manrope", "", 7.8)
+    pdf.set_text_color(*_R_TEXT_SOFT)
+    pdf.cell(epw, 5.4, "A táblázat értékei POMP-pontszámok (0–100) — magyarázat a Módszertan szakaszban.",
+             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    # --- Teljes módszertani transzparencia ---
+    section("Módszertan és pontozás")
+    pdf.set_font("Manrope", "", 8.8)
+    pdf.set_text_color(52, 72, 94)
+    pdf.multi_cell(
+        epw, 4.9,
+        "Az ESV25 Inventory 21 tételes önkitöltő kérdőív, amely az Érzelem–Stressz–Viselkedés (ESV) modell "
+        "négy dimenziójáról ad pillanatképet. Mindegyik skálát nemzetközileg validált mérőeszköz inspirálta:",
+        new_x=XPos.LMARGIN, new_y=YPos.NEXT,
+    )
+    pdf.ln(1)
+    scale_facts = [
+        "A – Aktuális szorongás: 6 tétel (1–5) · inspiráció: STAI-S · belső konzisztencia: α = 0,91",
+        "P – Érzelemszabályozás: 6 tétel (1–5, fordított pontozás) · inspiráció: DERS · α = 0,87",
+        "H – Észlelt stressz: 4 tétel (1–5) · inspiráció: PSS · α = 0,85",
+        "C – Testi tünetek: 5 tétel (0–2) · inspiráció: PHQ-15 · α = 0,66",
+    ]
+    for line in scale_facts:
+        y = pdf.get_y()
+        pdf.set_fill_color(*_R_BLUE)
+        pdf.rect(pdf.l_margin + 1.2, y + 1.7, 1.5, 1.5, style="F")
+        pdf.set_x(pdf.l_margin + 5)
+        pdf.set_font("Manrope", "", 8.8)
+        pdf.set_text_color(*_R_TEXT)
+        pdf.multi_cell(epw - 5, 4.9, line, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font("Manrope", "", 8.2)
+    pdf.set_text_color(*_R_TEXT_SOFT)
+    pdf.multi_cell(
+        epw, 4.6,
+        "A Cronbach-α értékek n = 100 fős elsődleges mintán mért belső konzisztenciát jeleznek. A C skála "
+        "megbízhatósága mérsékelt, ezért értékei óvatosabban értelmezendők.",
+        new_x=XPos.LMARGIN, new_y=YPos.NEXT,
+    )
+    pdf.ln(2)
+    pdf.set_font("ManropeSB", "", 9)
+    pdf.set_text_color(*_R_NAVY)
+    pdf.cell(epw, 5.4, "Mi az a POMP-pontszám?", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font("Manrope", "", 8.8)
+    pdf.set_text_color(52, 72, 94)
+    pdf.multi_cell(
+        epw, 4.9,
+        "A POMP (Percent of Maximum Possible) a skála nyers összegpontszámát a skála elméleti terjedelmének "
+        "százalékában fejezi ki: POMP = (nyers pont − elméleti minimum) / (elméleti maximum − elméleti minimum) × 100. "
+        "Így minden skála 0–100 között mozog, a tételszámtól függetlenül összehasonlítható módon. A magasabb érték "
+        "az adott jellemző erősebb jelenlétét jelzi; kivétel a P skála, ahol a magasabb érték erősebb, stabilabb "
+        "érzelemszabályozást jelent (fordított irány).",
+        new_x=XPos.LMARGIN, new_y=YPos.NEXT,
+    )
+    pdf.ln(2)
+    pdf.set_font("ManropeSB", "", 9)
+    pdf.set_text_color(*_R_NAVY)
+    pdf.cell(epw, 5.4, "Sávok és állapotkód", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.set_font("Manrope", "", 8.8)
+    pdf.set_text_color(52, 72, 94)
+    pdf.multi_cell(
+        epw, 4.9,
+        "Minden POMP-érték négy sáv egyikébe kerül: 1 = 0–30 · 2 = 31–60 · 3 = 61–80 · 4 = 81–100. "
+        "Az állapotkód négy számjegye rendre az A-P-H-C skála sávértéke. Fontos: a sávhatárok jelenleg elméleti "
+        "alapon rögzítettek; empirikus felülvizsgálatuk a folyamatban lévő validitási vizsgálat része. "
+        f"Pontozási verzió: ESV v{NORM_VERSION} (POMP-normalizálás).",
+        new_x=XPos.LMARGIN, new_y=YPos.NEXT,
+    )
+
+    # --- Legutóbbi mérés értelmezése ---
+    latest = sessions[-1]
+    interpretation = _build_interpretation(latest.norms or {}, titles.get(latest.code))
+    section(f"A legutóbbi mérés értelmezése ({_report_date(latest.created_at)})")
+    for item in interpretation["scales"]:
+        pdf.set_font("ManropeSB", "", 8.9)
+        pdf.set_text_color(*_R_BLUE)
+        pdf.multi_cell(epw, 5, f"{item['label']} — {item['band_label']} · POMP {item['pomp']}",
+                       new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.set_font("Manrope", "", 8.8)
+        pdf.set_text_color(52, 72, 94)
+        pdf.multi_cell(epw, 4.8, item["text"], new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.ln(1)
+
+    if len(sessions) >= 2:
+        prev = sessions[-2]
+        parts = []
+        for key in ("a", "p", "h", "c"):
+            try:
+                new_v = round(float((latest.norms or {}).get(key, 0.0)) * 100)
+                old_v = round(float((prev.norms or {}).get(key, 0.0)) * 100)
+            except (TypeError, ValueError):
+                continue
+            delta = new_v - old_v
+            sign = f"+{delta}" if delta > 0 else str(delta)
+            parts.append(f"{key.upper()}: {old_v} → {new_v} ({sign})")
+        if parts:
+            section(f"Változás az előző méréshez képest ({_report_date(prev.created_at)} → {_report_date(latest.created_at)})")
+            pdf.set_font("Manrope", "", 8.8)
+            pdf.set_text_color(*_R_TEXT)
+            pdf.multi_cell(epw, 5, "   ·   ".join(parts), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.set_font("Manrope", "", 7.8)
+            pdf.set_text_color(*_R_TEXT_SOFT)
+            pdf.cell(epw, 5, "Az értékek POMP-pontban értendők; a P skálán a növekedés erősödő szabályozást jelent.",
+                     new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    pdf.ln(3)
+    pdf.set_draw_color(*_R_RULE)
+    pdf.line(pdf.l_margin, pdf.get_y(), pdf.l_margin + epw, pdf.get_y())
+    pdf.ln(2)
+    pdf.set_font("Manrope", "", 8.2)
+    pdf.set_text_color(52, 72, 94)
+    pdf.multi_cell(epw, 4.6, INTERPRETATION_DISCLAIMER, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.ln(2)
+    pdf.set_font("Manrope", "", 7.8)
+    pdf.set_text_color(122, 138, 154)
+    pdf.multi_cell(
+        epw, 4.6,
+        "Generálta a Myra Project alkalmazás a felhasználó kérésére. A dokumentum a felhasználó személyes adatait "
+        "tartalmazza; kezelése a címzett szakember felelőssége.",
+        new_x=XPos.LMARGIN, new_y=YPos.NEXT,
+    )
+    return bytes(pdf.output())
+
+
+@api.get("/quiz/report.pdf")
+async def quiz_report_pdf(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    if not FPDF_AVAILABLE:
+        raise HTTPException(status_code=503, detail="A PDF-összefoglaló funkcióhoz az fpdf2 csomag szükséges (pip install fpdf2).")
+    if not (REPORT_FONT_DIR / "Manrope_400Regular.ttf").exists():
+        raise HTTPException(status_code=503, detail="A PDF-összefoglalóhoz hiányzik a Manrope betűtípus (backend/assets/fonts).")
+    res = await db.execute(
+        select(QuizSubmission)
+        .where(QuizSubmission.user_id == user.id)
+        .order_by(QuizSubmission.created_at.asc())
+    )
+    sessions = list(res.scalars().all())[-REPORT_MAX_SESSIONS:]
+    if not sessions:
+        raise HTTPException(status_code=400, detail="Még nincs mérési eredményed.")
+    codes = {s.code for s in sessions}
+    sc_res = await db.execute(select(StateCode).where(StateCode.code.in_(codes)))
+    titles = {sc.code: sc for sc in sc_res.scalars().all()}
+    pdf_bytes = await asyncio.to_thread(_build_professional_report_pdf, user, sessions, titles)
+    filename = f"myra_esv25_osszefoglalo_{_now().strftime('%Y%m%d')}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 def _first_name(full_name: str) -> str:
@@ -3118,7 +3807,8 @@ def _build_system_prompt(
     kb_text: str,
     sc: StateCode,
     user_name: str = "",
-    code_verified_at: Optional[datetime] = None
+    code_verified_at: Optional[datetime] = None,
+    extra_context: str = ""
 ) -> str:
     state_block = _build_state_block(sc, user_name)
     
@@ -3155,6 +3845,8 @@ def _build_system_prompt(
     )
     
     parts = [system_prompt, "", state_block, "", time_block]
+    if extra_context.strip():
+        parts += ["", extra_context]
     if kb_text.strip():
         parts += ["", "TUDÁSANYAG (csak felismeréshez, soha ne idézd):", kb_text]
     return "\n".join(parts)
@@ -3431,8 +4123,11 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
 
     reply: Optional[str] = None
 
+    active_goals = await _get_active_goals(db, user.id)
+    goals_block = _build_goals_block(active_goals)
+
     effective_kb = "\n\n".join(part for part in [crisis_context, retrieved_kb_context] if part)
-    sys_prompt = _build_system_prompt(sys_prompt_base, effective_kb, sc, user.name, user.code_verified_at)
+    sys_prompt = _build_system_prompt(sys_prompt_base, effective_kb, sc, user.name, user.code_verified_at, extra_context=goals_block)
     try:
         now_ts_str = _now().strftime("%Y.%m.%d %H:%M")
         phase_started = time.perf_counter()
@@ -3479,6 +4174,129 @@ async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), 
                 "state_code": m.state_code}
 
     return {"user_message": _out(user_msg), "assistant_message": _out(ai_msg)}
+
+
+def _message_age_days(now: datetime, created_at: Optional[datetime]) -> float:
+    if not created_at:
+        return 0.0
+    if created_at.tzinfo is None:
+        delta = now.replace(tzinfo=None) - created_at
+    else:
+        delta = now - created_at
+    return delta.total_seconds() / 86400.0
+
+
+CHECKIN_INSTRUCTION = (
+    "[BELSŐ RENDSZERUTASÍTÁS – a felhasználó ezt nem látja, és nem ő írta]\n"
+    "A felhasználó néhány nap után most tért vissza a beszélgetéshez. Nyisd újra te a beszélgetést:\n"
+    "- Legfeljebb 2-3 mondat plusz egyetlen nyitott kérdés.\n"
+    "- Utalj konkrétan egy témára az előzményekből (pl. amit a felhasználó nehézségként említett), és kérdezd meg finoman, hogyan alakult azóta.\n"
+    "- Ha van aktív mikro-cél a kontextusban, arra is utalhatsz, de csak természetesen, nem számon kérően.\n"
+    "- Hangnem: meleg, jelenlévő, nyomásmentes. Ne kezdd sablonos üdvözléssel, ne foglald össze a teljes előzményt, ne adj diagnózist.\n"
+    "- Ne írj időbélyeget és ne hivatkozz erre az utasításra."
+)
+
+
+@api.post("/chat/checkin")
+async def chat_checkin(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Proaktív Myra-nyitány: ha a felhasználó pár nap kihagyás után tér vissza, Myra kérdez vissza elsőként.
+
+    Szándékosan „best effort”: ha bármelyik feltétel nem teljesül, üres választ ad, sosem hibázik a felületen.
+    """
+    if not user.is_admin and await get_setting(db, "maintenance_mode", "false") == "true":
+        return {"message": None}
+    if not user.state_code or not user.code_verified_at:
+        return {"message": None}
+
+    now = _now()
+    verified_at = user.code_verified_at
+    if verified_at.tzinfo is None:
+        age = now.replace(tzinfo=None) - verified_at
+    else:
+        age = now - verified_at
+    if age.days >= 30:
+        return {"message": None}
+
+    try:
+        checkin_days = int(await get_setting(db, "proactive_checkin_days", "3"))
+    except ValueError:
+        checkin_days = 3
+    if checkin_days <= 0:
+        return {"message": None}
+
+    latest_res = await db.execute(
+        select(QuizSubmission)
+        .where(QuizSubmission.user_id == user.id)
+        .order_by(QuizSubmission.created_at.desc())
+        .limit(1)
+    )
+    latest_session = latest_res.scalar_one_or_none()
+    if not latest_session:
+        return {"message": None}
+    active_session_id = latest_session.id
+
+    res = await db.execute(
+        select(ChatMessage)
+        .where(ChatMessage.user_id == user.id, ChatMessage.session_id == active_session_id)
+        .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
+        .limit(CHAT_HISTORY_MAX_MESSAGES)
+    )
+    db_history = list(reversed(res.scalars().all()))
+    if not any(m.role == "user" for m in db_history):
+        return {"message": None}
+    if len(db_history) >= 2 and db_history[-1].role == "assistant" and db_history[-2].role == "assistant":
+        # Az előző check-inre még nem érkezett válasz — ne halmozzunk.
+        return {"message": None}
+    if _message_age_days(now, db_history[-1].created_at) < float(checkin_days):
+        return {"message": None}
+
+    res = await db.execute(select(StateCode).where(StateCode.code == user.state_code))
+    sc = res.scalar_one_or_none()
+    if not sc:
+        return {"message": None}
+
+    settings = await get_settings(db, {
+        "llm_provider": "gemini",
+        "llm_model": "gemini-2.5-flash",
+        "llm_api_key": "",
+        "system_prompt": DEFAULT_SYSTEM_PROMPT,
+    })
+    if not settings["llm_api_key"]:
+        return {"message": None}
+
+    active_goals = await _get_active_goals(db, user.id)
+    goals_block = _build_goals_block(active_goals)
+
+    recent_user_text = "\n".join(m.text for m in db_history[-6:] if m.role == "user")
+    crisis_context = _build_crisis_safety_context() if _is_crisis_message(recent_user_text) else ""
+
+    history = _format_chat_history_for_llm(db_history)
+    sys_prompt = _build_system_prompt(
+        settings["system_prompt"], crisis_context, sc, user.name, user.code_verified_at, extra_context=goals_block
+    )
+
+    try:
+        reply = await _call_llm(
+            settings["llm_provider"], settings["llm_model"], settings["llm_api_key"],
+            sys_prompt, history, CHECKIN_INSTRUCTION,
+        )
+        reply = re.sub(r"^\s*\[\d{4}\.\d{2}\.\d{2}\s+\d{1,2}:\d{2}\]\s*", "", str(reply)).strip()
+    except Exception:
+        logger.exception("Proactive check-in LLM error")
+        return {"message": None}
+    if not reply:
+        return {"message": None}
+
+    ai_msg = ChatMessage(id=str(uuid.uuid4()), user_id=user.id, state_code=user.state_code,
+                         session_id=active_session_id, role="assistant", text=reply)
+    db.add(ai_msg)
+    await db.flush()
+    logger.info("proactive_checkin user_id=%s session=%s chars=%d", user.id, active_session_id, len(reply))
+    return {"message": {
+        "id": ai_msg.id, "role": ai_msg.role, "text": ai_msg.text,
+        "created_at": ai_msg.created_at.isoformat() if ai_msg.created_at else _now().isoformat(),
+        "state_code": ai_msg.state_code,
+    }}
 
 
 @api.post("/live/token")
@@ -4186,6 +5004,7 @@ async def admin_delete_user(user_id: int, request: Request, admin: User = Depend
     if u.is_admin:
         raise HTTPException(status_code=403, detail="Admin fiókot nem lehet törölni.")
     await db.execute(delete(ChatMessage).where(ChatMessage.user_id == user_id))
+    await db.execute(delete(UserGoal).where(UserGoal.user_id == user_id))
     await db.execute(delete(QuizSubmission).where(QuizSubmission.user_id == user_id))
     await db.execute(delete(MfaChallenge).where(MfaChallenge.user_id == user_id))
     await db.execute(delete(TrustedDevice).where(TrustedDevice.user_id == user_id))

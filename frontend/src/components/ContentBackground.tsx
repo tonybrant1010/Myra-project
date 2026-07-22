@@ -1,5 +1,5 @@
-import React from "react";
-import { Platform, StyleSheet, View } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import { AccessibilityInfo, Animated, Easing, Platform, StyleSheet, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { theme } from "@/src/theme";
 
@@ -8,7 +8,59 @@ type Props = {
   style?: object;
 };
 
+// Nyugodt légzésritmus: ~6 légzés/perc (4,2 mp be, 5,8 mp ki).
+const BREATH_IN_MS = 4200;
+const BREATH_OUT_MS = 5800;
+const MIST_TWO_BASE_OPACITY = Platform.OS === "web" ? 1 : 0.55;
+
 export default function ContentBackground({ children, style }: Props) {
+  const breath = useRef(new Animated.Value(0)).current;
+  const [reduceMotion, setReduceMotion] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    AccessibilityInfo.isReduceMotionEnabled?.()
+      .then((enabled) => {
+        if (mounted) setReduceMotion(!!enabled);
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (reduceMotion) {
+      breath.setValue(0.5);
+      return;
+    }
+    const useNative = Platform.OS !== "web";
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(breath, {
+          toValue: 1,
+          duration: BREATH_IN_MS,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: useNative,
+        }),
+        Animated.timing(breath, {
+          toValue: 0,
+          duration: BREATH_OUT_MS,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: useNative,
+        }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [breath, reduceMotion]);
+
+  const mistOneOpacity = breath.interpolate({ inputRange: [0, 1], outputRange: [0.68, 1] });
+  const mistTwoOpacity = breath.interpolate({
+    inputRange: [0, 1],
+    outputRange: [MIST_TWO_BASE_OPACITY * 0.72, MIST_TWO_BASE_OPACITY],
+  });
+
   return (
     <LinearGradient
       colors={["#04101D", "#08223B", "#123E66", "#EAF7FF"]}
@@ -17,8 +69,8 @@ export default function ContentBackground({ children, style }: Props) {
       end={{ x: 1, y: 1 }}
       style={[styles.bg, style]}
     >
-      <View style={[styles.auroraMistOne, styles.noPointer]} />
-      <View style={[styles.auroraMistTwo, styles.noPointer]} />
+      <Animated.View style={[styles.auroraMistOne, styles.noPointer, { opacity: mistOneOpacity }]} />
+      <Animated.View style={[styles.auroraMistTwo, styles.noPointer, { opacity: mistTwoOpacity }]} />
       <View style={[styles.vignette, styles.noPointer]} />
       <View style={[styles.grainLayer, styles.noPointer]} />
       {children}
@@ -38,7 +90,6 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundImage:
       "linear-gradient(118deg, rgba(255,255,255,0.08), transparent 28%, rgba(101,183,242,0.18) 58%, transparent 82%)",
-    opacity: Platform.OS === "web" ? 1 : 0.55,
   } as any,
   vignette: {
     ...StyleSheet.absoluteFillObject,
