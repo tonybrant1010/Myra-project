@@ -4163,8 +4163,7 @@ def _sync_get_fastembed_embedding(text: str) -> list[float]:
             from fastembed import TextEmbedding
             _fastembed_model = TextEmbedding(model_name=FASTEMBED_MODEL_NAME)
     
-    embeddings_list = await asyncio.to_thread(lambda: list(_fastembed_model.embed([norm])))
-    embedding = embeddings_list[0]
+    embedding = next(_fastembed_model.embed([norm]))
     
     values = embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
     if len(values) != 384:
