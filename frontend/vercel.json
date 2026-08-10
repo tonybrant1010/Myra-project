@@ -43,11 +43,6 @@
       ]
     }
   ],
-  "functions": {
-    "api/**/*": {
-      "maxDuration": 60
-    }
-  },
   "rewrites": [
     {
       "source": "/api/:path((?!proxy(?:/|$)).*)",
