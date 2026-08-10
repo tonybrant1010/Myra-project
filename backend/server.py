@@ -182,7 +182,8 @@ def _is_allowed_cors_origin(origin: str) -> bool:
     norm = origin.rstrip("/")
     if norm in ["https://www.myra-project.hu", "https://myra-project.hu"]:
         return True
-    if re.match(r"^http://localhost:\d+$", norm):
+    # localhost csak fejlesztői módban — élesben ne legyen preflight-átjáró
+    if os.environ.get("ENVIRONMENT") == "development" and re.match(r"^http://localhost:\d+$", norm):
         return True
     return False
 
@@ -320,7 +321,9 @@ class User(Base):
     
     reset_token = Column(String(80), nullable=True)
     token_expires_at = Column(DateTime(timezone=True), nullable=True)
-    
+    # Per-token találgatás-számláló: RESET_TOKEN_MAX_ATTEMPTS hibás próba után a token elhal.
+    reset_attempts = Column(Integer, nullable=False, default=0)
+
     last_login_ip = Column(String(80), nullable=True)
     last_login_at = Column(DateTime(timezone=True), nullable=True)
 
@@ -354,8 +357,8 @@ class StateCode(Base):
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
     id = Column(String(40), primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    session_id = Column(String(40), ForeignKey("quiz_submissions.id"), nullable=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    session_id = Column(String(40), ForeignKey("quiz_submissions.id", ondelete="SET NULL"), nullable=True, index=True)
     state_code = Column(String(4), nullable=True, index=True)
     role = Column(String(20), nullable=False)
     text = Column(Text, nullable=False)
@@ -365,7 +368,7 @@ class ChatMessage(Base):
 class ForumPost(Base):
     __tablename__ = "forum_posts"
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     content = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -373,7 +376,7 @@ class ForumPost(Base):
 class QuizSubmission(Base):
     __tablename__ = "quiz_submissions"
     id = Column(String(40), primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     answers = Column(JSON, nullable=False)
     norms = Column(JSON, nullable=False)
     code = Column(String(4), nullable=False)
@@ -478,21 +481,36 @@ def verify_password(p: str, h: str) -> bool:
 
 
 def _hash_secret(value: str) -> str:
+    # Megjegyzés: a titok itt utótag, nem előtag, ezért a SHA-256 length-extension
+    # tulajdonsága nem használható ki. Új kódban inkább a _hmac_secret() használandó;
+    # ez a függvény azért marad változatlan, mert a már kiadott trusted-device
+    # hasheket egy csere érvénytelenítené (a felhasználóknak újra MFA-zniuk kellene).
     return hashlib.sha256(f"{value}:{JWT_SECRET}".encode("utf-8")).hexdigest()
+
+
+def _hmac_secret(value: str) -> str:
+    """Kulcsolt hash HMAC-SHA256-tal — új titok-származtatásokhoz ez a helyes konstrukció."""
+    return _hmac.new(JWT_SECRET.encode("utf-8"), value.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def _hash_mfa_code(challenge_id: str, code: str) -> str:
     return _hash_secret(f"mfa:{challenge_id}:{code.strip()}")
 
 
-def _hash_reset_token(token: str) -> str:
-    return _hash_secret(f"reset:{token.strip()}")[:64]
+def _hash_reset_token(token: str, email: str) -> str:
+    """A hash a felhasználó email-címéhez van kötve, így egy kód kizárólag arra a fiókra
+    érvényes, amelyikre kiadták — nem illeszkedhet más felhasználó függő tokenjére."""
+    return _hmac_secret(f"reset:{(email or '').strip().lower()}:{token.strip()}")[:64]
 
 
-async def _create_unique_reset_token(db: AsyncSession) -> tuple[str, str]:
+RESET_TOKEN_MAX_ATTEMPTS = 5
+RESET_TOKEN_TTL_MINUTES = 30
+
+
+async def _create_unique_reset_token(db: AsyncSession, email: str) -> tuple[str, str]:
     for _ in range(10):
         token = f"{secrets.randbelow(1_000_000):06d}"
-        token_hash = _hash_reset_token(token)
+        token_hash = _hash_reset_token(token, email)
         existing = (await db.execute(select(User.id).where(User.reset_token == token_hash).limit(1))).scalar_one_or_none()
         if existing is None:
             return token, token_hash
@@ -652,8 +670,14 @@ def create_refresh_token(user: User) -> str:
 
 
 def _client_ip(request: Request) -> str:
-    if os.environ.get("TRUST_PROXY", "").lower() == "true":
-        forwarded = request.headers.get("x-forwarded-for", "")
+    """A rate limitek kulcsa. Csak akkor bízunk a továbbított fejlécben, ha a kérés
+    igazoltan a saját proxynkon jött át (érvényes X-Myra-Proxy-Secret) — enélkül egy
+    közvetlenül az origin-hez forduló támadó tetszőleges IP-t hazudhatna, és ezzel az
+    összes rate limitet (bejelentkezés, reset, regisztráció) megkerülhetné."""
+    if os.environ.get("TRUST_PROXY", "").lower() == "true" and getattr(request.state, "via_trusted_proxy", False):
+        # A Vercel felülírja az x-forwarded-for-t a valódi kliens IP-jével, ezért a
+        # bal szélső érték itt megbízható. Tartaléknak az x-real-ip-t is elfogadjuk.
+        forwarded = request.headers.get("x-forwarded-for", "") or request.headers.get("x-real-ip", "")
         if forwarded:
             return forwarded.split(",", 1)[0].strip()[:80]
     return (request.client.host if request.client else "")[:80]
@@ -876,6 +900,58 @@ def _check_and_record_live_token_limit(request: Request, user_id: int) -> None:
     else:
         s["count"] = s.get("count", 0) + 1
     _live_token_attempts[key] = s
+
+
+# A két legdrágább végpont: a /chat/send minden hívása egy LLM-kérés RAG-kereséssel,
+# a /tts/speak minden hívása egy subprocess-ben futó Piper-szintézis. Rate limit nélkül
+# egy hitelesített felhasználó korlátlanul égetheti az API-keretet, illetve a CPU-t.
+_chat_send_attempts: dict[str, dict] = {}
+CHAT_SEND_WINDOW_S = 60
+CHAT_SEND_MAX = _env_int("CHAT_SEND_MAX", 20, 5, 120)
+
+_tts_attempts: dict[str, dict] = {}
+TTS_WINDOW_S = 60
+TTS_MAX = _env_int("TTS_MAX", 30, 5, 200)
+
+_forum_post_attempts: dict[str, dict] = {}
+FORUM_POST_WINDOW_S = 60
+FORUM_POST_MAX = _env_int("FORUM_POST_MAX", 6, 2, 60)
+
+
+def _check_and_record_user_limit(
+    store: dict, request: Request, user_id: int, window_s: int, max_count: int, detail: str
+) -> None:
+    """Általános, (IP, user) kulcsú csúszóablakos limiter a meglévő minta szerint."""
+    if _is_testing():
+        return
+    key = f"{_client_ip(request)}:{user_id}"
+    now = time.monotonic()
+    _prune_rate_limit_map(store, now, window_s)
+    s = store.get(key)
+    if s and now - s.get("first", now) > window_s:
+        store.pop(key, None)
+        s = None
+    if s and s.get("count", 0) >= max_count:
+        raise HTTPException(status_code=429, detail=detail)
+    if not s:
+        s = {"count": 1, "first": now}
+    else:
+        s["count"] = s.get("count", 0) + 1
+    store[key] = s
+
+
+def _check_and_record_chat_limit(request: Request, user_id: int) -> None:
+    _check_and_record_user_limit(
+        _chat_send_attempts, request, user_id, CHAT_SEND_WINDOW_S, CHAT_SEND_MAX,
+        "Túl sok üzenet rövid idő alatt. Kérlek, várj egy kicsit.",
+    )
+
+
+def _check_and_record_tts_limit(request: Request, user_id: int) -> None:
+    _check_and_record_user_limit(
+        _tts_attempts, request, user_id, TTS_WINDOW_S, TTS_MAX,
+        "Túl sok felolvasási kérés. Kérlek, várj egy kicsit.",
+    )
 
 
 def _safe_upload_filename(filename: Optional[str], allowed_suffixes: tuple[str, ...]) -> str:
@@ -1419,6 +1495,7 @@ async def _run_startup_migrations() -> None:
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname VARCHAR(50)"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token VARCHAR(80)"))
         await conn.execute(sql_text("ALTER TABLE users ALTER COLUMN reset_token TYPE VARCHAR(80)"))
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_attempts INTEGER NOT NULL DEFAULT 0"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMP WITH TIME ZONE"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_ip VARCHAR(80)"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP WITH TIME ZONE"))
@@ -1443,7 +1520,55 @@ async def _run_startup_migrations() -> None:
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_chat_messages_state_code ON chat_messages (state_code)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_source_name ON knowledge_chunks (source_name)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_source_hash ON knowledge_chunks (source_hash)"))
+        await _ensure_user_fk_cascade(conn)
         await _reset_postgres_sequences(conn)
+
+
+# A users-re mutató gyerektáblák idegen kulcsainak ON DELETE CASCADE-re állítása.
+# A `forum_posts` eredetileg ondelete nélkül készült, ezért PostgreSQL-en a fióktörlés
+# ForeignKeyViolation-nel elbukott minden olyan felhasználónál, aki írt a fórumba.
+USER_FK_CASCADES = [
+    ("chat_messages", "user_id", "users", "CASCADE"),
+    ("forum_posts", "user_id", "users", "CASCADE"),
+    ("quiz_submissions", "user_id", "users", "CASCADE"),
+]
+
+
+async def _ensure_user_fk_cascade(conn) -> None:
+    """Idempotens: csak akkor cseréli a constraintet, ha még nem CASCADE."""
+    if DB_DIALECT != "postgresql":
+        return
+    for table_name, column_name, ref_table, action in USER_FK_CASCADES:
+        try:
+            res = await conn.execute(sql_text("""
+                SELECT con.conname, con.confdeltype
+                FROM pg_constraint con
+                JOIN pg_class rel ON rel.oid = con.conrelid
+                JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = con.conkey[1]
+                JOIN pg_class fref ON fref.oid = con.confrelid
+                WHERE con.contype = 'f'
+                  AND rel.relname = :table_name
+                  AND att.attname = :column_name
+                  AND fref.relname = :ref_table
+                  AND array_length(con.conkey, 1) = 1
+            """), {"table_name": table_name, "column_name": column_name, "ref_table": ref_table})
+            row = res.first()
+            if row is None:
+                continue
+            conname, confdeltype = row[0], row[1]
+            if confdeltype == "c":  # 'c' = CASCADE, már rendben van
+                continue
+            await conn.execute(sql_text(
+                f'ALTER TABLE {table_name} DROP CONSTRAINT "{conname}"'  # nosec B608
+            ))
+            await conn.execute(sql_text(
+                f"ALTER TABLE {table_name} "  # nosec B608
+                f"ADD CONSTRAINT {table_name}_{column_name}_fkey "
+                f"FOREIGN KEY ({column_name}) REFERENCES {ref_table}(id) ON DELETE {action}"
+            ))
+            print(f"[startup] migráció: {table_name}.{column_name} FK -> ON DELETE {action}")
+        except Exception as _e:
+            print(f"[startup] {table_name} FK cascade migráció figyelmeztetés: {_e}")
 
 
 async def _reset_postgres_sequences(conn) -> None:
@@ -1562,6 +1687,34 @@ async def set_setting(db: AsyncSession, key: str, value: str) -> None:
         s.updated_at = _now()
     else:
         db.add(AppSetting(key=key, value=value))
+
+
+# A felhasználóra mutató összes gyerektábla, a törlés helyes sorrendjében.
+# EGYETLEN forrás az igazságra: ha új, user_id-t tartalmazó tábla készül, ide kell felvenni,
+# és mind a három törlési útvonal (auth/delete-account, user/data-delete, admin/users/{id})
+# automatikusan helyesen fog viselkedni.
+USER_OWNED_MODELS = (
+    ChatMessage,
+    ForumPost,
+    UserGoal,
+    QuizSubmission,
+    MfaChallenge,
+    TrustedDevice,
+    LeaderboardEntry,
+)
+
+
+async def _purge_user_data(db: AsyncSession, user_id: int) -> None:
+    """Töröl minden, a felhasználóhoz tartozó sort. A `users` sort NEM törli."""
+    for model in USER_OWNED_MODELS:
+        await db.execute(delete(model).where(model.user_id == user_id))
+
+
+async def _delete_user_completely(db: AsyncSession, user_id: int) -> None:
+    """Teljes fióktörlés: előbb minden gyerek sor, majd maga a felhasználó."""
+    await _purge_user_data(db, user_id)
+    await db.execute(delete(User).where(User.id == user_id))
+    await db.flush()
 
 
 async def _rag_keepwarm_loop() -> None:
@@ -1701,13 +1854,29 @@ def _request_body_limit(path: str) -> int:
 @app.middleware("http")
 async def enforce_request_size_limit(request: Request, call_next):
     if request.method in {"POST", "PUT", "PATCH"} and request.url.path.startswith("/api/"):
+        limit = _request_body_limit(request.url.path)
         content_length = request.headers.get("content-length")
         if content_length:
             try:
-                if int(content_length) > _request_body_limit(request.url.path):
+                if int(content_length) > limit:
                     return JSONResponse(status_code=413, content={"detail": "A kérés túl nagy."})
             except ValueError:
                 return JSONResponse(status_code=400, content={"detail": "Érvénytelen Content-Length fejléc."})
+        elif "chunked" in request.headers.get("transfer-encoding", "").lower():
+            # Content-Length nélküli (chunked) kérésnél a fenti ellenőrzés nem véd semmit,
+            # ezért itt streamelve számoljuk a bájtokat, és a limit felett megszakítjuk.
+            body = bytearray()
+            async for chunk in request.stream():
+                body.extend(chunk)
+                if len(body) > limit:
+                    return JSONResponse(status_code=413, content={"detail": "A kérés túl nagy."})
+            # A már beolvasott törzs visszaadása a lejjebb futó rétegeknek.
+            cached = bytes(body)
+
+            async def _replay_receive():
+                return {"type": "http.request", "body": cached, "more_body": False}
+
+            request._receive = _replay_receive  # noqa: SLF001
     return await call_next(request)
 
 
@@ -1724,8 +1893,17 @@ async def add_security_headers(request: Request, call_next):
     return response
 
 
+# A healthcheck (docker HEALTHCHECK) az egyetlen olyan hívó, aminek loopbackről kell
+# átjutnia proxy-titok nélkül. Szűk útvonal-allowlist, hogy a loopback-kivétel ne legyen
+# általános megkerülési lehetőség, ha valaha lokális reverse proxy kerül a backend elé
+# (akkor ugyanis MINDEN kérés kliens IP-je 127.0.0.1 lenne).
+LOOPBACK_ALLOWED_PATHS = {"/api/config"}
+
+
 @app.middleware("http")
 async def verify_vercel_proxy(request: Request, call_next):
+    request.state.via_trusted_proxy = False
+
     if request.method == "OPTIONS":
         origin = request.headers.get("Origin", "")
         if origin and _is_allowed_cors_origin(origin):
@@ -1736,19 +1914,25 @@ async def verify_vercel_proxy(request: Request, call_next):
         )
 
     if os.environ.get("ENVIRONMENT") == "development":
+        request.state.via_trusted_proxy = True
         return await call_next(request)
-    if request.client and request.client.host in ("127.0.0.1", "localhost"):
+
+    client_host = request.client.host if request.client else ""
+    if client_host in ("127.0.0.1", "::1", "localhost") and request.url.path in LOOPBACK_ALLOWED_PATHS:
         return await call_next(request)
 
     incoming_secret = request.headers.get("X-Myra-Proxy-Secret", "")
 
     if not MYRA_PROXY_SECRET or not secrets.compare_digest(incoming_secret, MYRA_PROXY_SECRET):
-        logger.warning(f"Unauthorized direct access attempt from: {request.client.host if request.client else 'Unknown'}")
+        logger.warning(f"Unauthorized direct access attempt from: {client_host or 'Unknown'}")
         return JSONResponse(
             status_code=403,
             content={"detail": "Direct access to origin is forbidden."}
         )
 
+    # Innentől igazolt, hogy a kérés a saját proxynkon jött át — csak ekkor szabad
+    # megbízni a továbbított kliens-IP fejlécben (lásd _client_ip).
+    request.state.via_trusted_proxy = True
     return await call_next(request)
 
 api = APIRouter(prefix="/api")
@@ -1807,6 +1991,7 @@ class ForgotPasswordBody(BaseModel):
 
 
 class ResetPasswordBody(BaseModel):
+    email: EmailStr
     token: str = Field(min_length=1, max_length=128)
     new_password: str = Field(min_length=8, max_length=128)
 
@@ -2042,7 +2227,8 @@ A Myra-project alkalmazásban jelszó-visszaállítást kértél.
 
 A visszaállításhoz szükséges 6 jegyű biztonsági kódod: {token}
 
-Ez a kód 1 óráig érvényes. Írd be a kódot az alkalmazás felületén az új jelszavad megadásához.
+Ez a kód {RESET_TOKEN_TTL_MINUTES} percig érvényes, és legfeljebb {RESET_TOKEN_MAX_ATTEMPTS} hibás
+próbálkozás után érvénytelenné válik. Írd be a kódot az alkalmazás felületén az új jelszavad megadásához.
 
 A Myra-project bejelentkezési oldala: https://www.myra-project.hu/login
 
@@ -2234,9 +2420,12 @@ async def _consume_mfa_challenge(db: AsyncSession, user: User, challenge_id: str
         raise HTTPException(status_code=400, detail="A biztonsági kód ideje lejárt.")
     if challenge.attempts >= 5:
         raise HTTPException(status_code=429, detail="Túl sok hibás kódpróbálkozás. Kérj új kódot.")
-    if challenge.code_hash != _hash_mfa_code(challenge.id, code.strip()):
+    if not secrets.compare_digest(str(challenge.code_hash), _hash_mfa_code(challenge.id, code.strip())):
         challenge.attempts += 1
-        await db.flush()
+        # FONTOS: itt commit kell, nem flush. A get_db() dependency a felszálló
+        # HTTPException hatására rollbackol, ami egy puszta flush() esetén eldobná a
+        # számláló növelését — a kísérletkorlát így sosem lépne életbe.
+        await db.commit()
         raise HTTPException(status_code=400, detail="Hibás biztonsági kód.")
     challenge.consumed_at = _now()
     await db.flush()
@@ -2303,12 +2492,17 @@ async def auth_register(body: RegisterBody, request: Request, db: AsyncSession =
     await db.flush()
     _record_reg(request)
     
-    access_token = create_access_token(user, mfa_verified=is_admin)
+    # FONTOS: itt sosem adunk mfa_verified=True-t. Ha az email az admin-allowlistán van,
+    # a fiók adminként jön létre, de a tokenje MFA nélkül nem használható — a get_current_user
+    # elutasítja, és a felhasználónak a normál bejelentkezésen (email-kódos MFA) kell átmennie.
+    # Enélkül aki elsőként regisztrál egy allowlistás címre, azonnal MFA-mentes admint kapna.
+    access_token = create_access_token(user, mfa_verified=False)
     refresh_token = create_refresh_token(user)
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
-        "user": _user_out(user)
+        "user": _user_out(user),
+        "requires_mfa_login": is_admin,
     }
 
 
@@ -2437,9 +2631,10 @@ async def auth_forgot_password(body: ForgotPasswordBody, request: Request, backg
     user = res.scalar_one_or_none()
 
     if user and user.is_active:
-        token, token_hash = await _create_unique_reset_token(db)
+        token, token_hash = await _create_unique_reset_token(db, user.email)
         user.reset_token = token_hash
-        user.token_expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+        user.token_expires_at = datetime.now(timezone.utc) + timedelta(minutes=RESET_TOKEN_TTL_MINUTES)
+        user.reset_attempts = 0
         await db.flush()
         background_tasks.add_task(_send_gmail_reset, user.email, token)
 
@@ -2449,27 +2644,62 @@ async def auth_forgot_password(body: ForgotPasswordBody, request: Request, backg
 @api.post("/auth/reset-password")
 async def auth_reset_password(body: ResetPasswordBody, request: Request, db: AsyncSession = Depends(get_db)):
     _check_reset_throttle(request)
+    email = body.email.lower().strip()
     token_str = body.token.strip()
-    token_hash = _hash_reset_token(token_str)
-    
-    res = await db.execute(select(User).where(User.reset_token.in_([token_hash, token_str])))
+    generic_error = "Hibás vagy lejárt biztonsági kód."
+
+    # A tokent MINDIG a megadott email-címhez kötve keressük: egy kód kizárólag arra a
+    # fiókra érvényes, amelyikre kiadták. Így a találgatásnak egy konkrét fiókot kell
+    # céloznia, és a per-token számláló (lent) 5 próba után elhalasztja a tokent.
+    res = await db.execute(select(User).where(User.email == email))
     user = res.scalar_one_or_none()
-    
-    if not user:
+
+    if not user or not user.is_active or not user.reset_token:
         _record_reset_failure(request)
-        raise HTTPException(status_code=400, detail="Hibás vagy lejárt biztonsági kód.")
-        
-    if user.token_expires_at:
-        expires_at = user.token_expires_at.replace(tzinfo=timezone.utc) if user.token_expires_at.tzinfo is None else user.token_expires_at
-        if expires_at < datetime.now(timezone.utc):
-            _record_reset_failure(request)
-            raise HTTPException(status_code=400, detail="A biztonsági kód ideje lejárt.")
-        
+        raise HTTPException(status_code=400, detail=generic_error)
+
+    # Lejárat: hiányzó token_expires_at esetén is elutasítunk (nincs "örökké élő" token).
+    if not user.token_expires_at:
+        _record_reset_failure(request)
+        raise HTTPException(status_code=400, detail=generic_error)
+    expires_at = (
+        user.token_expires_at.replace(tzinfo=timezone.utc)
+        if user.token_expires_at.tzinfo is None else user.token_expires_at
+    )
+    # A hibaágakon MINDENHOL commit kell, nem flush: a get_db() dependency a felszálló
+    # HTTPException hatására rollbackol, ami eldobná a számláló növelését / a token
+    # érvénytelenítését — a kísérletkorlát így sosem lépne életbe.
+    if expires_at < datetime.now(timezone.utc):
+        user.reset_token = None
+        user.token_expires_at = None
+        user.reset_attempts = 0
+        await db.commit()
+        _record_reset_failure(request)
+        raise HTTPException(status_code=400, detail="A biztonsági kód ideje lejárt.")
+
+    if int(user.reset_attempts or 0) >= RESET_TOKEN_MAX_ATTEMPTS:
+        user.reset_token = None
+        user.token_expires_at = None
+        user.reset_attempts = 0
+        await db.commit()
+        _record_reset_failure(request)
+        raise HTTPException(status_code=429, detail="Túl sok hibás kódpróbálkozás. Kérj új kódot.")
+
+    if not secrets.compare_digest(str(user.reset_token), _hash_reset_token(token_str, user.email)):
+        user.reset_attempts = int(user.reset_attempts or 0) + 1
+        await db.commit()
+        _record_reset_failure(request)
+        raise HTTPException(status_code=400, detail=generic_error)
+
     user.password_hash = hash_password(body.new_password)
     user.reset_token = None
     user.token_expires_at = None
+    user.reset_attempts = 0
+    # A jelszócsere érvénytelenít MINDEN korábbi munkamenetet — enélkül egy ellopott
+    # access token a jelszó megváltoztatása után is 7 napig élne tovább.
+    user.token_version = int(user.token_version or 0) + 1
     await db.flush()
-    
+
     return {"ok": True, "detail": "Jelszó sikeresen megváltoztatva."}
 
 
@@ -2564,7 +2794,8 @@ async def auth_logout_all_devices(body: MfaTrustedDeviceDeleteBody, user: User =
 
 
 @api.post("/tts/speak")
-async def tts_speak(body: TtsSpeakBody, user: User = Depends(get_current_user)):
+async def tts_speak(body: TtsSpeakBody, request: Request, user: User = Depends(get_current_user)):
+    _check_and_record_tts_limit(request, user.id)
     text_value = _normalize_tts_text(body.text)
     if not text_value:
         raise HTTPException(status_code=400, detail="Ures felolvasando szoveg.")
@@ -2585,12 +2816,7 @@ async def auth_delete_account(body: DeleteAccountBody, request: Request, user: U
     user.token_version = int(user.token_version or 0) + 1
     await db.flush()
     await _admin_audit(db, user, request, "user.account.delete", f"user_id={deleted_user_id}")
-    await db.execute(delete(ChatMessage).where(ChatMessage.user_id == user.id))
-    await db.execute(delete(UserGoal).where(UserGoal.user_id == user.id))
-    await db.execute(delete(QuizSubmission).where(QuizSubmission.user_id == user.id))
-    await db.execute(delete(MfaChallenge).where(MfaChallenge.user_id == user.id))
-    await db.execute(delete(TrustedDevice).where(TrustedDevice.user_id == user.id))
-    await db.execute(delete(User).where(User.id == deleted_user_id))
+    await _delete_user_completely(db, deleted_user_id)
     return {"ok": True}
 
 
@@ -2774,13 +3000,11 @@ async def post_user_data_delete(body: ExportDataBody, request: Request, user: Us
         raise HTTPException(status_code=400, detail="Helytelen jelszó.")
     
     await _admin_audit(db, user, request, "user.data.delete", f"Data delete requested by user {user.id}")
-    
-    await db.execute(delete(ChatMessage).where(ChatMessage.user_id == user.id))
-    await db.execute(delete(UserGoal).where(UserGoal.user_id == user.id))
-    await db.execute(delete(QuizSubmission).where(QuizSubmission.user_id == user.id))
-    await db.execute(delete(MfaChallenge).where(MfaChallenge.user_id == user.id))
-    await db.execute(delete(TrustedDevice).where(TrustedDevice.user_id == user.id))
-    await db.execute(delete(User).where(User.id == user.id))
+
+    deleted_user_id = user.id
+    user.token_version = int(user.token_version or 0) + 1
+    await db.flush()
+    await _delete_user_completely(db, deleted_user_id)
     return {"ok": True, "detail": "Minden adatod véglegesen törölve lett a rendszerünkből."}
 
 
@@ -3430,7 +3654,7 @@ async def quiz_interpretation(user: User = Depends(get_current_user), db: AsyncS
 
 
 # ---------------------------------------------------------------------------
-# Szakember részére készült PDF-összefoglaló a mérési előzményekről
+# Szakember részére készült PDF-kivonat a mérési előzményekről
 # ---------------------------------------------------------------------------
 
 REPORT_FONT_DIR = ROOT_DIR / "assets" / "fonts"
@@ -3463,7 +3687,7 @@ _R_RULE = (206, 228, 242)
 
 
 class _EsvReportPDF(FPDF):
-    """Myra Project arculatú riport: lábléc oldalszámmal."""
+    """Myra Project arculatú kivonat: lábléc oldalszámmal."""
 
     def footer(self):
         try:
@@ -3480,6 +3704,11 @@ class _EsvReportPDF(FPDF):
 
 def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], titles: dict[str, StateCode]) -> bytes:
     pdf = _EsvReportPDF(format="A4")
+    # fpdf2 alapból PDF 1.3-at deklarál, de a fejléc-sáv helyi átlátszósággal dolgozik
+    # (local_context fill_opacity, azaz ExtGState /ca-/CA) — ez csak PDF 1.4+-ban szabványos.
+    # Az 1.3-as deklaráció mellett néhány szigorúbb olvasó (nem minden) üres/hibás oldalt
+    # renderelhet, ezért a valós fájlformátumnak megfelelően emeljük a verziót.
+    pdf.pdf_version = "1.7"
     pdf.alias_nb_pages()
     pdf.set_auto_page_break(auto=True, margin=20)
     pdf.add_font("Manrope", "", str(REPORT_FONT_DIR / "Manrope_400Regular.ttf"))
@@ -3537,7 +3766,7 @@ def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], t
         pass
     pdf.set_font("Manrope", "B", 19)
     pdf.set_text_color(255, 255, 255)
-    pdf.cell(epw, 10, "ESV25 Inventory — mérési összefoglaló", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(epw, 10, "ESV25 Inventory — mérési kivonat", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_font("ManropeSB", "", 9)
     pdf.set_text_color(200, 226, 245)
     pdf.cell(epw, 6, "Szakember részére készült kivonat · Érzelem–Stressz–Viselkedés (ESV) modell",
@@ -3546,25 +3775,56 @@ def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], t
     # --- Kiemelt figyelmeztetés — szándékosan minden tartalom előtt ---
     pdf.set_y(band_h + 8)
     warn_y0 = pdf.get_y()
+    warn_bar_w = 1.6
+    warn_pad_left = warn_bar_w + 4.0
+    warn_pad_right = 3.0
+    warn_pad_v = 3.2
+    warn_text_w = epw - warn_pad_left - warn_pad_right
+    warn_header = "FONTOS FIGYELMEZTETÉS"
+    # Négy különálló, tematikusan csoportosított mondat a korábbi egy tömb bekezdés helyett:
+    # (1) mi ez, (2) mit nem helyettesít / mire nem alkalmas, (3) adatforrás + ki értelmezze,
+    # (4) miért készült. Ugyanaz a tartalom, csak olvashatóbb tagolásban.
+    warn_paragraphs = [
+        "Nem diagnózis, nem orvostechnikai eszköz. Az ESV25 Inventory a Myra Project önismereti, "
+        "edukációs célú önbecslő kérdőíve.",
+        "Nem helyettesíti a klinikai vizsgálatot vagy a szakemberrel való konzultációt, és nem alkalmas "
+        "betegség vagy állapot megállapítására, kizárására, monitorozására vagy kezelésére.",
+        "Minden érték kizárólag önbeszámolón alapul; az eredmények értelmezése képzett szakember feladata, "
+        "a kliens tágabb kontextusának ismeretében.",
+        "A kivonat a felhasználó saját kezdeményezésére készült.",
+    ]
+
+    # 1) magasság előmérése (dry run), hogy a háttérdoboz és a sáv pontosan illeszkedjen a szöveghez
+    pdf.set_xy(pdf.l_margin + warn_pad_left, warn_y0 + warn_pad_v)
+    pdf.set_font("Manrope", "B", 9)
+    warn_header_h = pdf.multi_cell(warn_text_w, 6.0, warn_header, dry_run=True, output="HEIGHT")
+    pdf.set_font("Manrope", "", 8.6)
+    warn_body_h = sum(
+        pdf.multi_cell(warn_text_w, 4.9, p, dry_run=True, output="HEIGHT") for p in warn_paragraphs
+    )
+    warn_total_h = warn_pad_v * 2 + warn_header_h + 1.6 + warn_body_h
+
+    # 2) háttérdoboz a teljes szélességben, a sáv és a szöveg alatt
     pdf.set_fill_color(*_R_BG_SOFT)
+    pdf.rect(pdf.l_margin, warn_y0, epw, warn_total_h, style="F")
+
+    # 3) a tényleges szöveg — minden (tördelt) sorban behúzva a sáv mellől, nem csak az elsőben
+    pdf.set_xy(pdf.l_margin + warn_pad_left, warn_y0 + warn_pad_v)
     pdf.set_font("Manrope", "B", 9)
     pdf.set_text_color(*_R_NAVY)
-    pdf.multi_cell(epw, 6.4, "  FONTOS FIGYELMEZTETÉS", fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.multi_cell(warn_text_w, 6.0, warn_header, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.ln(1.6)
     pdf.set_font("Manrope", "", 8.6)
     pdf.set_text_color(52, 72, 94)
-    pdf.multi_cell(
-        epw, 4.9,
-        "  Ez a dokumentum nem diagnózis, és nem orvostechnikai eszköz. Az ESV25 Inventory a Myra Project "
-        "önismereti, edukációs célú önbecslő kérdőíve; nem alkalmas betegség vagy állapot megállapítására, "
-        "kizárására, monitorozására vagy kezelésére, és nem helyettesíti a klinikai vizsgálatot vagy a "
-        "szakemberrel való konzultációt. Minden érték kizárólag önbeszámolón alapul. Az eredmények értelmezése "
-        "képzett szakember feladata, a kliens tágabb kontextusának ismeretében. A kivonat a felhasználó saját "
-        "kezdeményezésére készült.  ",
-        fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT,
-    )
-    warn_y1 = pdf.get_y()
+    for p in warn_paragraphs:
+        pdf.set_x(pdf.l_margin + warn_pad_left)
+        pdf.multi_cell(warn_text_w, 4.9, p, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    # 4) kiemelő sáv a bal szélen, a teljes doboz magasságában — utoljára rajzolva, de a szöveg már nem ér hozzá
     pdf.set_fill_color(*_R_CYAN)
-    pdf.rect(pdf.l_margin, warn_y0, 1.6, warn_y1 - warn_y0, style="F")
+    pdf.rect(pdf.l_margin, warn_y0, warn_bar_w, warn_total_h, style="F")
+
+    pdf.set_y(warn_y0 + warn_total_h)
     pdf.ln(4)
 
     # --- Meta blokk ---
@@ -3622,8 +3882,13 @@ def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], t
                  new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_font("Manrope", "", 7.8)
     pdf.set_text_color(*_R_TEXT_SOFT)
-    pdf.cell(epw, 5.4, "A táblázat értékei POMP-pontszámok (0–100) — magyarázat a Módszertan szakaszban.",
-             new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.multi_cell(
+        epw, 5.0,
+        "A = Érzelmi állapot · P = Érzelemszabályozás · H = Észlelt stressz · C = Testi tünetek — "
+        "az értékek POMP-pontszámok (0–100). A sávhatárok és az állapotkód részletes magyarázata "
+        "a következő, Módszertan és pontozás szakaszban olvasható.",
+        new_x=XPos.LMARGIN, new_y=YPos.NEXT,
+    )
 
     # --- Teljes módszertani transzparencia ---
     section("Módszertan és pontozás")
@@ -3632,15 +3897,19 @@ def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], t
     pdf.multi_cell(
         epw, 4.9,
         "Az ESV25 Inventory 21 tételes önkitöltő kérdőív, amely az Érzelem–Stressz–Viselkedés (ESV) modell "
-        "négy dimenziójáról ad pillanatképet. Mindegyik skálát nemzetközileg validált mérőeszköz inspirálta:",
+        "négy dimenzióját méri. Minden skálát nemzetközileg validált mérőeszköz inspirált; alább a "
+        "tételszám, a válaszskála, a hivatkozott eszköz és a belső megbízhatóság "
+        "(n = 100 fős elsődleges validációs minta):",
         new_x=XPos.LMARGIN, new_y=YPos.NEXT,
     )
     pdf.ln(1)
     scale_facts = [
-        "A – Aktuális szorongás: 6 tétel (1–5) · inspiráció: STAI-S · belső konzisztencia: α = 0,91",
-        "P – Érzelemszabályozás: 6 tétel (1–5, fordított pontozás) · inspiráció: DERS · α = 0,87",
-        "H – Észlelt stressz: 4 tétel (1–5) · inspiráció: PSS · α = 0,85",
-        "C – Testi tünetek: 5 tétel (0–2) · inspiráció: PHQ-15 · α = 0,66",
+        "A – Érzelmi állapot (állapotszorongás): 6 tétel · 1–5 skála · inspiráció: STAI-S · "
+        "α = 0,91 (95% CI 0,88–0,93)",
+        "P – Érzelemszabályozás: 6 tétel · 1–5 skála, fordított pontozás · inspiráció: DERS · "
+        "α = 0,87 (95% CI 0,83–0,91)",
+        "H – Észlelt stressz: 4 tétel · 1–5 skála · inspiráció: PSS · α = 0,85 (95% CI 0,79–0,89)",
+        "C – Testi tünetek: 5 tétel · 0–2 skála · inspiráció: PHQ-15 · α = 0,66 (95% CI 0,54–0,75)",
     ]
     for line in scale_facts:
         y = pdf.get_y()
@@ -3654,8 +3923,18 @@ def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], t
     pdf.set_text_color(*_R_TEXT_SOFT)
     pdf.multi_cell(
         epw, 4.6,
-        "A Cronbach-α értékek n = 100 fős elsődleges mintán mért belső konzisztenciát jeleznek. A C skála "
-        "megbízhatósága mérsékelt, ezért értékei óvatosabban értelmezendők.",
+        "A C skála α-értéke (0,66) a szokásosan elvárt 0,70-es küszöb alatt van, ezért eredményei a többi "
+        "skálánál óvatosabban értelmezendők.",
+        new_x=XPos.LMARGIN, new_y=YPos.NEXT,
+    )
+    pdf.ln(1.5)
+    pdf.multi_cell(
+        epw, 4.6,
+        "A négy skála egymással elméletkonform irányban és mértékben függ össze (Pearson-korreláció, n = 100; "
+        "minden érték p < 0,001 szinten szignifikáns): az érzelemszabályozás (P) negatívan korrelál az érzelmi "
+        "állapottal, a stresszel és a testi tünetekkel (r = -0,71 / -0,71 / -0,44), míg ez utóbbi három egymással "
+        "pozitívan (r = 0,57-0,77). Konvergens és diszkrimináns validitási vizsgálat (referenciaeszközökkel "
+        "szemben, külön kutatási protokoll szerint) tervezett; eredménye egyelőre nem áll rendelkezésre.",
         new_x=XPos.LMARGIN, new_y=YPos.NEXT,
     )
     pdf.ln(2)
@@ -3700,6 +3979,15 @@ def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], t
         pdf.set_font("Manrope", "", 8.8)
         pdf.set_text_color(52, 72, 94)
         pdf.multi_cell(epw, 4.8, item["text"], new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        if item["key"] == "c":
+            pdf.set_font("Manrope", "", 7.6)
+            pdf.set_text_color(*_R_TEXT_SOFT)
+            pdf.multi_cell(
+                epw, 4.2,
+                "Megjegyzés: ennek a skálának a belső megbízhatósága a többinél alacsonyabb (α = 0,66) — "
+                "ld. Módszertan és pontozás.",
+                new_x=XPos.LMARGIN, new_y=YPos.NEXT,
+            )
         pdf.ln(1)
 
     if len(sessions) >= 2:
@@ -3730,7 +4018,14 @@ def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], t
     pdf.ln(2)
     pdf.set_font("Manrope", "", 8.2)
     pdf.set_text_color(52, 72, 94)
-    pdf.multi_cell(epw, 4.6, INTERPRETATION_DISCLAIMER, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    # Rövid visszautalás a dokumentum eleji figyelmeztetésre — nem szó szerinti megismétlése annak
+    # (lásd _R_CYAN sávos FONTOS FIGYELMEZTETÉS blokk a dokumentum tetején).
+    pdf.multi_cell(
+        epw, 4.6,
+        "A fenti értelmezésre is érvényes a dokumentum elején olvasható figyelmeztetés: önbeszámolón "
+        "alapuló tájékoztatás, nem diagnózis, és nem helyettesíti a szakemberi konzultációt.",
+        new_x=XPos.LMARGIN, new_y=YPos.NEXT,
+    )
     pdf.ln(2)
     pdf.set_font("Manrope", "", 7.8)
     pdf.set_text_color(122, 138, 154)
@@ -3746,9 +4041,9 @@ def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], t
 @api.get("/quiz/report.pdf")
 async def quiz_report_pdf(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     if not FPDF_AVAILABLE:
-        raise HTTPException(status_code=503, detail="A PDF-összefoglaló funkcióhoz az fpdf2 csomag szükséges (pip install fpdf2).")
+        raise HTTPException(status_code=503, detail="A PDF-kivonat funkcióhoz az fpdf2 csomag szükséges (pip install fpdf2).")
     if not (REPORT_FONT_DIR / "Manrope_400Regular.ttf").exists():
-        raise HTTPException(status_code=503, detail="A PDF-összefoglalóhoz hiányzik a Manrope betűtípus (backend/assets/fonts).")
+        raise HTTPException(status_code=503, detail="A PDF-kivonathoz hiányzik a Manrope betűtípus (backend/assets/fonts).")
     res = await db.execute(
         select(QuizSubmission)
         .where(QuizSubmission.user_id == user.id)
@@ -3867,7 +4162,10 @@ def _sync_get_fastembed_embedding(text: str) -> list[float]:
         if _fastembed_model is None:
             from fastembed import TextEmbedding
             _fastembed_model = TextEmbedding(model_name=FASTEMBED_MODEL_NAME)
-    embedding = next(_fastembed_model.embed([norm]))
+    
+    embeddings_list = await asyncio.to_thread(lambda: list(_fastembed_model.embed([norm])))
+    embedding = embeddings_list[0]
+    
     values = embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
     if len(values) != 384:
         raise ValueError(f"Invalid FastEmbed dimension: {len(values)}")
@@ -3937,11 +4235,12 @@ async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str,
         max_retries = 3
         last_error = ""
         for attempt in range(max_retries):
-            r = await httpx.AsyncClient(timeout=90).post(
-                base_url,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": model, "messages": msgs},
-            )
+            async with httpx.AsyncClient(timeout=90) as client:
+                r = await client.post(
+                    base_url,
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={"model": model, "messages": msgs},
+                )
             if r.status_code == 200:
                 return r.json()["choices"][0]["message"]["content"]
             last_error = r.text[:300]
@@ -3957,11 +4256,12 @@ async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str,
         for m in history:
             msgs.append({"role": m["role"], "content": m["text"]})
         msgs.append({"role": "user", "content": user_message})
-        r = await httpx.AsyncClient(timeout=90).post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-            json={"model": model, "max_tokens": 1024, "system": system_prompt, "messages": msgs},
-        )
+        async with httpx.AsyncClient(timeout=90) as client:
+            r = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+                json={"model": model, "max_tokens": 1024, "system": system_prompt, "messages": msgs},
+            )
         if r.status_code != 200:
             logger.error(f"Anthropic API call failed: status={r.status_code}, response={r.text[:1000]}")
             raise HTTPException(status_code=502, detail="Hiba történt az AI szolgáltatónál.")
@@ -3978,10 +4278,11 @@ async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str,
         max_retries = 3
         last_error = ""
         for attempt in range(max_retries):
-            r = await httpx.AsyncClient(timeout=90).post(
-                url,
-                json={"systemInstruction": {"parts": [{"text": system_prompt}]}, "contents": contents},
-            )
+            async with httpx.AsyncClient(timeout=90) as client:
+                r = await client.post(
+                    url,
+                    json={"systemInstruction": {"parts": [{"text": system_prompt}]}, "contents": contents},
+                )
             if r.status_code == 200:
                 data = r.json()
                 cands = data.get("candidates", [])
@@ -4037,7 +4338,13 @@ async def chat_history(
 
 
 @api.post("/chat/send")
-async def chat_send(body: ChatSendBody, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def chat_send(
+    body: ChatSendBody,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _check_and_record_chat_limit(request, user.id)
     request_started = time.perf_counter()
     timings: dict[str, float] = {}
 
@@ -4198,11 +4505,12 @@ CHECKIN_INSTRUCTION = (
 
 
 @api.post("/chat/checkin")
-async def chat_checkin(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def chat_checkin(request: Request, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Proaktív Myra-nyitány: ha a felhasználó pár nap kihagyás után tér vissza, Myra kérdez vissza elsőként.
 
     Szándékosan „best effort”: ha bármelyik feltétel nem teljesül, üres választ ad, sosem hibázik a felületen.
     """
+    _check_and_record_chat_limit(request, user.id)
     if not user.is_admin and await get_setting(db, "maintenance_mode", "false") == "true":
         return {"message": None}
     if not user.state_code or not user.code_verified_at:
@@ -4973,11 +5281,14 @@ async def admin_download_sessions(user_id: int, _: User = Depends(require_admin)
         ] + list(answers)
         writer.writerow(row)
     output.seek(0)
-    filename = f"myra_meresek_{u.name.replace(' ', '_')}_{user_id}.csv"
+    # A felhasználói név nyersen nem kerülhet HTTP-fejlécbe: ékezetes karakternél a
+    # latin-1 kódolás hibázik (500), idézőjelnél pedig szétesik a fejléc.
+    safe_name = re.sub(r"[^A-Za-z0-9_-]", "_", u.name or "")[:40].strip("_") or "felhasznalo"
+    filename = f"myra_meresek_{safe_name}_{user_id}.csv"
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -5003,13 +5314,7 @@ async def admin_delete_user(user_id: int, request: Request, admin: User = Depend
         raise HTTPException(status_code=404, detail="Felhasználó nem található.")
     if u.is_admin:
         raise HTTPException(status_code=403, detail="Admin fiókot nem lehet törölni.")
-    await db.execute(delete(ChatMessage).where(ChatMessage.user_id == user_id))
-    await db.execute(delete(UserGoal).where(UserGoal.user_id == user_id))
-    await db.execute(delete(QuizSubmission).where(QuizSubmission.user_id == user_id))
-    await db.execute(delete(MfaChallenge).where(MfaChallenge.user_id == user_id))
-    await db.execute(delete(TrustedDevice).where(TrustedDevice.user_id == user_id))
-    await db.execute(delete(User).where(User.id == user_id))
-    await db.flush()
+    await _delete_user_completely(db, user_id)
     await _admin_audit(db, admin, request, "admin.user.delete", f"user_id={user_id}")
     return {"ok": True}
 
@@ -5253,7 +5558,11 @@ async def get_forum_posts(_: User = Depends(get_current_user), db: AsyncSession 
 
 
 @api.post("/forum/posts")
-async def create_forum_post(body: ForumPostCreate, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def create_forum_post(body: ForumPostCreate, request: Request, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    _check_and_record_user_limit(
+        _forum_post_attempts, request, user.id, FORUM_POST_WINDOW_S, FORUM_POST_MAX,
+        "Túl sok hozzászólás rövid idő alatt. Kérlek, várj egy kicsit.",
+    )
     content = body.content.strip()
     if not content:
         raise HTTPException(status_code=400, detail="Az üzenet nem lehet üres.")
@@ -5306,14 +5615,17 @@ async def public_config(db: AsyncSession = Depends(get_db)):
 
 
 app.include_router(api)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+# A localhost origin csak fejlesztői módban engedélyezett — élesben nincs rá szükség,
+# és felesleges támadási felület.
+_CORS_KWARGS = {
+    "allow_origins": [
         "https://www.myra-project.hu",
         "https://myra-project.hu",
     ],
-    allow_origin_regex="http://localhost:\\d+",
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    "allow_credentials": False,
+    "allow_methods": ["*"],
+    "allow_headers": ["*"],
+}
+if os.environ.get("ENVIRONMENT") == "development":
+    _CORS_KWARGS["allow_origin_regex"] = "http://localhost:\\d+"
+app.add_middleware(CORSMiddleware, **_CORS_KWARGS)
