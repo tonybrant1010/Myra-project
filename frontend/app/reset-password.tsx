@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { View, StyleSheet, TouchableOpacity, ActivityIndicator } from "react-native";
+import { View, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { theme } from "@/src/theme";
@@ -12,7 +12,8 @@ const PASSWORD_MAX_CHARS = 128;
 
 export default function ResetPasswordScreen() {
   const router = useRouter();
-  const { token } = useLocalSearchParams<{ token: string }>();
+  const { token, email: emailParam } = useLocalSearchParams<{ token: string; email?: string }>();
+  const [email, setEmail] = useState(emailParam ?? "");
   const [password, setPassword] = useState("");
   const [passwordConfirm, setPasswordConfirm] = useState("");
   const [busy, setBusy] = useState(false);
@@ -37,6 +38,10 @@ export default function ResetPasswordScreen() {
       setError("Hiányzik a biztonsági token. Kérj egy új linket.");
       return;
     }
+    if (!email.trim()) {
+      setError("Add meg az email címedet is.");
+      return;
+    }
 
     setBusy(true);
     try {
@@ -45,7 +50,8 @@ export default function ResetPasswordScreen() {
         cache: "no-store",
         credentials: "omit",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, new_password: password }),
+        // Az email kötelező: a backend a kódot ehhez a fiókhoz kötve ellenőrzi.
+        body: JSON.stringify({ email: email.trim(), token, new_password: password }),
       });
 
       const data = await response.json();
@@ -91,6 +97,20 @@ export default function ResetPasswordScreen() {
           </T>
 
           <View style={styles.form}>
+            <T variant="label" color={theme.textSecondary} style={styles.lbl}>Email cím</T>
+            <TextInput
+              style={styles.input}
+              value={email}
+              onChangeText={setEmail}
+              placeholder="pelda@email.hu"
+              placeholderTextColor={theme.textSecondary}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="email-address"
+              textContentType="emailAddress"
+              maxLength={320}
+            />
+
             <T variant="label" color={theme.textSecondary} style={styles.lbl}>Új jelszó (min. 8 karakter)</T>
             <PasswordInput value={password} onChangeText={setPassword} placeholder="Új jelszó" maxLength={PASSWORD_MAX_CHARS} />
 

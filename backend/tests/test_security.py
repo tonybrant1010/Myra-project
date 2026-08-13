@@ -96,12 +96,16 @@ def test_client_ip_with_trust_proxy_false():
 
 def test_reset_token_hash_does_not_store_plain_code():
     code = "123456"
-    hashed = _hash_reset_token(code)
+    email = "user@example.com"
+    hashed = _hash_reset_token(code, email)
 
     assert hashed != code
     assert len(hashed) == 64
-    assert _hash_reset_token(code) == hashed
-    assert _hash_reset_token("654321") != hashed
+    assert _hash_reset_token(code, email) == hashed
+    assert _hash_reset_token("654321", email) != hashed
+    # A hash a fiókhoz van kötve: ugyanaz a kód más email-címmel más hasht ad, ezért
+    # egy találgatott kód nem illeszkedhet másik felhasználó függő tokenjére.
+    assert _hash_reset_token(code, "masik@example.com") != hashed
 
 
 def test_mfa_issue_limit_blocks_repeated_code_sends():
@@ -511,9 +515,12 @@ def test_auth_and_admin_code_schemas_reject_oversized_tokens():
     with pytest.raises(Exception):
         LoginBody(email="user@example.com", password="a" * 129)
 
-    ResetPasswordBody(token="1234", new_password="password123")
+    ResetPasswordBody(email="user@example.com", token="1234", new_password="password123")
     with pytest.raises(Exception):
-        ResetPasswordBody(token="x" * 129, new_password="password123")
+        ResetPasswordBody(email="user@example.com", token="x" * 129, new_password="password123")
+    # Az email kötelező: enélkül a kód bármelyik fiók függő tokenjére illeszkedhetne.
+    with pytest.raises(Exception):
+        ResetPasswordBody(token="1234", new_password="password123")
 
     ChangePasswordBody(
         current_password="old",
@@ -550,6 +557,8 @@ def test_auth_and_admin_code_schemas_reject_oversized_tokens():
 async def test_emergency_admin_routes_reject_wrong_current_password(init_db):
     from fastapi.testclient import TestClient
 
+    from conftest import TestingSessionLocal
+
     admin = User(
         id=990,
         email="admin@example.com",
@@ -558,6 +567,14 @@ async def test_emergency_admin_routes_reject_wrong_current_password(init_db):
         is_admin=True,
         is_active=True,
     )
+
+    # Az admint valóban be kell szúrni a DB-be: a végpontok admin_audit_logs sort írnak,
+    # ami idegen kulccsal mutat a users táblára. Enélkül (bekapcsolt FK-kényszerítés
+    # mellett, ahogy éles PostgreSQL-en is) a kérés FK-hibával szállna el.
+    async with TestingSessionLocal() as db:
+        db.add(admin)
+        await db.commit()
+        db.expunge(admin)
 
     orig_env = os.environ.get("ENVIRONMENT")
     app.dependency_overrides[require_admin] = lambda: admin

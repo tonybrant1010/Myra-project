@@ -70,7 +70,9 @@ function envNumber(name, fallback, min, max) {
 
 const normalRequestMaxBytes = envNumber('API_REQUEST_MAX_BYTES', 1024 * 1024, 64 * 1024, 10 * 1024 * 1024);
 const uploadRequestMaxBytes = envNumber('KB_PDF_UPLOAD_MAX_BYTES', 25 * 1024 * 1024, 1024 * 1024, 100 * 1024 * 1024);
-const proxyTimeoutMs = envNumber('MYRA_PROXY_TIMEOUT_MS', 30000, 5000, 120000);
+// A lánc sorrendje: backend LLM-keret (45s) < proxy timeout (55s) < Vercel függvény-limit (60s).
+// Korábban a proxy 30s-nál bontott, miközben a backend még percekig dolgozott.
+const proxyTimeoutMs = envNumber('MYRA_PROXY_TIMEOUT_MS', 55000, 5000, 120000);
 
 function requestBodyLimit(cleanPath) {
   return cleanPath === 'api/admin/kb/files/upload' || cleanPath === 'api/admin/kb/upload'
@@ -127,12 +129,24 @@ module.exports = async function handler(req, res) {
     'transfer-encoding',
     'upgrade',
     'content-length',
+    // A kliens NEM adhatja meg ezeket: a proxy-titkot mi állítjuk be (a kliens értéke
+    // egyébként a fetch Headers append-szemantikája miatt "kliens, valodi" formában
+    // fuzionalna, es a backend 403-mal utasitana el), a kliens-IP fejleceket pedig
+    // a Vercel tolti ki - egy tovabbitott sajat ertek meghamisitana a rate limiteket.
+    'x-myra-proxy-secret',
+    'x-forwarded-for',
+    'x-real-ip',
   ]);
   for (const [key, value] of Object.entries(req.headers)) {
     if (!hopByHopHeaders.has(key.toLowerCase())) {
       headers[key] = value;
     }
   }
+  const clientIp = (req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || '')
+    .toString()
+    .split(',')[0]
+    .trim();
+  if (clientIp) headers['X-Forwarded-For'] = clientIp;
   headers['X-Myra-Proxy-Secret'] = proxySecret;
   const bodyLimit = requestBodyLimit(cleanPath);
   const declaredLength = Number(req.headers['content-length'] || 0);

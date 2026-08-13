@@ -15,6 +15,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { authedFetch, useAuth } from "@/src/auth/AuthContext";
 import { useAuthGuard } from "@/src/auth/useAuthGuard";
 import ContentBackground from "@/src/components/ContentBackground";
+import FeedbackButton from "@/src/components/FeedbackButton";
 import TopBar from "@/src/components/TopBar";
 import { T } from "@/src/components/Typography";
 import { shadow, theme } from "@/src/theme";
@@ -138,13 +139,20 @@ export default function MyraLiveScreen() {
   const closeSession = useCallback(() => {
     closingRef.current = true;
     startingRef.current = false;
-    processorRef.current?.disconnect();
-    sourceRef.current?.disconnect();
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    sessionRef.current?.sendRealtimeInput({ audioStreamEnd: true });
-    sessionRef.current?.close();
-    void inputContextRef.current?.close();
-    void outputContextRef.current?.close();
+    // Minden lépés külön védve: ha egy már lezárt WebSocketen hibát dob a takarítás,
+    // a mikrofon és az AudioContextek enélkül nyitva maradnának.
+    const safely = (fn: () => void) => {
+      try {
+        fn();
+      } catch {}
+    };
+    safely(() => processorRef.current?.disconnect());
+    safely(() => sourceRef.current?.disconnect());
+    safely(() => streamRef.current?.getTracks().forEach((track) => track.stop()));
+    safely(() => sessionRef.current?.sendRealtimeInput({ audioStreamEnd: true }));
+    safely(() => sessionRef.current?.close());
+    safely(() => void inputContextRef.current?.close());
+    safely(() => void outputContextRef.current?.close());
     stopPlayback();
     releaseWakeLock();
 
@@ -410,12 +418,16 @@ export default function MyraLiveScreen() {
           },
           onerror: () => {
             if (!mountedRef.current) return;
+            // Teljes takarítás: korábban csak a state változott, így szerveroldali hiba
+            // után a mikrofon és az AudioContextek nyitva maradtak (a böngésző
+            // mikrofon-jelzője égve maradt a következő indításig).
+            closeSession();
             setPhase("error");
             setStatus("A Google Live kapcsolat hibát jelzett. Próbáld újra.");
           },
           onclose: (event) => {
             if (!mountedRef.current || closingRef.current) return;
-            sessionRef.current = null;
+            closeSession();
             setPhase("idle");
             setStatus(
               event.reason
@@ -507,6 +519,7 @@ export default function MyraLiveScreen() {
 
         </ScrollView>
         <View style={styles.disclaimerBar}>
+          <FeedbackButton context="live" />
           <T variant="small" color="rgba(247,251,255,0.42)" align="center" style={styles.disclaimerText}>
             A Myra Live egy mesterséges intelligenciával támogatott önismereti asszisztens. Nem ad orvosi tanácsot és nem helyettesíti a szakembert.
           </T>
@@ -599,6 +612,8 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(6,19,32,0.62)",
     borderTopWidth: 0.5,
     borderColor: "rgba(255,255,255,0.08)",
+    alignItems: "center",
+    gap: 6,
   },
   disclaimerText: {
     fontSize: 10,

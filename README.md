@@ -16,6 +16,11 @@ Vercel frontend
   - X-Myra-Proxy-Secret header hozzáadása
   |
   v
+Cloudflare Tunnel  (api.myra-project.hu)
+  - a VM-en nincs nyitott port
+  - cloudflared kifelé épít kapcsolatot
+  |
+  v
 Google Cloud VM backend
   - Docker Compose
   - FastAPI / Uvicorn
@@ -29,7 +34,7 @@ Supabase EU Postgres
   - knowledge_chunks + pgvector embedding_384
 ```
 
-A frontend Vercelen fut. A backend Google Cloud VM-en fut Docker konténerben. Az adatbázis helye Supabase/Postgres. A VM-en nem fut frontend konténer.
+A frontend Vercelen fut. A backend Google Cloud VM-en fut Docker konténerben, Cloudflare Tunnel mögött: a VM-nek nincs publikusan nyitott portja. Az adatbázis helye Supabase/Postgres. A VM-en nem fut frontend konténer.
 
 ## Fő Funkciók
 
@@ -43,6 +48,9 @@ A frontend Vercelen fut. A backend Google Cloud VM-en fut Docker konténerben. A
 - chat- és mérési előzmények;
 - bővített chat kontextus ugyanazon mérési szálon belül;
 - TXT beszélgetés-export a chat felületről;
+- asztali gépen Enterrel küldés a chatben (Shift+Enter új sor);
+- visszajelzés gomb a chat és a Live felületen, közvetlen e-mail-küldéssel a fejlesztőnek;
+- fórum-értesítés: jelzés a menüben és a menügombon, ha új poszt érkezett;
 - felhasználói adathordozhatóság (GDPR Art. 20) adatexporttal JSON formátumban;
 - felhasználói fiók és adatok végleges önkiszolgáló törlése (GDPR Art. 17);
 - Gemini Live beszélgetés az aktuális kapcsolat idejére korlátozott kontextussal;
@@ -140,6 +148,20 @@ Ha ez hiányzik vagy rossz, a backend válasza:
 
 A VM `.env` és a Vercel project env ugyanazt a `MYRA_PROXY_SECRET` értéket kell használja.
 
+Ez 2026-08-13 óta a második védelmi réteg. Az első a Cloudflare Tunnel: a backend a
+`cloudflared` konténeren keresztül, kifelé épített kapcsolattal érhető el az
+`api.myra-project.hu` címen. A VM-en nincs publikált port (`docker-compose.yml`-ben a
+backendnek nincs `ports:` szekciója), a GCP tűzfalban a 8001-es szabály letiltva.
+Kívülről nézve a gép nem válaszol, a proxy-titok pedig akkor is véd, ha az alagút címe
+kiderül.
+
+Ellenőrzés kívülről:
+
+```bash
+curl -i https://api.myra-project.hu/api/config     # 403, "Direct access to origin is forbidden."
+curl -m 5 http://<VM_EXTERNAL_IP>:8001/api/config  # timeout
+```
+
 ### Supabase IP allowlist
 
 Ha a Google VM külső IP-je megváltozik, a Supabase Database Network Restrictions / allowlist alatt frissíteni kell az IP-t:
@@ -169,12 +191,22 @@ KB_TEXT_UPLOAD_MAX_BYTES=2097152
 ### Keresési pipeline (2026-07-03 óta)
 
 Postgres/Supabase alatt a keresés hibrid: pgvector cosine keresés és magyar szótövezett
-full-text ág (`websearch_to_tsquery('hungarian')`, GIN indexszel) fut egy SQL-ben,
-az eredmény RRF-fúzióval áll össze. A csak-vektoros találatokra relevancia-küszöb
-vonatkozik; ha semmi nem elég közeli, a prompt tudásanyag nélkül megy ki.
-SQLite (fejlesztői) módban FTS5/BM25 keresés fut. A chunkolás 1400 karakter / 200
-átfedés, az embedding a dokumentumcímmel együtt készül. A modellt egy háttérfolyamat
-tartja melegen, hogy kevés RAM-ú VM-en se swapoljon ki tétlenség alatt.
+full-text ág (`to_tsquery('hungarian')`, GIN indexszel) fut egy SQL-ben, az eredmény
+RRF-fúzióval áll össze. SQLite (fejlesztői) módban FTS5/BM25 keresés fut. A chunkolás
+1400 karakter / 200 átfedés, az embedding a dokumentumcímmel együtt készül. A modellt
+egy háttérfolyamat tartja melegen, hogy kevés RAM-ú VM-en se swapoljon ki tétlenség
+alatt.
+
+**Változás 2026-08-13:** a szöveges ág korábban `websearch_to_tsquery`-t használt, ami a
+szavakat ÉS-sel köti össze — így egy valódi mondatra soha nem talált, mert minden szónak
+ugyanabban a chunkban kellett volna szerepelnie. Helyette VAGY-alapú `to_tsquery` épül a
+lekérdezésből, a 7 karakternél hosszabb szavak prefixként (`ambivalencia:*`), mert a
+magyar szótövező külön lexémát csinál az `ambivalencia` és az `ambivalens` alakból.
+
+Ugyanekkor megszűnt a találati szűrés: a rangsor élén álló `limit` darab chunk **mindig**
+átmegy az LLM-hez. Korábban abszolút távolságküszöb vágott, ami magyar szövegen
+véletlenszerűen vágott — krízis-megfogalmazásoknál rendszeresen üresen ment ki a prompt.
+Egy közepesen illeszkedő részlet ára pár száz token; a nulla részleté hiányos válasz.
 
 RAG-hoz hangolható env változók:
 
@@ -186,14 +218,15 @@ DISABLE_RAG_STARTUP_WARMUP=false
 FASTEMBED_MODEL_NAME=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 ```
 
-- `RAG_VECTOR_MAX_DISTANCE`: cosine tavolsag kuszob a csak-vektoros talalatokra; e folott a chunk nem kerul a promptba.
+- `RAG_VECTOR_MAX_DISTANCE`: 2026-08-13 óta **nem szűr**, csak diagnosztikai viszonyítási pont a logban.
 - `RAG_CANDIDATE_POOL`: a hibrid fuzio jeloltszama aganként.
 - `RAG_KEEPWARM_INTERVAL_S`: keep-warm gyakorisag masodpercben; `0` kikapcsolja.
 - `DISABLE_RAG_STARTUP_WARMUP=true`: kikapcsolja a startup RAG warmupot, ha gyors kontenerinditas fontosabb az elso RAG keresesi kesleltetesnel.
 
-Diagnosztika: minden keresés `rag_search candidates=... kept=... best_dist=...` sort logol
-(kuszob-hangolashoz), a `scripts/bench_embed.py` pedig a konteneren belul meri a
-modell betoltesi idejet, query-latencyt es RAM-igenyt.
+Diagnosztika: minden keresés `rag_search candidates=... txt_hits=... kept=... best_dist=...`
+sort logol. A `txt_hits` a szöveges ág találatait mutatja — ha tartósan 0, a lexikális ág
+nem dolgozik. A `scripts/bench_embed.py` a konteneren belul meri a modell betoltesi
+idejet, query-latencyt es RAM-igenyt.
 
 A backend a PDF-ekből szöveget nyer ki, chunkokra bontja, FastEmbed embeddinget készít, majd Supabase-ben tárolja:
 
@@ -270,11 +303,18 @@ A chat felületen a betöltött beszélgetés TXT fájlként letölthető.
 A backend a chat válaszadásnál `chat_timing` logsort ír. Ez külön méri a fő lépéseket:
 
 ```text
-settings, rag, history_db, history_format, llm, reply_db
+preflight, settings, rag, history_db, history_format,
+user_db, goals, prompt, llm, reply_db, other
 ```
 
 Ebből látható, hogy a lassulást a beállítások lekérése, a RAG keresés, az előzmények olvasása,
-az LLM hívás vagy a válasz mentése okozza-e. A chat előzmény lekéréséhez külön Postgres index
+az LLM hívás vagy a válasz mentése okozza-e.
+
+A `preflight` a kérés eleje a beállítások betöltéséig (három DB-lekérdezés), a `user_db` a
+felhasználó üzenetének mentése, a `goals` a célok lekérése, a `prompt` a system prompt
+összeállítása. Az **`other` a legfontosabb**: `total` mínusz az összes mért szakasz. A
+szakaszok nem fedik át egymást, tehát ha az `other` nagy, a lassulás olyan helyen van,
+ahol még nincs mérés — és onnan kell tovább keresni. Normál működésnél `other=0.00s`. A chat előzmény lekéréséhez külön Postgres index
 van:
 
 ```text
@@ -283,6 +323,20 @@ ix_chat_messages_user_session_created_at
 
 Ez az aktuális mérési session üzeneteit időrend szerint, limitált mennyiségben tölti vissza, hogy
 a beszélgetés folyamatát kövesse, de ne húzza be feleslegesen a teljes régi előzményt.
+
+### Időkezelés
+
+A modell minden időbélyeget **magyar helyi időben** kap: az előzmény-üzenetek bélyegét, az
+aktuális üzenetét és a system prompt „Aktuális időpont" sorát is. Az adatbázis továbbra is
+UTC-ben tárol; a váltás csak a megjelenítésnél történik (`_to_local`, nyári/téli
+időszámítással, és kézi EU-s tartalékszabállyal, ha a konténerből hiányzik a tz-adatbázis).
+
+2026-08-12 előtt a modell nyers UTC-t látott, ezért 14:20-kor 12:20-at hitt, és ennek
+megfelelően köszönt vagy tájékozódott az időben.
+
+A válaszból az esetleg beszivárgó `[ÉÉÉÉ.HH.NN ÓÓ:PP]` bélyeg eltávolításra kerül. A szűrő
+a hiányzó záró zárójelet és a zárójelen belüli sortörést is kezeli — a modell mindkettőt
+produkálta élesben.
 
 ## Live Beszélgetés
 
@@ -322,8 +376,16 @@ backend/
 
 frontend/
   app/
+    chat.tsx
     forum.tsx
+    myra-live.tsx
   src/
+    components/
+      FeedbackButton.tsx
+      SideMenu.tsx
+      TopBar.tsx
+    utils/
+      forumSeen.ts
   assets/
   scripts/patch-dist.js
   vercel.json
@@ -446,16 +508,24 @@ GMAIL_USER=...
 GMAIL_APP_PASSWORD=...
 TRUST_PROXY=true
 TTS_ENGINE=piper
+CLOUDFLARE_TUNNEL_TOKEN=...
 ```
+
+A `CLOUDFLARE_TUNNEL_TOKEN` a `cloudflared` konténeré. Ha kiszivárog, a Cloudflare Zero
+Trust felületen töröld a tunnelt és hozz létre újat — a token nem forgatható a helyén.
 
 Vercel:
 
 ```env
 MYRA_PROXY_SECRET=...
-MYRA_BACKEND_ORIGIN=http://<VM_EXTERNAL_IP>:8001
+MYRA_BACKEND_ORIGIN=https://api.myra-project.hu
 EXPO_PUBLIC_BACKEND_URL=/api
-MYRA_PROXY_TIMEOUT_MS=30000
+MYRA_PROXY_TIMEOUT_MS=55000
 ```
+
+A `MYRA_BACKEND_ORIGIN` 2026-08-13 óta a Cloudflare Tunnel hosztneve, nem a VM IP-je. A
+`MYRA_PROXY_TIMEOUT_MS` 55000, hogy a proxy ne vágja el az LLM-választ a Vercel ~60 mp-es
+függvénykorlátja előtt.
 
 Vercelen a `MYRA_BACKEND_ORIGIN`/`BACKEND_URL` és a `MYRA_PROXY_SECRET` kötelező. Ha bármelyik hiányzik, a proxy szándékosan hibával leáll, és nem próbál régi, beégetett VM IP-re továbbítani.
 
@@ -489,6 +559,8 @@ backend/rag/
 
 ## Biztonsági Megjegyzések
 
+- A backend nem érhető el közvetlenül az internetről: Cloudflare Tunnel mögött fut, a VM-en nincs publikált port, a GCP tűzfalban a 8001-es szabály letiltva. A proxy-titok a második réteg.
+- A Supabase publikus REST API-ja zárt: minden táblán be van kapcsolva az RLS, policy nélkül — ez Postgresben teljes tiltást jelent. Az `anon` kulccsal semmilyen sor nem olvasható. Ezt ne kapcsold ki: a backend közvetlen Postgres-kapcsolattal, tábla-tulajdonosként dolgozik, nem a REST API-n keresztül.
 - API kulcsot és `.env` fájlt ne commitolj.
 - Éles adatbázis-exportot vagy felhasználói adatot tartalmazó fájlt ne commitolj.
 - Supabase IP allowlist változás után mindig ellenőrizd a login, mérés, chat és admin tudásanyag folyamatot.

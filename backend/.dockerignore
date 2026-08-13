@@ -5,6 +5,10 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
+# A backend/tts/ csak Windows binárisokat tartalmaz (piper.exe + DLL-ek, ~10 MB),
+# a Linux image-ben használhatatlan. Ha valaha Linux piper bináris kerül ide,
+# ezt a sort törölni kell, és a compose-ban a TTS_ENGINE-t is át kell adni.
+tts/
 .git/
 .gitignore
 .env

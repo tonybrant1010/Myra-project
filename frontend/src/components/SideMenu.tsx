@@ -9,7 +9,7 @@ import { shadow, theme } from "@/src/theme";
 import { T } from "@/src/components/Typography";
 
 type Session = { id: string; code: string; created_at: string };
-type Props = { visible: boolean; onClose: () => void };
+type Props = { visible: boolean; onClose: () => void; forumUnread?: boolean };
 
 function formatSessionLabel(s: Session): string {
   const d = new Date(s.created_at);
@@ -24,7 +24,7 @@ function isSessionExpired(s: Session): boolean {
   return (now.getTime() - created.getTime()) >= msIn30Days;
 }
 
-export default function SideMenu({ visible, onClose }: Props) {
+export default function SideMenu({ visible, onClose, forumUnread }: Props) {
   const router = useRouter();
   const { user, token, logout, setUserLocal } = useAuth();
   const [busy, setBusy] = useState(false);
@@ -120,7 +120,7 @@ export default function SideMenu({ visible, onClose }: Props) {
 
                 <MenuGroup title="Alapműveletek">
                   <MenuItem label="Főoldal" icon="home-outline" onPress={() => { onClose(); router.replace("/welcome"); }} testID="menu-welcome" />
-                  <MenuItem label="Fórum" icon="chatbubbles-outline" onPress={() => { onClose(); router.push("/forum" as any); }} testID="menu-forum" />
+                  <MenuItem label="Fórum" icon="chatbubbles-outline" onPress={() => { onClose(); router.push("/forum" as any); }} testID="menu-forum" badge={forumUnread} />
                   <MenuItem label="Új mérés" icon="analytics-outline" onPress={() => setConfirmRetake(true)} testID="menu-retake" disabled={busy} />
                   <MenuItem label="Beállítások" icon="person-circle-outline" onPress={() => { onClose(); router.push("/settings" as any); }} testID="menu-settings" />
                 </MenuGroup>
@@ -272,7 +272,7 @@ function MenuGroup({ title, children }: { title: string; children: React.ReactNo
   );
 }
 
-function MenuItem({ label, icon, onPress, testID, disabled, subtle, danger }: {
+function MenuItem({ label, icon, onPress, testID, disabled, subtle, danger, badge }: {
   label: string;
   icon: keyof typeof Ionicons.glyphMap;
   onPress: () => void;
@@ -280,6 +280,7 @@ function MenuItem({ label, icon, onPress, testID, disabled, subtle, danger }: {
   disabled?: boolean;
   subtle?: boolean;
   danger?: boolean;
+  badge?: boolean;
 }) {
   const color = danger ? "#FF9AA8" : subtle ? "rgba(247,251,255,0.66)" : theme.textOnDark;
   return (
@@ -288,6 +289,7 @@ function MenuItem({ label, icon, onPress, testID, disabled, subtle, danger }: {
         <Ionicons name={icon} size={18} color={color} />
       </View>
       <T variant="bodyLg" color={color} style={styles.menuLabel}>{label}</T>
+      {badge ? <View style={styles.menuBadge} testID="menu-forum-dot" /> : null}
     </TouchableOpacity>
   );
 }
@@ -398,6 +400,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.12)",
   },
   menuItem: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 11, paddingHorizontal: 12 },
+  menuBadge: { width: 8, height: 8, borderRadius: 4, backgroundColor: theme.accent },
   menuIcon: {
     width: 30,
     height: 30,

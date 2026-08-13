@@ -261,6 +261,17 @@ try:
 except ValueError:
     RAG_VECTOR_MAX_DISTANCE = 0.62
 CHAT_MESSAGE_MAX_CHARS = _env_int("CHAT_MESSAGE_MAX_CHARS", 8000, 500, 20000)
+# Az LLM-hívás teljes költségkerete. Korábban 90s timeout x 3 próba (+2x8s várakozás)
+# volt, azaz worst case ~4,8 perc — a Vercel proxy viszont jóval korábban bontott, így
+# a kliens 504-et kapott, miközben a backend még percekig égette az API-keretet egy
+# olyan kérésre, amit már senki nem várt. A keret alá kell esni a proxy timeoutjának.
+# Az egy próbálkozásra jutó timeout az eredeti 90 mp (a 30 mp-es szigorítás lassú
+# Gemini-válasznál 502-t okozott ott, ahol korábban a válasz még megérkezett és
+# mentésre került). A teljes keret ezt kétszer engedi meg, hogy egy beakadt kérés
+# se tudjon percekig futni. Mindhárom env-változóval hangolható újrafordítás nélkül.
+LLM_TOTAL_BUDGET_S = _env_int("LLM_TOTAL_BUDGET_S", 200, 10, 600)
+LLM_ATTEMPT_TIMEOUT_S = _env_int("LLM_ATTEMPT_TIMEOUT_S", 90, 5, 300)
+LLM_RETRY_BACKOFF_S = _env_int("LLM_RETRY_BACKOFF_S", 8, 0, 60)
 API_REQUEST_MAX_BYTES = _env_int("API_REQUEST_MAX_BYTES", 1 * 1024 * 1024, 64 * 1024, 10 * 1024 * 1024)
 KB_PDF_UPLOAD_MAX_BYTES = _env_int("KB_PDF_UPLOAD_MAX_BYTES", 25 * 1024 * 1024, 1 * 1024 * 1024, 100 * 1024 * 1024)
 KB_TEXT_UPLOAD_MAX_BYTES = _env_int("KB_TEXT_UPLOAD_MAX_BYTES", 2 * 1024 * 1024, 64 * 1024, 10 * 1024 * 1024)
@@ -469,6 +480,35 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+try:
+    from zoneinfo import ZoneInfo
+    _BUDAPEST_TZ = ZoneInfo("Europe/Budapest")
+except Exception:  # a slim image-bol hianyozhat a tz-adatbazis
+    _BUDAPEST_TZ = None
+
+
+def _last_sunday_utc(year: int, month: int) -> datetime:
+    d = datetime(year, month, 31, tzinfo=timezone.utc)
+    d -= timedelta(days=(d.weekday() + 1) % 7)  # weekday(): hetfo=0 ... vasarnap=6
+    return d.replace(hour=1, minute=0, second=0, microsecond=0)
+
+
+def _to_local(dt: Optional[datetime]) -> Optional[datetime]:
+    """UTC -> magyar helyi ido. A modellnek MINDIG ezt kell latnia: a nyers UTC
+    miatt hitte 14:20-kor, hogy 12:20 van. Ha a tz-adatbazis hianyzik a kepbol,
+    kezi EU-s szabaly: marcius utolso vasarnapjatol oktober utolso vasarnapjaig
+    UTC+2, egyebkent UTC+1."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    if _BUDAPEST_TZ is not None:
+        return dt.astimezone(_BUDAPEST_TZ)
+    u = dt.astimezone(timezone.utc)
+    dst = _last_sunday_utc(u.year, 3) <= u < _last_sunday_utc(u.year, 10)
+    return u.astimezone(timezone(timedelta(hours=2 if dst else 1)))
+
+
 def hash_password(p: str) -> str:
     return pwd_ctx.hash(p)
 
@@ -653,7 +693,7 @@ def create_access_token(user: User, *, mfa_verified: bool = False) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
 
-def create_refresh_token(user: User) -> str:
+def create_refresh_token(user: User, *, mfa_verified: bool = False) -> str:
     now = _now()
     jti = str(uuid.uuid4())
     exp = int((now + timedelta(days=30)).timestamp())
@@ -661,6 +701,10 @@ def create_refresh_token(user: User) -> str:
         "sub": str(user.id),
         "email": user.email,
         "token_version": int(getattr(user, "token_version", 0) or 0),
+        # A refresh token is hordozza, hogy a munkamenet átment-e MFA-n. Enélkül a
+        # /auth/refresh minden tokenből MFA-zott access tokent gyártott, azaz egy
+        # MFA nélkül szerzett refresh token admin hozzáférésre volt váltható.
+        "mfa": bool(mfa_verified),
         "iat": int(now.timestamp()),
         "exp": exp,
         "type": "refresh",
@@ -913,6 +957,10 @@ _tts_attempts: dict[str, dict] = {}
 TTS_WINDOW_S = 60
 TTS_MAX = _env_int("TTS_MAX", 30, 5, 200)
 
+_feedback_attempts: dict[str, dict] = {}
+FEEDBACK_WINDOW_S = 600
+FEEDBACK_MAX = _env_int("FEEDBACK_MAX", 5, 1, 50)
+
 _forum_post_attempts: dict[str, dict] = {}
 FORUM_POST_WINDOW_S = 60
 FORUM_POST_MAX = _env_int("FORUM_POST_MAX", 6, 2, 60)
@@ -1130,6 +1178,23 @@ def _knowledge_terms(query: str, max_terms: int = 10) -> list[str]:
     return unique
 
 
+def _build_ts_query(expanded_query: str, max_terms: int = 12) -> str:
+    """A websearch_to_tsquery a szavakat ES-sel kapcsolja ossze, ezert egy valodi
+    mondat sosem talalt: minden szonak szerepelnie kellett volna ugyanabban a
+    chunkban. Itt VAGY-ot epitunk, es a 7 karakternel hosszabb szavakat prefixkent
+    illesztjuk (a magyar stemmer kulon lexemat csinal az "ambivalencia" es az
+    "ambivalens" alakbol - prefix nelkul a ketto nem talalna egymasra)."""
+    parts: list[str] = []
+    for term in _knowledge_terms(expanded_query, max_terms=max_terms):
+        clean = re.sub(r"[^\w\u00c0-\u017f]", "", term)
+        if len(clean) < 3:
+            continue
+        parts.append(f"{clean}:*" if len(clean) >= 7 else clean)
+    if not parts:
+        return "zzznincstalalatzzz"
+    return " | ".join(parts)
+
+
 def _expand_knowledge_query(query: str) -> str:
     q = query.lower()
     expansions: list[str] = []
@@ -1277,12 +1342,12 @@ async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> 
                            ROW_NUMBER() OVER (
                                ORDER BY ts_rank_cd(
                                    to_tsvector('hungarian', coalesce(title, '') || ' ' || content),
-                                   websearch_to_tsquery('hungarian', :ts_query)
+                                   to_tsquery('hungarian', :ts_query)
                                ) DESC
                            ) AS rnk
                     FROM knowledge_chunks
                     WHERE to_tsvector('hungarian', coalesce(title, '') || ' ' || content)
-                          @@ websearch_to_tsquery('hungarian', :ts_query)
+                          @@ to_tsquery('hungarian', :ts_query)
                     LIMIT :pool
                 )
                 SELECT kc.id, kc.source_name, kc.source_path, kc.source_hash,
@@ -1298,23 +1363,28 @@ async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> 
             """)
             res = await db.execute(stmt, {
                 "query_vector": query_vector_str,
-                "ts_query": expanded_query,
+                "ts_query": _build_ts_query(expanded_query),
                 "pool": RAG_CANDIDATE_POOL,
             })
             rows = res.mappings().all()
             kept = []
             best_dist = None
+            txt_hits = 0
             for row in rows:
                 dist = float(row["vec_dist"]) if row["vec_dist"] is not None else None
                 if dist is not None and (best_dist is None or dist < best_dist):
                     best_dist = dist
-                if row["txt_rnk"] is not None or (dist is not None and dist <= RAG_VECTOR_MAX_DISTANCE):
-                    kept.append(row)
+                if row["txt_rnk"] is not None:
+                    txt_hits += 1
+                # Nincs szures: a sorok mar RRF szerint rendezettek, a legjobb
+                # "limit" darab mindig atmegy az LLM-hez. Egy kozepesen illeszkedo
+                # reszlet ara par szaz token; a nulla reszlet ara hianyos valasz.
+                kept.append(row)
                 if len(kept) >= limit:
                     break
             logger.info(
-                "rag_search candidates=%d kept=%d best_dist=%s",
-                len(rows), len(kept), f"{best_dist:.3f}" if best_dist is not None else "-",
+                "rag_search candidates=%d txt_hits=%d kept=%d best_dist=%s",
+                len(rows), txt_hits, len(kept), f"{best_dist:.3f}" if best_dist is not None else "-",
             )
             if kept:
                 return [
@@ -1404,6 +1474,18 @@ Ha a felhasználó azt mondja, hogy csak veled akar beszélni és nem másokkal,
 Magyarországi felhasználónál említsd röviden: 112 sürgős veszély esetén, 116-123 lelki elsősegély. Ne adj hosszú listát.
 Kérdezz rá röviden a közvetlen biztonságra: egyedül van-e, van-e közvetlen veszély vagy eszköz a közelében, tud-e most valakit odahívni.
 Ne adj módszert, ne részletezz önsértési módokat, ne vitatkozz, ne moralizálj, ne ígérj titoktartást."""
+
+
+# A futó háttértaskokra erős referenciát kell tartani, különben a GC menet közben
+# elviheti őket (asyncio csak gyenge referenciát tárol) — a feladat némán elhalna.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_background_task(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
 
 
 async def _run_startup_migrations() -> None:
@@ -2093,6 +2175,11 @@ class ExportDataBody(BaseModel):
     current_password: str = Field(min_length=1, max_length=128)
 
 
+class FeedbackBody(BaseModel):
+    message: str = Field(min_length=3, max_length=2000)
+    context: str = Field("", max_length=40)
+
+
 class AiSuggestBody(BaseModel):
     session_id: Optional[str] = None
 
@@ -2291,6 +2378,45 @@ Myra-project csapat""", "plain", "utf-8")
         return True
     except Exception as e:
         logger.error(f"Gmail biztonsági kód küldési hiba: {e}")
+        return False
+
+
+def _send_feedback_email(user_name: str, user_email: str, user_id: int, context: str, message: str) -> bool:
+    """Felhasználói visszajelzés továbbítása a fejlesztőnek. A felhasználói szöveg
+    kizárólag a levéltörzsbe kerül (fejlécbe soha), így nincs header-injection kockázat."""
+    if not GMAIL_USER or not GMAIL_APP_PASSWORD:
+        logger.error("Gmail SMTP credentials are not configured in .env")
+        return False
+
+    where = {"chat": "Chat felület", "live": "Myra Live"}.get(context, context or "ismeretlen")
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    body = MIMEText(f"""Uj felhasznaloi visszajelzes erkezett a Myra-project alkalmazasbol.
+
+- Honnan: {where}
+- Felhasznalo: {user_name} ({user_email}), id={user_id}
+- Idopont: {date_str}
+
+--- A visszajelzes szovege ---
+
+{message}
+
+--- vege ---
+
+Ezt a levelet a Myra-project visszajelzes gombja kuldte.""", "plain", "utf-8")
+
+    body["Subject"] = f"Myra visszajelzes - {where}"
+    body["From"] = GMAIL_USER
+    body["To"] = GMAIL_USER
+    body["Reply-To"] = GMAIL_USER
+
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+            server.sendmail(GMAIL_USER, [GMAIL_USER], body.as_string())
+        return True
+    except Exception as e:
+        logger.error(f"Gmail visszajelzes kuldesi hiba: {e}")
         return False
 
 
@@ -2557,8 +2683,9 @@ async def auth_login(body: LoginBody, request: Request, background_tasks: Backgr
     user.last_login_at = _now()
     await db.flush()
 
-    access_token = create_access_token(user, mfa_verified=bool(needs_totp or needs_email_mfa))
-    refresh_token = create_refresh_token(user)
+    session_mfa_verified = bool(needs_totp or needs_email_mfa)
+    access_token = create_access_token(user, mfa_verified=session_mfa_verified)
+    refresh_token = create_refresh_token(user, mfa_verified=session_mfa_verified)
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -2605,7 +2732,7 @@ async def auth_mfa_verify(
     await db.flush()
 
     access_token = create_access_token(user, mfa_verified=True)
-    refresh_token = create_refresh_token(user)
+    refresh_token = create_refresh_token(user, mfa_verified=True)
     return {"access_token": access_token, "refresh_token": refresh_token, "user": _user_out(user), "device_token": device_token}
 
 
@@ -2828,6 +2955,11 @@ async def auth_refresh(body: RefreshTokenBody, db: AsyncSession = Depends(get_db
         raise HTTPException(status_code=401, detail="Érvénytelen vagy lejárt refresh token.")
     if payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Hibás token típus.")
+    # A rotáció csak akkor véd, ha a már felhasznált tokent VISSZA IS utasítjuk:
+    # enélkül egy ellopott refresh token a lejáratáig korlátlanul újraváltható volt.
+    incoming_jti = payload.get("jti")
+    if incoming_jti and _is_jti_blacklisted(incoming_jti):
+        raise HTTPException(status_code=401, detail="Ez a refresh token már fel lett használva. Jelentkezz be újra.")
     uid = int(payload["sub"])
     res = await db.execute(select(User).where(User.id == uid))
     user = res.scalar_one_or_none()
@@ -2836,13 +2968,18 @@ async def auth_refresh(body: RefreshTokenBody, db: AsyncSession = Depends(get_db
     if int(payload.get("token_version", 0)) != int(user.token_version or 0):
         raise HTTPException(status_code=401, detail="A munkamenet lejárt.")
         
-    jti = payload.get("jti")
+    # Az MFA-státuszt a refresh tokenből örököljük, nem adjuk ingyen. Admin fiók
+    # MFA nélküli refresh tokent nem válthat be — annak a normál beléptetés az útja.
+    session_mfa_verified = bool(payload.get("mfa"))
+    if user.is_admin and not session_mfa_verified:
+        raise HTTPException(status_code=401, detail="Admin munkamenet megújításához kétlépcsős azonosítás szükséges. Jelentkezz be újra.")
+
     exp = payload.get("exp", time.time())
-    if jti:
-        _blacklist_jti(jti, float(exp))
-        
-    access_token = create_access_token(user, mfa_verified=True)
-    new_refresh_token = create_refresh_token(user)
+    if incoming_jti:
+        _blacklist_jti(incoming_jti, float(exp))
+
+    access_token = create_access_token(user, mfa_verified=session_mfa_verified)
+    new_refresh_token = create_refresh_token(user, mfa_verified=session_mfa_verified)
     return {
         "access_token": access_token,
         "refresh_token": new_refresh_token
@@ -2877,6 +3014,10 @@ async def auth_totp_verify_setup(body: TotpVerifySetupBody, user: User = Depends
     if _totp_verify(dec_secret, body.code):
         user.totp_enabled = True
         user.mfa_enabled = True
+        # A kétlépcsős azonosítás bekapcsolása érvénytelenít minden korábbi munkamenetet
+        # (ugyanaz a logika, mint az email-MFA kapcsolónál) — különben egy korábban
+        # ellopott token a TOTP bekapcsolása után is élne.
+        user.token_version = int(user.token_version or 0) + 1
         await db.flush()
         return {"ok": True, "detail": "A kétlépcsős azonosítás (TOTP) sikeresen aktiválva."}
     else:
@@ -2933,7 +3074,7 @@ async def auth_totp_login(body: TotpLoginBody, request: Request, db: AsyncSessio
     await db.flush()
     
     access_token = create_access_token(user, mfa_verified=True)
-    refresh_token = create_refresh_token(user)
+    refresh_token = create_refresh_token(user, mfa_verified=True)
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -4107,7 +4248,8 @@ def _build_system_prompt(
 ) -> str:
     state_block = _build_state_block(sc, user_name)
     
-    now = _now()
+    now_utc = _now()
+    now = _to_local(now_utc)
     months = ["január", "február", "március", "április", "május", "június",
               "július", "augusztus", "szeptember", "október", "november", "december"]
     weekdays = ["hétfő", "kedd", "szerda", "csütörtök", "péntek", "szombat", "vasárnap"]
@@ -4122,9 +4264,9 @@ def _build_system_prompt(
     
     if code_verified_at:
         if code_verified_at.tzinfo is None:
-            age = now.replace(tzinfo=None) - code_verified_at
+            age = now_utc.replace(tzinfo=None) - code_verified_at
         else:
-            age = now - code_verified_at
+            age = now_utc - code_verified_at
         days_ago = age.days
         days_remaining = max(0, 30 - days_ago)
         v_month = months[code_verified_at.month - 1]
@@ -4150,14 +4292,22 @@ def _build_system_prompt(
 FASTEMBED_MODEL_NAME = os.environ.get("FASTEMBED_MODEL_NAME", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 _fastembed_model = None
 _fastembed_lock = threading.Lock()
-_fastembed_embedding_cache: dict[str, list[float]] = {}
+# LRU-korlátos cache: korlát nélkül minden egyedi kérdés embeddingje (~3 KB) örökre
+# bent maradt, ami kevés RAM-ú VM-en lassú memóriaszivárgás volt.
+FASTEMBED_CACHE_MAX_ENTRIES = _env_int("FASTEMBED_CACHE_MAX_ENTRIES", 2000, 100, 50000)
+_fastembed_cache_lock = threading.Lock()
+_fastembed_embedding_cache: "OrderedDict[str, list[float]]" = OrderedDict()
 
 
 def _sync_get_fastembed_embedding(text: str) -> list[float]:
     global _fastembed_model
     norm = re.sub(r"\s+", " ", text).strip().lower()
-    if norm in _fastembed_embedding_cache:
-        return list(_fastembed_embedding_cache[norm])
+    # A cache-t több worker szál is eléri (asyncio.to_thread), ezért zárral védjük.
+    with _fastembed_cache_lock:
+        cached = _fastembed_embedding_cache.get(norm)
+        if cached is not None:
+            _fastembed_embedding_cache.move_to_end(norm)
+            return list(cached)
     with _fastembed_lock:
         if _fastembed_model is None:
             from fastembed import TextEmbedding
@@ -4169,7 +4319,11 @@ def _sync_get_fastembed_embedding(text: str) -> list[float]:
     if len(values) != 384:
         raise ValueError(f"Invalid FastEmbed dimension: {len(values)}")
     emb = [float(x) for x in values]
-    _fastembed_embedding_cache[norm] = emb
+    with _fastembed_cache_lock:
+        _fastembed_embedding_cache[norm] = emb
+        _fastembed_embedding_cache.move_to_end(norm)
+        while len(_fastembed_embedding_cache) > FASTEMBED_CACHE_MAX_ENTRIES:
+            _fastembed_embedding_cache.popitem(last=False)
     return list(emb)
 
 
@@ -4215,6 +4369,11 @@ async def _unused_external_embedding(api_key: str, text: str) -> list[float]:
     raise RuntimeError(f"Nem sikerült az embedding lekérése a Gemini-től: {last_err}")
 
 
+def _llm_remaining_budget(deadline: float) -> float:
+    """Hátralévő idő a teljes LLM-keretből; 0 vagy kevesebb esetén nincs újrapróbálkozás."""
+    return deadline - time.monotonic()
+
+
 async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str, history: List[dict], user_message: str) -> str:
     if not api_key:
         raise HTTPException(status_code=400, detail="Nincs API kulcs beállítva. Az admin a Beállítások menüben megadhatja.")
@@ -4233,21 +4392,40 @@ async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str,
         label = {"openai": "OpenAI", "groq": "Groq", "cerebras": "Cerebras", "mistral": "Mistral"}.get(provider, provider)
         max_retries = 3
         last_error = ""
+        r = None
+        deadline = time.monotonic() + LLM_TOTAL_BUDGET_S
         for attempt in range(max_retries):
-            async with httpx.AsyncClient(timeout=90) as client:
-                r = await client.post(
-                    base_url,
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={"model": model, "messages": msgs},
-                )
+            attempt_timeout = min(LLM_ATTEMPT_TIMEOUT_S, _llm_remaining_budget(deadline))
+            if attempt_timeout <= 0:
+                last_error = last_error or "budget exhausted"
+                break
+            try:
+                async with httpx.AsyncClient(timeout=attempt_timeout) as client:
+                    r = await client.post(
+                        base_url,
+                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                        json={"model": model, "messages": msgs},
+                    )
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                # A korábbi kód CSAK a hibás HTTP-státuszokat próbálta újra: egy timeout
+                # vagy megszakadt kapcsolat kivételként repült ki, és azonnal 502 lett
+                # belőle, egyetlen újrapróbálkozás nélkül.
+                r = None
+                last_error = f"{type(exc).__name__}: {exc}"
+                logger.warning("LLM halozati hiba (%s, %d/%d): %s", provider, attempt + 1, max_retries, last_error)
+                if attempt < max_retries - 1 and _llm_remaining_budget(deadline) > LLM_RETRY_BACKOFF_S:
+                    await asyncio.sleep(LLM_RETRY_BACKOFF_S)
+                    continue
+                break
             if r.status_code == 200:
                 return r.json()["choices"][0]["message"]["content"]
             last_error = r.text[:300]
-            if (r.status_code == 429 or r.status_code >= 500) and attempt < max_retries - 1:
-                await asyncio.sleep(8)
+            retryable = r.status_code == 429 or r.status_code >= 500
+            if retryable and attempt < max_retries - 1 and _llm_remaining_budget(deadline) > LLM_RETRY_BACKOFF_S:
+                await asyncio.sleep(LLM_RETRY_BACKOFF_S)
                 continue
             break
-        logger.error(f"{label} API call failed: status={r.status_code}, response={last_error}")
+        logger.error(f"{label} API call failed: status={r.status_code if r is not None else 'timeout'}, response={last_error}")
         raise HTTPException(status_code=502, detail=f"{label} API hiba történt.")
 
     if provider == "anthropic":
@@ -4255,7 +4433,7 @@ async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str,
         for m in history:
             msgs.append({"role": m["role"], "content": m["text"]})
         msgs.append({"role": "user", "content": user_message})
-        async with httpx.AsyncClient(timeout=90) as client:
+        async with httpx.AsyncClient(timeout=LLM_ATTEMPT_TIMEOUT_S) as client:
             r = await client.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
@@ -4276,12 +4454,30 @@ async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str,
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
         max_retries = 3
         last_error = ""
+        r = None
+        deadline = time.monotonic() + LLM_TOTAL_BUDGET_S
         for attempt in range(max_retries):
-            async with httpx.AsyncClient(timeout=90) as client:
-                r = await client.post(
-                    url,
-                    json={"systemInstruction": {"parts": [{"text": system_prompt}]}, "contents": contents},
-                )
+            attempt_timeout = min(LLM_ATTEMPT_TIMEOUT_S, _llm_remaining_budget(deadline))
+            if attempt_timeout <= 0:
+                last_error = last_error or "budget exhausted"
+                break
+            try:
+                async with httpx.AsyncClient(timeout=attempt_timeout) as client:
+                    r = await client.post(
+                        url,
+                        json={"systemInstruction": {"parts": [{"text": system_prompt}]}, "contents": contents},
+                    )
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                # A korábbi kód CSAK a hibás HTTP-státuszokat próbálta újra: egy timeout
+                # vagy megszakadt kapcsolat kivételként repült ki, és azonnal 502 lett
+                # belőle, egyetlen újrapróbálkozás nélkül.
+                r = None
+                last_error = f"{type(exc).__name__}: {exc}"
+                logger.warning("LLM halozati hiba (%s, %d/%d): %s", provider, attempt + 1, max_retries, last_error)
+                if attempt < max_retries - 1 and _llm_remaining_budget(deadline) > LLM_RETRY_BACKOFF_S:
+                    await asyncio.sleep(LLM_RETRY_BACKOFF_S)
+                    continue
+                break
             if r.status_code == 200:
                 data = r.json()
                 cands = data.get("candidates", [])
@@ -4290,11 +4486,12 @@ async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str,
                     raise HTTPException(status_code=502, detail="Üres válasz érkezett az AI szolgáltatótól.")
                 return "".join(p.get("text", "") for p in cands[0].get("content", {}).get("parts", []))
             last_error = r.text[:300]
-            if (r.status_code == 429 or r.status_code >= 500) and attempt < max_retries - 1:
-                await asyncio.sleep(8)
+            retryable = r.status_code == 429 or r.status_code >= 500
+            if retryable and attempt < max_retries - 1 and _llm_remaining_budget(deadline) > LLM_RETRY_BACKOFF_S:
+                await asyncio.sleep(LLM_RETRY_BACKOFF_S)
                 continue
             break
-        logger.error(f"Gemini API call failed: status={r.status_code}, response={last_error}")
+        logger.error(f"Gemini API call failed: status={r.status_code if r is not None else 'timeout'}, response={last_error}")
         raise HTTPException(status_code=502, detail="Gemini API hiba történt.")
 
     raise HTTPException(status_code=400, detail=f"Ismeretlen LLM provider: {provider}")
@@ -4305,7 +4502,7 @@ def _format_chat_history_for_llm(messages: list[ChatMessage]) -> list[dict]:
     used_chars = 0
     selected = list(messages[-CHAT_HISTORY_MAX_MESSAGES:])
     for m in reversed(selected):
-        ts_str = m.created_at.strftime("%Y.%m.%d %H:%M") if m.created_at else ""
+        ts_str = _to_local(m.created_at).strftime("%Y.%m.%d %H:%M") if m.created_at else ""
         prefix = f"[{ts_str}] " if ts_str else ""
         text = f"{prefix}{m.text}"
         message_cost = len(text) + 24
@@ -4386,6 +4583,10 @@ async def chat_send(
     if body.session_id and body.session_id != active_session_id:
         raise HTTPException(status_code=403, detail="Ez a mérési session már lezárt, csak olvasható.")
 
+    # Idaig 3 DB-lekerdezes futott (maintenance_mode, StateCode, QuizSubmission)
+    # merooora nelkul - egy lassu kapcsolat itt eddig lathatatlan volt.
+    mark_timing("preflight", request_started)
+
     phase_started = time.perf_counter()
     settings = await get_settings(db, {
         "llm_provider": "gemini",
@@ -4425,20 +4626,26 @@ async def chat_send(
     user_msg = ChatMessage(id=str(uuid.uuid4()), user_id=user.id, state_code=user.state_code,
                            session_id=active_session_id, role="user", text=text)
     db.add(user_msg)
+    phase_started = time.perf_counter()
     await db.flush()
+    mark_timing("user_db", phase_started)
 
     reply: Optional[str] = None
 
+    phase_started = time.perf_counter()
     active_goals = await _get_active_goals(db, user.id)
     goals_block = _build_goals_block(active_goals)
+    mark_timing("goals", phase_started)
 
+    phase_started = time.perf_counter()
     effective_kb = "\n\n".join(part for part in [crisis_context, retrieved_kb_context] if part)
     sys_prompt = _build_system_prompt(sys_prompt_base, effective_kb, sc, user.name, user.code_verified_at, extra_context=goals_block)
+    mark_timing("prompt", phase_started)
     try:
-        now_ts_str = _now().strftime("%Y.%m.%d %H:%M")
+        now_ts_str = _to_local(_now()).strftime("%Y.%m.%d %H:%M")
         phase_started = time.perf_counter()
         reply = await _call_llm(provider, model, api_key, sys_prompt, history, f"[{now_ts_str}] {text}")
-        reply = re.sub(r"^\s*\[\d{4}\.\d{2}\.\d{2}\s+\d{1,2}:\d{2}\]\s*", "", str(reply))
+        reply = re.sub(r"^\s*\[\s*\d{4}\.\d{2}\.\d{2}\.?\s+\d{1,2}[:.]\d{2}\s*\]?\s*", "", str(reply))
         mark_timing("llm", phase_started)
     except HTTPException:
         raise
@@ -4454,19 +4661,29 @@ async def chat_send(
     mark_timing("reply_db", phase_started)
 
     history_chars = sum(len(item["text"]) for item in history)
+    total_s = time.perf_counter() - request_started
+    # A fazisok atfedesmentesek, ezert az "other" az, ami egyik merooora ala sem esett.
+    # Ha ez nagy, akkor a lassulas olyan helyen van, ahol meg nincs meres.
+    other_s = max(0.0, total_s - sum(timings.values()))
     logger.info(
-        "chat_timing provider=%s model=%s total=%.2fs settings=%.2fs rag=%.2fs "
-        "history_db=%.2fs history_format=%.2fs llm=%.2fs reply_db=%.2fs "
+        "chat_timing provider=%s model=%s total=%.2fs preflight=%.2fs settings=%.2fs rag=%.2fs "
+        "history_db=%.2fs history_format=%.2fs user_db=%.2fs goals=%.2fs prompt=%.2fs "
+        "llm=%.2fs reply_db=%.2fs other=%.2fs "
         "history_messages=%d history_chars=%d rag_chunks=%d prompt_chars=%d reply_chars=%d",
         provider,
         model,
-        time.perf_counter() - request_started,
+        total_s,
+        timings.get("preflight", 0),
         timings.get("settings", 0),
         timings.get("rag", 0),
         timings.get("history_db", 0),
         timings.get("history_format", 0),
+        timings.get("user_db", 0),
+        timings.get("goals", 0),
+        timings.get("prompt", 0),
         timings.get("llm", 0),
         timings.get("reply_db", 0),
+        other_s,
         len(history),
         history_chars,
         len(retrieved_chunks),
@@ -4587,7 +4804,7 @@ async def chat_checkin(request: Request, user: User = Depends(get_current_user),
             settings["llm_provider"], settings["llm_model"], settings["llm_api_key"],
             sys_prompt, history, CHECKIN_INSTRUCTION,
         )
-        reply = re.sub(r"^\s*\[\d{4}\.\d{2}\.\d{2}\s+\d{1,2}:\d{2}\]\s*", "", str(reply)).strip()
+        reply = re.sub(r"^\s*\[\s*\d{4}\.\d{2}\.\d{2}\.?\s+\d{1,2}[:.]\d{2}\s*\]?\s*", "", str(reply)).strip()
     except Exception:
         logger.exception("Proactive check-in LLM error")
         return {"message": None}
@@ -4633,7 +4850,7 @@ async def create_live_token(
     retrieved_chunks = await search_pdf_knowledge(db, kb_query, limit=5)
     retrieved_kb_context = _build_retrieved_kb_context(retrieved_chunks)
     live_system_prompt = _build_system_prompt(system_prompt, retrieved_kb_context, state_code, user.name)
-    now_ts_str = _now().strftime("%Y.%m.%d %H:%M")
+    now_ts_str = _to_local(_now()).strftime("%Y.%m.%d %H:%M")
     live_system_prompt += (
         "\n\n[LIVE BESZÉLGETÉSI KERET]\n"
         f"A Live kapcsolat indításának aktuális ideje: {now_ts_str} (Europe/Budapest). "
@@ -4821,7 +5038,7 @@ async def admin_reindex_pdf_knowledge(
         skipped=[],
         error=None,
     )
-    asyncio.create_task(_run_pdf_reindex_job(body.source_dir))
+    _spawn_background_task(_run_pdf_reindex_job(body.source_dir))
     await _admin_audit(db, admin, request, "admin.kb.reindex.started", "")
     return {"ok": True, "status": "started", **_kb_reindex_state}
 
@@ -4949,32 +5166,9 @@ async def admin_extract_kb(request: Request, admin: User = Depends(require_admin
         skipped=[],
         error=None,
     )
-    asyncio.create_task(_run_extract_kb_job())
+    _spawn_background_task(_run_extract_kb_job())
     await _admin_audit(db, admin, request, "admin.kb.extract.started", "")
     return {"ok": True, "status": "started", **_kb_reindex_state}
-
-    pdf_dir = ROOT_DIR / "data" / "kb_pdfs"
-    pdf_files = sorted(pdf_dir.glob("*.pdf"))
-    if not pdf_files:
-        raise HTTPException(status_code=400, detail="Nem találhatók PDF fájlok a szerveren (/data/kb_pdfs mappa).")
-    combined = ""
-    for pdf_path in pdf_files:
-        try:
-            raw = pdf_path.read_bytes()
-            r = PdfReader(io.BytesIO(raw))
-            text = "\n".join((p.extract_text() or "") for p in r.pages).strip()
-            if text:
-                combined += f"\n\n===== {pdf_path.name} =====\n\n{text}"
-        except Exception as e:
-            logger.warning(f"PDF olvasási hiba ({pdf_path.name}): {e}")
-    combined = combined.strip()
-    if not combined:
-        raise HTTPException(status_code=400, detail="Egyik PDF-ből sem sikerült szöveget kinyerni.")
-    await set_setting(db, "kb_text", combined)
-    await db.commit()
-    await rebuild_pdf_knowledge_index(db)
-    await _admin_audit(db, admin, request, "admin.kb.extract", f"pdf_count={len(pdf_files)} total_chars={len(combined)}")
-    return {"ok": True, "pdf_count": len(pdf_files), "total_chars": len(combined)}
 
 
 class MaintenanceModeBody(BaseModel):
@@ -5055,7 +5249,7 @@ async def admin_restart(body: EmergencyAdminActionBody, request: Request, admin:
         await _admin_audit(db, admin, request, "admin.system.restart.failure", "invalid_password")
         raise HTTPException(status_code=400, detail="Hibás jelszó (jelszo).")
     await _admin_audit(db, admin, request, "admin.system.restart", "")
-    asyncio.create_task(_delayed_restart())
+    _spawn_background_task(_delayed_restart())
     return {"ok": True, "message": "Backend restart scheduled in 1 second."}
 
 
@@ -5063,7 +5257,9 @@ async def _delayed_down():
     await asyncio.sleep(1.0)
     logger.info("Emergency system shutdown (docker compose down) triggered via admin API.")
     async with httpx.AsyncClient(timeout=10.0) as proxy_client:
-        for container in ["myra-frontend", "myra-backend"]:
+        # A frontend a Vercelen fut, nem konténerben — a "myra-frontend" leállítási
+        # kísérlet csak hibalogot termelt.
+        for container in ["myra-backend"]:
             try:
                 resp = await proxy_client.post(f"{DOCKER_SOCKET_PROXY_URL}/containers/{container}/stop")
                 if resp.status_code not in (204, 304):
@@ -5082,7 +5278,7 @@ async def admin_down(body: EmergencyAdminActionBody, request: Request, admin: Us
         await _admin_audit(db, admin, request, "admin.system.down.failure", "invalid_password")
         raise HTTPException(status_code=400, detail="Hibás jelszó (jelszo).")
     await _admin_audit(db, admin, request, "admin.system.down", "")
-    asyncio.create_task(_delayed_down())
+    _spawn_background_task(_delayed_down())
     return {"ok": True, "message": "Backend and frontend shutdown scheduled in 1 second."}
 
 
@@ -5440,7 +5636,7 @@ async def submit_leaderboard_score(
 
 
 @api.get("/leaderboard")
-async def get_leaderboard(db: AsyncSession = Depends(get_db)):
+async def get_leaderboard(_: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     results = {}
     
     for game in ["match", "snake", "sudoku"]:
@@ -5457,7 +5653,9 @@ async def get_leaderboard(db: AsyncSession = Depends(get_db)):
         
         game_list = []
         for rank, (entry, user) in enumerate(rows, 1):
-            name = user.nickname if (user.nickname and user.nickname.strip()) else user.name
+            # Becenév híján SOHA ne a valódi nevet mutassuk: a ranglista minden
+            # bejelentkezett felhasználó számára látható.
+            name = user.nickname.strip() if (user.nickname and user.nickname.strip()) else "Névtelen játékos"
             game_list.append({
                 "rank": rank,
                 "name": name,
@@ -5603,6 +5801,32 @@ async def delete_forum_post(post_id: int, user: User = Depends(get_current_user)
     await db.delete(post)
     await db.commit()
     return {"ok": True}
+
+
+@api.post("/feedback")
+async def post_feedback(
+    body: FeedbackBody,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+):
+    """A felületen lévő visszajelzés gomb végpontja. A levelet háttérfeladatban küldi,
+    hogy a felhasználó ne várjon az SMTP-re."""
+    _check_and_record_user_limit(
+        _feedback_attempts, request, user.id, FEEDBACK_WINDOW_S, FEEDBACK_MAX,
+        "Túl sok visszajelzés rövid idő alatt. Kérlek, várj egy kicsit.",
+    )
+    message = (body.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="A visszajelzés nem lehet üres.")
+    if not GMAIL_USER or not GMAIL_APP_PASSWORD:
+        raise HTTPException(status_code=503, detail="A visszajelzés küldése jelenleg nem érhető el.")
+    background_tasks.add_task(
+        _send_feedback_email, user.name, user.email, user.id,
+        (body.context or "").strip().lower(), message,
+    )
+    logger.info("feedback user_id=%s context=%s chars=%d", user.id, body.context, len(message))
+    return {"ok": True, "detail": "Köszönjük! A visszajelzésed elment a fejlesztőnek."}
 
 
 @api.get("/config")

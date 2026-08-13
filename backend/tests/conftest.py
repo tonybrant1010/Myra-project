@@ -2,6 +2,7 @@ import os
 import sys
 import pytest
 import httpx
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -13,6 +14,18 @@ from server import app, Base, get_db
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 engine = create_async_engine(TEST_DATABASE_URL, echo=False)
+
+
+@event.listens_for(engine.sync_engine, "connect")
+def _enforce_sqlite_foreign_keys(dbapi_connection, _connection_record):
+    """SQLite alapból NEM kényszeríti ki az idegen kulcsokat, az éles PostgreSQL viszont igen.
+    Enélkül a tesztek nem veszik észre a hiányzó ON DELETE / hiányzó gyerektábla-törlés hibákat
+    — pontosan ez engedte át a fórum-bejegyzéssel rendelkező felhasználók törlésének hibáját."""
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
 TestingSessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
 
 

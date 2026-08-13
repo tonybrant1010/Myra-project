@@ -7,7 +7,9 @@ services:
     image: tecnativa/docker-socket-proxy:latest
     container_name: myra-docker-socket-proxy
     restart: unless-stopped
-    privileged: true
+    # FONTOS: itt szándékosan NINCS "privileged: true". A proxy célja épp a jogosultság
+    # szűkítése; privileged módban viszont maga a proxy kapna root-ekvivalens hozzáférést
+    # a hoszthoz, ami az egész konstrukció értelmét lerontaná. A read-only socket-mount elég.
     environment:
       # Minden más API szekció (EXEC, IMAGES, NETWORKS, VOLUMES, BUILD, AUTH,
       # SECRETS, SWARM stb.) alapértelmezetten (0) tiltva marad.

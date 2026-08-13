@@ -117,7 +117,12 @@ async def test_leaderboard_operations():
     assert r.status_code == 200
     assert r.json()["best_score"] == 4000
 
+    # A ranglista bejelentkezest igenyel: korabban barki lekerhette, es beceneve nem
+    # levo jatekosnal a valodi nevet is visszaadta.
     r = client.get("/api/leaderboard")
+    assert r.status_code == 401
+
+    r = client.get("/api/leaderboard", headers=headers)
     assert r.status_code == 200
     data = r.json()
     assert "match" in data

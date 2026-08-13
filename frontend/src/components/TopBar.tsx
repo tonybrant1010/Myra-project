@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { View, StyleSheet, TouchableOpacity } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -6,6 +6,8 @@ import { theme } from "@/src/theme";
 import { T } from "@/src/components/Typography";
 import GlobalNotice from "@/src/components/GlobalNotice";
 import SideMenu from "@/src/components/SideMenu";
+import { useAuth, authedFetch } from "@/src/auth/AuthContext";
+import { getForumSeenAt } from "@/src/utils/forumSeen";
 
 type Props = {
   title?: string;
@@ -21,7 +23,27 @@ type Props = {
 
 export default function TopBar({ title, showBack, backPath, rightLabel, rightAction }: Props) {
   const router = useRouter();
+  const { token } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [forumUnread, setForumUnread] = useState(false);
+
+  // A TopBar minden kepernyon ott van, tehat minden navigalaskor ujra lefut.
+  // Ez eleg frissesseg a jelzeshez, es nem kell hozza idozito.
+  const checkForum = useCallback(async () => {
+    if (!token) return;
+    try {
+      const r = await authedFetch(token, "/api/forum/latest");
+      if (!r.ok) return;
+      const { latest } = await r.json();
+      if (!latest) return;
+      const seen = await getForumSeenAt();
+      setForumUnread(latest > seen);
+    } catch {
+      // A jelzes nem kritikus: halozati hiba eseten egyszeruen nem mutatunk pottyot.
+    }
+  }, [token]);
+
+  useEffect(() => { checkForum(); }, [checkForum]);
 
   return (
     <View>
@@ -50,6 +72,7 @@ export default function TopBar({ title, showBack, backPath, rightLabel, rightAct
               hitSlop={10}
             >
               <Ionicons name="menu" size={22} color={theme.textOnDark} />
+              {forumUnread ? <View style={styles.menuDot} testID="topbar-forum-dot" /> : null}
             </TouchableOpacity>
           )}
         </View>
@@ -78,7 +101,11 @@ export default function TopBar({ title, showBack, backPath, rightLabel, rightAct
           ) : null}
         </View>
 
-        <SideMenu visible={menuOpen} onClose={() => setMenuOpen(false)} />
+        <SideMenu
+          visible={menuOpen}
+          onClose={() => { setMenuOpen(false); checkForum(); }}
+          forumUnread={forumUnread}
+        />
       </View>
       <GlobalNotice />
     </View>
@@ -86,6 +113,17 @@ export default function TopBar({ title, showBack, backPath, rightLabel, rightAct
 }
 
 const styles = StyleSheet.create({
+  menuDot: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: theme.accent,
+    borderWidth: 1,
+    borderColor: "rgba(3,12,22,0.9)",
+  },
   bar: {
     flexDirection: "row",
     alignItems: "center",

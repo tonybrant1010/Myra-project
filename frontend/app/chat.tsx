@@ -19,11 +19,34 @@ import { authedFetch, useAuth } from "@/src/auth/AuthContext";
 import { useAuthGuard } from "@/src/auth/useAuthGuard";
 import { shadow, theme } from "@/src/theme";
 import ContentBackground from "@/src/components/ContentBackground";
+import FeedbackButton from "@/src/components/FeedbackButton";
 import TopBar from "@/src/components/TopBar";
 import { T } from "@/src/components/Typography";
 
+/** Enterrel küldés CSAK asztali gépen. Érintőképernyős eszközön az Enter marad
+ *  sortörés, különben a virtuális billentyűzet return gombja félkész üzeneteket
+ *  küldene ki. A "(pointer: fine)" az egér/trackpad jelenlétét jelzi. */
+const IS_DESKTOP_WEB = (() => {
+  if (Platform.OS !== "web") return false;
+  const g: any = globalThis as any;
+  if (typeof g.matchMedia !== "function") return false;
+  const ua = String(g.navigator?.userAgent || "");
+  if (/Android|iPhone|iPad|iPod/i.test(ua)) return false;
+  try {
+    return g.matchMedia("(pointer: fine)").matches === true;
+  } catch {
+    return false;
+  }
+})();
+
 const MYRA_AVATAR = require("@/assets/images/myra-avatar.png");
 const CHAT_MESSAGE_MAX_CHARS = 8000;
+
+// A backend akkor is elmenti Myra válaszát, ha a küldő kérés közben elszállt: a Vercel
+// függvénynek ~60 mp-es plafonja van, egy lassabb Gemini-válasz viszont ennél tovább is
+// tarthat (mértünk 100 mp-es, sikeresen elmentett választ). Ilyenkor nincs értelme hibát
+// mutatni — megvárjuk és beolvassuk az előzményből. Összesen ~90 mp-ig próbálkozunk.
+const REPLY_RECOVERY_DELAYS_MS = [3000, 5000, 7000, 10000, 15000, 20000, 30000];
 
 type Msg = { id: string; role: "user" | "assistant"; text: string; created_at: string; state_code?: string | null };
 type ListItem = { kind: "msg"; msg: Msg } | { kind: "hint"; id: string; code: string };
@@ -444,6 +467,35 @@ export default function ChatScreen() {
     synth.speak(utterance);
   }, [speakingId, stopSpeech]);
 
+  /** Elszállt küldés után megnézi, megérkezett-e mégis Myra válasza az előzménybe.
+   *  Visszaadja a friss üzenetlistát, ha igen — különben null. */
+  const recoverPendingReply = useCallback(async (sid: string | null, sentText: string): Promise<Msg[] | null> => {
+    const url = sid ? `/api/chat/history?session_id=${sid}` : "/api/chat/history";
+    for (const delay of REPLY_RECOVERY_DELAYS_MS) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      try {
+        const r = await authedFetch(token, url);
+        if (!r.ok) continue;
+        const hist = await r.json();
+        const list: Msg[] = hist.messages || [];
+        // Az elküldött üzenetünk utolsó előfordulása után kell lennie assistant válasznak.
+        let sentIndex = -1;
+        for (let i = list.length - 1; i >= 0; i -= 1) {
+          if (list[i].role === "user" && list[i].text === sentText) {
+            sentIndex = i;
+            break;
+          }
+        }
+        if (sentIndex >= 0 && list.slice(sentIndex + 1).some((m) => m.role === "assistant")) {
+          return list;
+        }
+      } catch {
+        // hálózati hiba a lekérdezés közben — jöhet a következő próbálkozás
+      }
+    }
+    return null;
+  }, [token]);
+
   const send = async () => {
     const text = input.trim();
     if (!text || sending || isReadOnly) return;
@@ -462,6 +514,21 @@ export default function ChatScreen() {
       const r = await authedFetch(token, "/api/chat/send", { method: "POST", body: JSON.stringify({ message: text, session_id: activeSessionId }) });
       if (!r.ok) {
         const data = await r.json().catch(() => ({}));
+        // 500/502/504 esetén a backend jó eséllyel MÉG DOLGOZIK (vagy már végzett is,
+        // csak a proxy adta fel) — ilyenkor előbb megvárjuk a választ, és csak utána
+        // mondjuk azt, hogy nem sikerült. A 4xx-ek (kvóta, jogosultság) végleges hibák.
+        const mayStillArrive = r.status >= 500;
+        if (mayStillArrive) {
+          const recovered = await recoverPendingReply(activeSessionId, text);
+          if (recovered) {
+            finishReveal();
+            setMessages(recovered);
+            const lastAssistant = [...recovered].reverse().find((m) => m.role === "assistant");
+            if (lastAssistant) animateAssistantMessage(lastAssistant);
+            scrollToBottom(true);
+            return;
+          }
+        }
         const errorMessage: Msg = {
           id: `err-${Date.now()}`,
           role: "assistant",
@@ -474,6 +541,10 @@ export default function ChatScreen() {
           errorMessage,
         ]);
         animateAssistantMessage(errorMessage);
+        // A beírt szöveg SOHA ne vesszen el hibánál: visszakerül a beviteli mezőbe,
+        // hogy egyetlen gombnyomással újraküldhető legyen.
+        setInput(text);
+        scrollToBottom(true);
         return;
       }
       const data = await r.json();
@@ -481,9 +552,47 @@ export default function ChatScreen() {
       setMessages((m) => [...m.filter((x) => x.id !== optimistic.id), data.user_message, assistantMessage]);
       animateAssistantMessage(assistantMessage);
       scrollToBottom(true);
+    } catch {
+      // Megszakadt kapcsolat: a kérés ettől még elérhette a backendet, ezért itt is
+      // előbb megnézzük, megjött-e a válasz, és csak utána hibázunk.
+      const recovered = await recoverPendingReply(activeSessionId, text).catch(() => null);
+      if (recovered) {
+        finishReveal();
+        setMessages(recovered);
+        const lastAssistant = [...recovered].reverse().find((m) => m.role === "assistant");
+        if (lastAssistant) animateAssistantMessage(lastAssistant);
+        scrollToBottom(true);
+        return;
+      }
+      // Hálózati hiba / megszakadt kapcsolat: enélkül az optimista buborék bent maradt
+      // "elküldve" látszattal, a felhasználó pedig semmilyen visszajelzést nem kapott.
+      const networkError: Msg = {
+        id: `err-${Date.now()}`,
+        role: "assistant",
+        text: "Figyelem: nem sikerült elérni a szervert. Ellenőrizd a kapcsolatot, és küldd el újra az üzenetet.",
+        created_at: new Date().toISOString(),
+        state_code: user?.state_code || null,
+      };
+      setMessages((m) => [...m.filter((x) => x.id !== optimistic.id), networkError]);
+      animateAssistantMessage(networkError);
+      setInput(text);
+      scrollToBottom(true);
     } finally {
       setSending(false);
     }
+  };
+
+  /** Asztali gépen az Enter küld, a Shift+Enter (és a módosítós változatok) sortörnek. */
+  const handleInputKeyPress = (e: any) => {
+    if (!IS_DESKTOP_WEB) return;
+    const native = e?.nativeEvent || {};
+    const key = native.key ?? e?.key;
+    if (key !== "Enter") return;
+    if (native.shiftKey || native.altKey || native.ctrlKey || native.metaKey) return;
+    if (e?.shiftKey || e?.altKey || e?.ctrlKey || e?.metaKey) return;
+    e?.preventDefault?.();
+    native?.preventDefault?.();
+    void send();
   };
 
   const items = buildListItems(messages, user?.state_code);
@@ -603,6 +712,7 @@ export default function ChatScreen() {
                 placeholderTextColor="rgba(247,251,255,0.48)"
                 value={input}
                 onChangeText={setInput}
+                onKeyPress={handleInputKeyPress}
                 maxLength={CHAT_MESSAGE_MAX_CHARS}
                 multiline
                 testID="chat-input"
@@ -620,6 +730,7 @@ export default function ChatScreen() {
           )}
 
           <View style={styles.disclaimerBar}>
+            <FeedbackButton context="chat" />
             <T variant="small" color="rgba(247,251,255,0.42)" align="center" style={styles.disclaimerText}>
               A Myra egy mesterséges intelligenciával támogatott önismereti asszisztens. Nem ad orvosi tanácsot és nem helyettesíti a szakembert.
             </T>
@@ -797,6 +908,8 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(6,19,32,0.62)",
     borderTopWidth: 0.5,
     borderColor: "rgba(255,255,255,0.08)",
+    alignItems: "center",
+    gap: 6,
   },
   disclaimerText: {
     fontSize: 10,

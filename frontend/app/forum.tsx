@@ -19,6 +19,7 @@ import { theme, shadow } from "@/src/theme";
 import TopBar from "@/src/components/TopBar";
 import ContentBackground from "@/src/components/ContentBackground";
 import { T } from "@/src/components/Typography";
+import { setForumSeenAt, newestCreatedAt } from "@/src/utils/forumSeen";
 
 type ForumPost = {
   id: number;
@@ -75,7 +76,10 @@ export default function ForumScreen() {
       const r = await authedFetch(token, "/api/forum/posts");
       if (r.ok) {
         const data = await r.json();
-        setPosts(data.posts || []);
+        const loaded = data.posts || [];
+        setPosts(loaded);
+        // A forum megnyitasa szamit elolvasasnak: innentol nincs pötty.
+        await setForumSeenAt(newestCreatedAt(loaded));
       }
     } finally {
       if (!silent) setLoading(false);
@@ -140,6 +144,8 @@ export default function ForumScreen() {
       if (r.ok) {
         const newPost = await r.json();
         setPosts((prev) => [...prev, newPost]);
+        // A sajat posztunkra ne kapjunk jelzest.
+        await setForumSeenAt(newPost.created_at);
         setInputText("");
         scrollToBottom();
       } else {
