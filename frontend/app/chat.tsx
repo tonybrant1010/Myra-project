@@ -22,6 +22,13 @@ import ContentBackground from "@/src/components/ContentBackground";
 import FeedbackButton from "@/src/components/FeedbackButton";
 import TopBar from "@/src/components/TopBar";
 import { T } from "@/src/components/Typography";
+import type { ViewStyle } from "react-native";
+
+/** A `backdropFilter` bongeszos CSS-tulajdonsag: RN Web futasidoben atengedi a DOM-nak,
+ *  a ViewStyle tipus viszont nem ismeri, ezert a `tsc --noEmit` elhasal rajta. Igy a
+ *  vizualis hatas megmarad, a tipusellenorzes pedig tiszta. */
+const webBlur = (px: number) => ({ backdropFilter: `blur(${px}px)` }) as ViewStyle;
+
 
 /** Enterrel küldés CSAK asztali gépen. Érintőképernyős eszközön az Enter marad
  *  sortörés, különben a virtuális billentyűzet return gombja félkész üzeneteket
@@ -800,7 +807,7 @@ const styles = StyleSheet.create({
   aiAvatar: { width: 32, height: 32, borderRadius: 16, backgroundColor: "rgba(7,27,48,0.48)" },
   bubble: { maxWidth: "82%", paddingVertical: 14, paddingHorizontal: 16, borderRadius: 18 },
   bubbleUser: { backgroundColor: "rgba(79,209,197,0.22)", borderBottomRightRadius: 4, borderWidth: 1, borderColor: "rgba(79,209,197,0.45)" },
-  bubbleAi: { backgroundColor: "rgba(7,27,48,0.58)", borderBottomLeftRadius: 4, borderWidth: 1, borderColor: "rgba(79,209,197,0.22)", backdropFilter: "blur(20px)" },
+  bubbleAi: { backgroundColor: "rgba(7,27,48,0.58)", borderBottomLeftRadius: 4, borderWidth: 1, borderColor: "rgba(79,209,197,0.22)", ...webBlur(20) },
   markdownBlock: { marginBottom: 8 },
   markdownText: {
     color: theme.textOnDark,
@@ -855,7 +862,7 @@ const styles = StyleSheet.create({
   typing: { flexDirection: "row", alignItems: "center", paddingVertical: 12, paddingHorizontal: 4 },
   hintWrap: { alignItems: "center", paddingHorizontal: 24, paddingVertical: 16 },
   hintAvatar: { width: 56, height: 56, borderRadius: 28, backgroundColor: "rgba(6,19,32,0.50)" },
-  readOnlyBar: { paddingVertical: 14, paddingHorizontal: 20, backgroundColor: "rgba(6,19,32,0.62)", borderTopWidth: 1, borderTopColor: "rgba(255,255,255,0.14)", backdropFilter: "blur(18px)" },
+  readOnlyBar: { paddingVertical: 14, paddingHorizontal: 20, backgroundColor: "rgba(6,19,32,0.62)", borderTopWidth: 1, borderTopColor: "rgba(255,255,255,0.14)", ...webBlur(18) },
   inputBar: {
     width: "100%",
     flexDirection: "row",
@@ -866,7 +873,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(4,11,20,0.72)",
     borderTopWidth: 1,
     borderColor: "rgba(79,209,197,0.25)",
-    backdropFilter: "blur(20px)",
+    ...webBlur(20),
   },
   voiceBtn: {
     width: 44,

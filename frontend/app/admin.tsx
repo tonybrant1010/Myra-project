@@ -19,6 +19,13 @@ import { useAuthGuard } from "@/src/auth/useAuthGuard";
 import { theme } from "@/src/theme";
 import TopBar from "@/src/components/TopBar";
 import ContentBackground from "@/src/components/ContentBackground";
+import type { ViewStyle } from "react-native";
+
+/** A `backdropFilter` bongeszos CSS-tulajdonsag: RN Web futasidoben atengedi a DOM-nak,
+ *  a ViewStyle tipus viszont nem ismeri, ezert a `tsc --noEmit` elhasal rajta. Igy a
+ *  vizualis hatas megmarad, a tipusellenorzes pedig tiszta. */
+const webBlur = (px: number) => ({ backdropFilter: `blur(${px}px)` }) as ViewStyle;
+
 
 type Item = { code: string; title: string; profile: string; severity?: string };
 export default function AdminScreen() {
@@ -333,7 +340,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.18)",
     backgroundColor: "rgba(6,19,32,0.58)",
-    backdropFilter: "blur(18px)",
+    ...webBlur(18),
   },
   rowTop: { flexDirection: "row", alignItems: "center", gap: 10 },
   code: { fontSize: 20, fontWeight: "300", color: theme.accentSoft, width: 56 },

@@ -18,6 +18,13 @@ import { theme } from "@/src/theme";
 import TopBar from "@/src/components/TopBar";
 import ContentBackground from "@/src/components/ContentBackground";
 import { T } from "@/src/components/Typography";
+import type { ViewStyle } from "react-native";
+
+/** A `backdropFilter` bongeszos CSS-tulajdonsag: RN Web futasidoben atengedi a DOM-nak,
+ *  a ViewStyle tipus viszont nem ismeri, ezert a `tsc --noEmit` elhasal rajta. Igy a
+ *  vizualis hatas megmarad, a tipusellenorzes pedig tiszta. */
+const webBlur = (px: number) => ({ backdropFilter: `blur(${px}px)` }) as ViewStyle;
+
 
 type UserItem = {
   id: number;
@@ -629,7 +636,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.18)",
     backgroundColor: "rgba(6,19,32,0.58)",
-    backdropFilter: "blur(18px)",
+    ...webBlur(18),
   },
   rowSuspended: {
     borderColor: theme.danger,

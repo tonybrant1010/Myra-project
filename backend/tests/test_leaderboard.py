@@ -119,8 +119,14 @@ async def test_leaderboard_operations():
 
     # A ranglista bejelentkezest igenyel: korabban barki lekerhette, es beceneve nem
     # levo jatekosnal a valodi nevet is visszaadta.
+    #
+    # A 401-es agat csak ugy lehet ellenorizni, ha erre az egy hivasra levesszuk a
+    # get_current_user override-ot: a mock user kulonben minden kerest bejelentkezettnek
+    # lat, fejleccel vagy anelkul, es a vegpont mindig 200-at adna.
+    app.dependency_overrides.pop(get_current_user, None)
     r = client.get("/api/leaderboard")
     assert r.status_code == 401
+    app.dependency_overrides[get_current_user] = mock_get_current_user
 
     r = client.get("/api/leaderboard", headers=headers)
     assert r.status_code == 200

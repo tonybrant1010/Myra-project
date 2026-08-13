@@ -23,7 +23,7 @@ pydantic==2.13.4
 email-validator==2.3.0
 
 # PDF
-pypdf==6.14.2
+pypdf==6.15.0
 fpdf2==2.8.7
 
 # Local embeddings (ONNX Runtime, no PyTorch)

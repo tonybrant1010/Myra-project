@@ -9,6 +9,13 @@ import { theme, shadow } from "@/src/theme";
 import TopBar from "@/src/components/TopBar";
 import ContentBackground from "@/src/components/ContentBackground";
 import { T } from "@/src/components/Typography";
+import type { ViewStyle } from "react-native";
+
+/** A `backdropFilter` bongeszos CSS-tulajdonsag: RN Web futasidoben atengedi a DOM-nak,
+ *  a ViewStyle tipus viszont nem ismeri, ezert a `tsc --noEmit` elhasal rajta. Igy a
+ *  vizualis hatas megmarad, a tipusellenorzes pedig tiszta. */
+const webBlur = (px: number) => ({ backdropFilter: `blur(${px}px)` }) as ViewStyle;
+
 
 type ScaleOpt = { value: number; label: string };
 type Section = { id: string; title: string; intro: string; scale: ScaleOpt[]; questions: string[] };
@@ -264,7 +271,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.18)",
-    backdropFilter: "blur(18px)",
+    ...webBlur(18),
   },
   scaleRow: { flexDirection: "row", gap: 6, marginTop: 16 },
   scaleBtn: {
@@ -280,7 +287,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   scaleBtnSelected: { backgroundColor: theme.accentDeep, borderColor: theme.accentDeep },
-  footer: { flexDirection: "row", gap: 10, paddingHorizontal: 18, paddingVertical: 14, borderTopWidth: 1, borderColor: "rgba(255,255,255,0.14)", backgroundColor: "rgba(6,19,32,0.62)", backdropFilter: "blur(18px)" },
+  footer: { flexDirection: "row", gap: 10, paddingHorizontal: 18, paddingVertical: 14, borderTopWidth: 1, borderColor: "rgba(255,255,255,0.14)", backgroundColor: "rgba(6,19,32,0.62)", ...webBlur(18) },
   backBtn: {
     paddingHorizontal: 20,
     paddingVertical: 14,
