@@ -24,7 +24,7 @@ email-validator==2.3.0
 
 # PDF
 pypdf==6.15.0
-fpdf2==2.8.7
+fpdf2==2.8.8
 
 # Local embeddings (ONNX Runtime, no PyTorch)
 fastembed==0.8.0
