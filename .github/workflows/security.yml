@@ -147,5 +147,10 @@ jobs:
       - name: ESLint
         run: npm run lint
 
-      - name: npm audit (production deps, high+)
+      - name: npm audit (production deps, critical gate)
+        run: npm run audit:ci
+
+      - name: npm audit report (high+, informational)
+        if: always()
+        continue-on-error: true
         run: npm run audit:high
