@@ -19,6 +19,7 @@ Vercel frontend
 Cloudflare Tunnel  (api.myra-project.hu)
   - a VM-en nincs nyitott port
   - cloudflared kifelé épít kapcsolatot
+  - útvonalszűrő: csak a ^/api/.*$ megy tovább, minden más 404 az élen
   |
   v
 Google Cloud VM backend
@@ -148,18 +149,53 @@ Ha ez hiányzik vagy rossz, a backend válasza:
 
 A VM `.env` és a Vercel project env ugyanazt a `MYRA_PROXY_SECRET` értéket kell használja.
 
-Ez 2026-08-13 óta a második védelmi réteg. Az első a Cloudflare Tunnel: a backend a
-`cloudflared` konténeren keresztül, kifelé épített kapcsolattal érhető el az
-`api.myra-project.hu` címen. A VM-en nincs publikált port (`docker-compose.yml`-ben a
-backendnek nincs `ports:` szekciója), a GCP tűzfalban a 8001-es szabály letiltva.
-Kívülről nézve a gép nem válaszol, a proxy-titok pedig akkor is véd, ha az alagút címe
-kiderül.
+A proxy-titok a **harmadik** védelmi réteg. A teljes lánc kívülről befelé:
+
+| réteg | mit csinál | hol van beállítva |
+|---|---|---|
+| 1. Cloudflare Tunnel | a VM-en nincs publikált port, a `cloudflared` kifelé épít kapcsolatot | `docker-compose.yml`, GCP tűzfal |
+| 2. útvonalszűrő | csak a `^/api/.*$` megy le az alagúton, minden más 404 | Cloudflare Zero Trust → Tunnels → Published application routes → **Path** |
+| 3. proxy-titok | `/api/*` alatt is csak a saját Vercel proxynkat engedi be | `MYRA_PROXY_SECRET` a VM `.env`-ben és a Vercelen |
+
+A 2. réteg 2026-08-14 óta él. Előtte a gyökérre menő scanner-kopogtatás (`HEAD /`)
+lejutott a backend konténerig, és ott kapott 403-at; most már a cloudflared elhajtja,
+a gépet el sem éri.
+
+Fontos, hogy ez a hosztnév **szándékosan publikus**: a Vercel szerver nélküli függvényei
+váltakozó AWS-címekről hívják a backendet, tehát IP-alapú engedélyezés nem lehetséges.
+A név a Cloudflare TLS-tanúsítványán keresztül a nyilvános Certificate Transparency
+naplókba is kikerül, tehát meg fogják találni. Attól, hogy „csak a frontend éri el",
+nem az alagút véd, hanem a proxy-titok.
 
 Ellenőrzés kívülről:
 
 ```bash
-curl -i https://api.myra-project.hu/api/config     # 403, "Direct access to origin is forbidden."
+curl -i https://api.myra-project.hu/             # 404, a cloudflared útvonalszűrője
+curl -i https://api.myra-project.hu/api/config   # 403, "Direct access to origin is forbidden."
 curl -m 5 http://<VM_EXTERNAL_IP>:8001/api/config  # timeout
+```
+
+A két válasz különbsége mutatja, melyik réteg állította meg a kérést: a 404-nek nincs
+`Content-Type` fejléce és chunked, mert a cloudflared adja; a 403 JSON törzzsel jön,
+mert az már a FastAPI middleware.
+
+### GCP tűzfal állapota (2026-08-14 óta)
+
+| szabály | forrás | port | állapot |
+|---|---|---|---|
+| `allow-ssh-iap` | `35.235.240.0/20` | tcp:22 | aktív — csak IAP-n át |
+| `default-allow-ssh` | `0.0.0.0/0` | tcp:22 | **letiltva** |
+| `default-allow-rdp` | `0.0.0.0/0` | tcp:3389 | **letiltva** |
+| `allow-myra-backend-8001` | `0.0.0.0/0` | tcp:8001 | **letiltva** |
+| `default-allow-internal` | `10.128.0.0/9` | minden | aktív |
+| `default-allow-icmp` | `0.0.0.0/0` | icmp | aktív |
+
+A gépen egyetlen TCP-port sem nyitott az internet felé. Az SSH a Google Cloud Console
+SSH gombján keresztül megy, ami IAP-t használ — ha valaha közvetlenül, a publikus IP-re
+akarnál SSH-zni, előbb a `default-allow-ssh`-t kell visszakapcsolni:
+
+```bash
+gcloud compute firewall-rules update default-allow-ssh --no-disabled
 ```
 
 ### Supabase IP allowlist
@@ -391,6 +427,10 @@ frontend/
   vercel.json
   package.json
 
+ops/
+  myra-watch.py
+  myra-watch.service
+
 publication/
 docker-compose.yml
 README.md
@@ -435,6 +475,72 @@ Build cache biztonságos takarítása:
 docker builder prune -f
 ```
 
+### Mibe kerül egy backend rebuild
+
+Mérve 2026-08-14-én, ezen a VM-en:
+
+| lépés | idő | megjegyzés |
+|---|---|---|
+| `requirements.txt` változása | — | **érvényteleníti a teljes pip réteget**, minden csomag újratelepül |
+| FastEmbed modell letöltése | ~18 mp | a hálózat nem szűk keresztmetszet |
+| RAG warmup (modell betöltése) | **~7 perc** | ez a 969 MB RAM ára, a gép swapol |
+
+Két dolog, amit érdemes tudni előre:
+
+- **A FastEmbed modell gyorsítótára a konténeren belül van** (a `TextEmbedding()` hívásnál
+  nincs `cache_dir`, és a compose-ban csak a `./backend/data` van kivezetve volume-ba).
+  Ezért **minden újraépítés és minden `--force-recreate` után újra letölti** a 0,22 GB-os
+  modellt. Ha ez zavaró lesz, a megoldás egy `cache_dir` a kódban plusz egy volume.
+- **Egy rebuild csendben elmozdítja az összes nem rögzített csomagot.** 2026-08-14-én így
+  frissült a `bcrypt`, amitől a `passlib` egy elkapott figyelmeztetést ír induláskor
+  (`error reading bcrypt version`) — ártalmatlan, a bejelentkezés utána 200-at ad. De ez a
+  figyelmeztetés a jelzés arra, hogy más csomagok is mozogtak. Érdemes a `requirements.txt`-ben
+  fokozatosan verziót rögzíteni.
+
+## Futásidejű Figyelés
+
+Az `ops/myra-watch.py` egy önálló, standard könyvtárból írt figyelő, ami a VM hosztján fut
+systemd szolgáltatásként (`ops/myra-watch.service`), és **emailben riaszt**. Memóriaigénye
+15-20 MB.
+
+Mit néz:
+
+| forrás | mit fog el |
+|---|---|
+| `docker events` | parancsindítás konténeren belül, OOM, hibás leállás, kill/restart |
+| `docker logs -f myra-backend` | kezeletlen kivétel, ERROR/CRITICAL, elutasított admin művelet, proxy-titok nélküli kopogtatás, sebességkorlát |
+
+Telepítés:
+
+```bash
+cp ops/myra-watch.py ~/myra/myra-watch.py
+echo "MYRA_ALERT_EMAIL=..." >> ~/myra/.env
+sudo cp ops/myra-watch.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now myra-watch
+systemctl status myra-watch --no-pager
+```
+
+Tervezési döntések, amiket ne írj felül gondolkodás nélkül:
+
+- **Csak riaszt, nem avatkozik be.** Nem állít le konténert és nem zár karanténba. Egy
+  téves riasztás így legrosszabb esetben egy felesleges email, nem a Myra leállása.
+  Automatikus válasz ott indokolt, ahol nincs ember a gépnél.
+- **Kötegel.** Alapból 5 percenként megy legfeljebb egy összefoglaló email
+  (`MYRA_WATCH_BATCH_S`), így egy scanner-hullámból egy levél lesz, nem kétszáz.
+  OOM-nál és hibás konténerleállásnál nem vár.
+- **Zajszűrés a `LOG_KIVETELEK` és `EXEC_KIVETELEK` listákban.** A healthcheck `exec`
+  eseményei, a `GET /api/config` sorok és az ismert bcrypt-figyelmeztetés ki vannak véve.
+  Enélkül naponta százszor csörögne, és két nap múlva kikapcsolnád.
+- **A systemd egységben `MemoryMax=64M` és `CPUQuota=10%`.** Ha a figyelő valaha elszállna,
+  a systemd őt állítja meg, nem a backendet.
+- A Gmail-adatokat a `~/myra/.env`-ből olvassa, ugyanazokat, amikkel az MFA-kódok mennek —
+  nincs külön titok és nincs duplikáció.
+
+Miért nem Falco: a Falco eBPF-fel a kernelt figyelné, ami többet lát, de reálisan 150-300 MB
+RAM-ot kér. Ezen a gépen (969 MB, ebből ~600 MB swapben) az OOM-killer a backendet lőné ki.
+A `docker events` a kernel-szint helyett a Docker daemon eseményfolyamát olvassa: kevesebbet
+lát, de gyakorlatilag ingyen van.
+
 ## Frontend Deploy
 
 A frontend deploy a `frontend` mappából történik:
@@ -460,11 +566,15 @@ A deploy folyamat:
 
 ## Lokális Fejlesztés
 
-Backend:
+Backend — **csak a backend szolgáltatást indítsd**, mert a `cloudflared` a
+`CLOUDFLARE_TUNNEL_TOKEN`-t követeli meg, ami csak a VM `.env`-jében van:
 
 ```bash
-docker compose up -d --build
+docker compose up -d --build backend
 ```
+
+A teljes `docker compose up` a fejlesztői gépen hibával áll meg — ez szándékos, nem hiba:
+a compose fájl a VM éles állapotát tükrözi.
 
 Frontend:
 
@@ -514,7 +624,11 @@ GMAIL_APP_PASSWORD=...
 TRUST_PROXY=true
 TTS_ENGINE=piper
 CLOUDFLARE_TUNNEL_TOKEN=...
+MYRA_ALERT_EMAIL=...
 ```
+
+A `MYRA_ALERT_EMAIL` a futásidejű figyelő (`ops/myra-watch.py`) címzettje. Ha nincs
+megadva, a `GMAIL_USER` értékére küld.
 
 A `CLOUDFLARE_TUNNEL_TOKEN` a `cloudflared` konténeré. Ha kiszivárog, a Cloudflare Zero
 Trust felületen töröld a tunnelt és hozz létre újat — a token nem forgatható a helyén.
@@ -564,7 +678,10 @@ backend/rag/
 
 ## Biztonsági Megjegyzések
 
-- A backend nem érhető el közvetlenül az internetről: Cloudflare Tunnel mögött fut, a VM-en nincs publikált port, a GCP tűzfalban a 8001-es szabály letiltva. A proxy-titok a második réteg.
+- A backend nem érhető el közvetlenül az internetről: Cloudflare Tunnel mögött fut, a VM-en nincs publikált port, a GCP tűzfalban a 8001-es szabály letiltva. Fölötte az alagút útvonalszűrője (csak `^/api/.*$`), alatta a proxy-titok — három réteg, lásd a *Backend origin védelem* szakaszt.
+- A VM-en **egyetlen TCP-port sem nyitott** az internet felé (2026-08-14 óta). Az SSH forrása `35.235.240.0/20`-ra szűkítve, ami a Google IAP tartománya; az RDP-szabály letiltva. Ha valaha kizárnád magad, a **Cloud Shell a mentőöv** — az nem a VM SSH-ján megy be.
+- Futásidejű felügyelet: az `ops/myra-watch.py` systemd szolgáltatás emailben riaszt konténeren belüli parancsindításra, OOM-ra, hibás leállásra és a backend log biztonsági mintáira. Csak jelent, nem avatkozik be.
+- A `cloudflared` képe `:latest`-re van állítva, tehát minden `docker compose pull` a legfrissebbet hozza, verziórögzítés nélkül. Frissítés után ellenőrizd az útvonalszűrőt is (`curl -i https://api.myra-project.hu/` → 404).
 - A Supabase publikus REST API-ja zárt: minden táblán be van kapcsolva az RLS, policy nélkül — ez Postgresben teljes tiltást jelent. Az `anon` kulccsal semmilyen sor nem olvasható. Ezt ne kapcsold ki: a backend közvetlen Postgres-kapcsolattal, tábla-tulajdonosként dolgozik, nem a REST API-n keresztül.
 - API kulcsot és `.env` fájlt ne commitolj.
 - Éles adatbázis-exportot vagy felhasználói adatot tartalmazó fájlt ne commitolj.

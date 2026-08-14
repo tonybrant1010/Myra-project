@@ -29,8 +29,11 @@ services:
     restart: unless-stopped
     depends_on:
       - docker-socket-proxy
-    ports:
-      - "8001:8001"
+    # FONTOS: itt szándékosan NINCS "ports:" szekció. 2026-08-13 óta a backend
+    # kizárólag a cloudflared konténeren (Cloudflare Tunnel) keresztül érhető el,
+    # a VM-en nincs publikált port. A healthcheck a konténeren BELÜLRŐL hívja a
+    # localhost:8001-et, azt ez nem érinti. Ha ide visszakerül a port, azzal
+    # újranyitod a gépet az internet felé — ne tedd vissza.
     environment:
       - JWT_SECRET=${JWT_SECRET:?set in .env}
       - JWT_ALG=HS256
@@ -52,6 +55,19 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  # Cloudflare Tunnel: kifelé épített kapcsolat, nincs bejövő port a VM-en.
+  # A publikus hosztnév (api.myra-project.hu) és az útvonalszűrő (^/api/.*$) NEM itt,
+  # hanem a Cloudflare Zero Trust felületén, a tunnel konfigurációjában van tárolva —
+  # ez a konténer csak lehúzza magának induláskor.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: myra-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?set in .env}
+    depends_on:
+      - backend
+    # Szándékosan nincs "ports:" - kifelé kapcsolódik, befelé nem fogad.
 
 networks:
   default:

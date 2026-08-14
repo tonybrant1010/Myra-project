@@ -1,0 +1,21 @@
+[Unit]
+Description=Myra futasideju figyelo (docker events + backend log -> email)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=antalodor
+ExecStart=/usr/bin/python3 /home/antalodor/myra/myra-watch.py
+Restart=always
+RestartSec=15
+
+# Eroforras-korlat: ha barmi elszallna, ne vigye magaval a backendet.
+MemoryMax=64M
+CPUQuota=10%
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
