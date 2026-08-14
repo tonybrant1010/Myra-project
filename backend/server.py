@@ -13,6 +13,7 @@ import struct
 import time
 import traceback
 import uuid
+import wave
 import logging
 import smtplib
 import secrets
@@ -89,6 +90,15 @@ PIPER_CACHE_MAX_AGE_DAYS = int(os.environ.get("PIPER_CACHE_MAX_AGE_DAYS", "1"))
 PIPER_NOISE_SCALE = os.environ.get("PIPER_NOISE_SCALE", "0.667")
 PIPER_NOISE_W = os.environ.get("PIPER_NOISE_W", "0.8")
 TTS_ENGINE = os.environ.get("TTS_ENGINE", "none").strip().lower()
+
+# Gemini TTS. A hangnév szándékosan azonos a Myra Live-ban használttal
+# (frontend/app/myra-live.tsx), hogy Myra ugyanazzal a hanggal szólaljon meg
+# a chatben és a hangbeszélgetésben is.
+GEMINI_TTS_MODEL = os.environ.get("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview")
+GEMINI_TTS_VOICE = os.environ.get("GEMINI_TTS_VOICE", "Kore")
+GEMINI_TTS_TIMEOUT_S = float(os.environ.get("GEMINI_TTS_TIMEOUT_S", "60"))
+# A Gemini TTS nyers PCM-et ad vissza, nem kész WAV-ot: 24 kHz, 16 bit, mono.
+GEMINI_TTS_SAMPLE_RATE = int(os.environ.get("GEMINI_TTS_SAMPLE_RATE", "24000"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("myra")
@@ -2230,7 +2240,9 @@ def _ensure_piper_ready() -> None:
         raise HTTPException(status_code=503, detail="A felolvasó (TTS) szolgáltatás jelenleg nem érhető el.")
 
 
-def _synthesize_tts_wav(text_value: str) -> Path:
+def _synthesize_tts_wav(text_value: str, api_key: str = "") -> Path:
+    if TTS_ENGINE == "gemini":
+        return _synthesize_gemini_wav(text_value, api_key)
     if TTS_ENGINE == "piper":
         return _synthesize_piper_wav(text_value)
     logger.error(f"Unknown TTS engine configured: {TTS_ENGINE}")
@@ -2298,6 +2310,78 @@ def _synthesize_piper_wav(text_value: str) -> Path:
         stderr = (completed.stderr or "").strip()[-500:]
         logger.error(f"Piper audio generation failed. Return code: {completed.returncode}, stderr: {stderr}")
         raise HTTPException(status_code=500, detail="Piper hanggenerálási hiba történt.")
+
+    tmp_path.replace(out_path)
+    return out_path
+
+
+def _synthesize_gemini_wav(text_value: str, api_key: str) -> Path:
+    """Gemini TTS. Ugyanazt a lemezes gyorsítótárat használja, mint a Piper-ág,
+    tehát egy már felolvasott szöveg másodszorra hálózati hívás nélkül jön."""
+    if not api_key:
+        logger.error("Gemini TTS: nincs API kulcs beallitva (live_api_key / llm_api_key).")
+        raise HTTPException(status_code=503, detail="A felolvasó (TTS) szolgáltatás jelenleg nem érhető el.")
+
+    PIPER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    _cleanup_piper_cache(PIPER_CACHE_DIR, PIPER_CACHE_MAX_AGE_DAYS)
+
+    cache_key = hashlib.sha256(
+        f"gemini|{GEMINI_TTS_MODEL}|{GEMINI_TTS_VOICE}|{GEMINI_TTS_SAMPLE_RATE}|{text_value}".encode("utf-8")
+    ).hexdigest()
+    out_path = PIPER_CACHE_DIR / f"{cache_key}.wav"
+    if out_path.exists() and out_path.stat().st_size > 44:
+        return out_path
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_TTS_MODEL}:generateContent"
+    payload = {
+        "contents": [{"parts": [{"text": text_value}]}],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {
+                "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": GEMINI_TTS_VOICE}}
+            },
+        },
+    }
+    try:
+        with httpx.Client(timeout=GEMINI_TTS_TIMEOUT_S) as client:
+            r = client.post(
+                url,
+                headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+                json=payload,
+            )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="A felolvasás túl sokáig tartott.")
+    except httpx.HTTPError:
+        logger.exception("Gemini TTS request failed")
+        raise HTTPException(status_code=503, detail="A felolvasó szolgáltatás most nem érhető el.")
+
+    if r.status_code != 200:
+        # A törzs API kulcsot nem tartalmaz, de a hosszát azért levágjuk.
+        logger.error(f"Gemini TTS failed: status={r.status_code}, body={r.text[:300]}")
+        raise HTTPException(status_code=502, detail="Hanggenerálási hiba történt.")
+
+    try:
+        parts = r.json()["candidates"][0]["content"]["parts"]
+        b64 = next(p["inlineData"]["data"] for p in parts if isinstance(p, dict) and "inlineData" in p)
+        pcm = base64.b64decode(b64)
+    except (KeyError, IndexError, TypeError, ValueError, StopIteration):
+        logger.error("Gemini TTS: varatlan valaszformatum")
+        raise HTTPException(status_code=502, detail="Hanggenerálási hiba történt.")
+
+    if len(pcm) < 1000:
+        logger.error(f"Gemini TTS: gyanusan rovid hang ({len(pcm)} bajt)")
+        raise HTTPException(status_code=502, detail="Hanggenerálási hiba történt.")
+
+    tmp_path = PIPER_CACHE_DIR / f"{cache_key}.tmp.wav"
+    try:
+        with wave.open(str(tmp_path), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(GEMINI_TTS_SAMPLE_RATE)
+            wf.writeframes(pcm)
+    except OSError:
+        logger.exception("Gemini TTS: WAV iras sikertelen")
+        raise HTTPException(status_code=500, detail="Hanggenerálási hiba történt.")
 
     tmp_path.replace(out_path)
     return out_path
@@ -2921,12 +3005,23 @@ async def auth_logout_all_devices(body: MfaTrustedDeviceDeleteBody, user: User =
 
 
 @api.post("/tts/speak")
-async def tts_speak(body: TtsSpeakBody, request: Request, user: User = Depends(get_current_user)):
+async def tts_speak(
+    body: TtsSpeakBody,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     _check_and_record_tts_limit(request, user.id)
     text_value = _normalize_tts_text(body.text)
     if not text_value:
         raise HTTPException(status_code=400, detail="Ures felolvasando szoveg.")
-    wav_path = await asyncio.to_thread(_synthesize_tts_wav, text_value)
+    api_key = ""
+    if TTS_ENGINE == "gemini":
+        # Elsődlegesen a Live kulcsát használjuk: az biztosan Gemini-kulcs.
+        api_key = await get_setting(db, "live_api_key", "")
+        if not api_key and (await get_setting(db, "llm_provider", "")) == "gemini":
+            api_key = await get_setting(db, "llm_api_key", "")
+    wav_path = await asyncio.to_thread(_synthesize_tts_wav, text_value, api_key)
     return FileResponse(
         str(wav_path),
         media_type="audio/wav",

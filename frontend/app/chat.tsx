@@ -218,6 +218,13 @@ export default function ChatScreen() {
   const [viewSessionId, setViewSessionId] = useState<string | null>(null);
   const listRef = useRef<FlatList>(null);
   const recognitionRef = useRef<any>(null);
+  // A backendtől kapott WAV lejátszója. A blob URL-t felszabadítjuk, különben
+  // minden felolvasás után a memóriában marad.
+  const audioRef = useRef<any>(null);
+  // A `speakingId` állapot tükre. A felolvasás aszinkron: mire a hang megérkezik,
+  // a felhasználó már máshol járhat. A ref azonnal frissül, az állapot csak
+  // újrarendereléskor — ezért a lemondást ezen keresztül ellenőrizzük.
+  const speakingIdRef = useRef<string | null>(null);
   const dictationBaseRef = useRef("");
   const revealTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const revealActiveRef = useRef<{ id: string; text: string } | null>(null);
@@ -384,8 +391,22 @@ export default function ChatScreen() {
     if (Platform.OS === "web") {
       (globalThis as any).speechSynthesis?.cancel?.();
     }
+    const audio = audioRef.current;
+    if (audio) {
+      try {
+        audio.pause();
+        if (audio.src) (globalThis as any).URL?.revokeObjectURL?.(audio.src);
+      } catch {
+        // a lejátszó eldobása sosem buktathatja meg a hívót
+      }
+      audioRef.current = null;
+    }
+    speakingIdRef.current = null;
     setSpeakingId(null);
   }, []);
+
+  // Ha a felhasználó elnavigál felolvasás közben, a hang ne szóljon tovább.
+  useEffect(() => () => stopSpeech(), [stopSpeech]);
 
   const stopDictation = useCallback(() => {
     recognitionRef.current?.stop?.();
@@ -445,15 +466,13 @@ export default function ChatScreen() {
     recognition.start();
   }, [input, listening, stopDictation]);
 
-  const speakMessage = useCallback((msg: Msg) => {
+  /** Myra hangja. A backend `/api/tts/speak` végpontja adja a WAV-ot; ott ugyanaz
+   *  a Gemini-hang szól, mint a Myra Live-ban, tehát a két felületen ugyanaz a
+   *  valaki beszél. A backend lemezen gyorsítótáraz, így egy már felolvasott
+   *  üzenet másodszorra azonnal jön. */
+  const speakMessage = useCallback(async (msg: Msg) => {
     if (Platform.OS !== "web") {
       setVoiceStatus("A felolvasás ebben a környezetben nem elérhető.");
-      return;
-    }
-    const synth = (globalThis as any).speechSynthesis;
-    const Utterance = (globalThis as any).SpeechSynthesisUtterance;
-    if (!synth || !Utterance) {
-      setVoiceStatus("A böngésző nem támogatja a beépített felolvasást.");
       return;
     }
     if (speakingId === msg.id) {
@@ -461,18 +480,49 @@ export default function ChatScreen() {
       return;
     }
     stopSpeech();
-    const utterance = new Utterance(msg.text);
-    utterance.lang = "hu-HU";
-    utterance.rate = 0.95;
-    utterance.pitch = 1;
-    const voices = synth.getVoices?.() || [];
-    const huVoice = voices.find((v: any) => String(v.lang || "").toLowerCase().startsWith("hu"));
-    if (huVoice) utterance.voice = huVoice;
-    utterance.onend = () => setSpeakingId(null);
-    utterance.onerror = () => setSpeakingId(null);
+
+    const text = (msg.text || "").trim();
+    if (!text) return;
+
+    // Azonnal aktívra váltunk, hogy a gomb visszajelezzen a hálózati várakozás alatt is.
+    speakingIdRef.current = msg.id;
     setSpeakingId(msg.id);
-    synth.speak(utterance);
-  }, [speakingId, stopSpeech]);
+    setVoiceStatus(null);
+
+    let objectUrl: string | null = null;
+    try {
+      const r = await authedFetch(token, "/api/tts/speak", {
+        method: "POST",
+        body: JSON.stringify({ text: text.slice(0, 2500) }),
+      });
+      if (!r.ok) throw new Error(String(r.status));
+
+      // Közben a felhasználó megnyomhatta újra a gombot vagy elnavigálhatott.
+      if (speakingIdRef.current !== msg.id) return;
+
+      const blob = await r.blob();
+      objectUrl = (globalThis as any).URL.createObjectURL(blob);
+      if (speakingIdRef.current !== msg.id) {
+        (globalThis as any).URL?.revokeObjectURL?.(objectUrl);
+        return;
+      }
+
+      const audio = new (globalThis as any).Audio(objectUrl);
+      audioRef.current = audio;
+      audio.onended = () => stopSpeech();
+      audio.onerror = () => {
+        setVoiceStatus("A felolvasás nem sikerült.");
+        stopSpeech();
+      };
+      await audio.play();
+    } catch {
+      if (objectUrl) (globalThis as any).URL?.revokeObjectURL?.(objectUrl);
+      setVoiceStatus("A felolvasás most nem érhető el.");
+      speakingIdRef.current = null;
+      setSpeakingId(null);
+      audioRef.current = null;
+    }
+  }, [token, speakingId, stopSpeech]);
 
   /** Elszállt küldés után megnézi, megérkezett-e mégis Myra válasza az előzménybe.
    *  Visszaadja a friss üzenetlistát, ha igen — különben null. */

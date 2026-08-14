@@ -47,6 +47,13 @@ services:
       - GMAIL_USER=${GMAIL_USER:-}
       - GMAIL_APP_PASSWORD=${GMAIL_APP_PASSWORD:-}
       - DOCKER_SOCKET_PROXY_URL=http://docker-socket-proxy:2375
+      # Felolvasás. Korábban ez a három sor hiányzott, ezért a TTS_ENGINE sosem
+      # jutott el a konténerbe: alapértelmezésben "none" maradt, és a /tts/speak
+      # végpont élesben 503-at adott. Értéke "gemini", "piper" vagy "none".
+      - TTS_ENGINE=${TTS_ENGINE:-none}
+      # A hangnév szándékosan azonos a Myra Live-ban használttal.
+      - GEMINI_TTS_VOICE=${GEMINI_TTS_VOICE:-Kore}
+      - GEMINI_TTS_MODEL=${GEMINI_TTS_MODEL:-gemini-3.1-flash-tts-preview}
     volumes:
       - ./backend/data:/app/data
 
