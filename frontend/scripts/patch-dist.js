@@ -287,10 +287,59 @@ const iosTags = [
   '<link rel="manifest" href="/site.webmanifest">',
 ].join("");
 
+let indexChanged = false;
+
 if (!html.includes("mobile-web-app-capable")) {
   html = html.replace('<link rel="icon" href="/favicon.ico" />', iosTags + '<link rel="icon" href="/favicon.ico" />');
+  indexChanged = true;
+}
+
+
+// --- Nappali / ejszakai paletta -------------------------------------------
+//
+// A palettat ITT kell beszurni, nem az app/+html.tsx-ben: az app.json-ban
+// web.output = "single", es ilyenkor az Expo Router nem hasznalja a +html.tsx-et,
+// hanem a sajat alap sablonjabol general index.html-t. (2026-08-16-an ellenorizve:
+// az exportalt fajlban lang="en" all, a +html.tsx-ben viszont lang="hu".)
+//
+// A boot szkript az elso festes ELOTT visszaallitja a korabban valasztott modot,
+// kulonben minden oldalbetoltesnel felvillanna a nappali paletta.
+const themeCssPath = path.join(__dirname, "theme-tokens.css");
+const themeBoot =
+  'try{if(localStorage.getItem("myra.theme.mode")==="night")' +
+  'document.documentElement.setAttribute("data-theme","night")}catch(e){}';
+
+if (!html.includes("--myra-bg")) {
+  if (!fs.existsSync(themeCssPath)) {
+    throw new Error(
+      "Hianyzik a scripts/theme-tokens.css. Enelkul minden szin feloldatlan " +
+      "var(--myra-*) maradna, vagyis az oldal szinek nelkul menne ki."
+    );
+  }
+  const themeCss = fs.readFileSync(themeCssPath, "utf8");
+  const themeBlock =
+    "<style id=\"myra-theme-tokens\">" + themeCss + "</style>" +
+    "<script>" + themeBoot + "</script>";
+
+  if (!html.includes("</head>")) {
+    throw new Error("Nem talalom a </head> zaro tagot a dist/index.html-ben.");
+  }
+  html = html.replace("</head>", themeBlock + "</head>");
+  indexChanged = true;
+}
+
+if (indexChanged) {
   fs.writeFileSync(indexPath, html, "utf8");
-  console.log("OK dist/index.html patched");
+  console.log("OK dist/index.html patched (ikonok + nappali/ejszakai paletta)");
 } else {
   console.log("OK dist/index.html already patched");
 }
+
+
+// Vegso ellenorzes: ha a paletta barmi miatt nem kerult be, inkabb alljon meg
+// a deploy, mint hogy szinek nelkuli oldal menjen ki.
+const vegleges = fs.readFileSync(indexPath, "utf8");
+if (!vegleges.includes("--myra-bg") || !vegleges.includes("myra.theme.mode")) {
+  throw new Error("A paletta nem kerult be a dist/index.html-be - a deploy leall.");
+}
+console.log("OK paletta ellenorizve a dist/index.html-ben");

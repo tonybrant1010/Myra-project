@@ -1,0 +1,69 @@
+/* A Myra nappali es ejszakai palettaja.
+ *
+ * EZ A PALETTA EGYETLEN FORRASA. A scripts/patch-dist.js olvassa be es szurja
+ * be a dist/index.html <head> szakaszaba minden build utan.
+ *
+ * Miert nem az app/+html.tsx-ben: az app.json-ban web.output = "single", es
+ * ilyenkor az Expo Router NEM hasznalja a +html.tsx-et, hanem a sajat alap
+ * sablonjabol general index.html-t. (Ellenorizve: az exportalt fajl lang="en"
+ * volt, a +html.tsx-ben viszont lang="hu" all.)
+ *
+ * A szinek CSS-valtozok, mert a kepernyok modulszintu StyleSheet.create-et
+ * hasznalnak: az importaláskor beegetett `var(--myra-*)` stringet a bongeszo
+ * oldja fel festeskor, igy a data-theme atbillentese JS nelkul atszinez mindent.
+ */
+:root {
+    --myra-bg: #040b14;
+
+    --myra-surface: rgba(255,255,255,0.96);
+    --myra-surface-strong: #FFFFFF;
+    --myra-surface-alt: rgba(244,249,255,0.85);
+    --myra-glass: rgba(255,255,255,0.08);
+    --myra-glass-strong: rgba(255,255,255,0.15);
+    --myra-primary-dark: #030c16;
+    --myra-primary-soft: #0f2d4e;
+
+    --myra-text-primary: #0d1f35;
+    --myra-text-secondary: #4a5d73;
+    --myra-text-muted: #718096;
+
+    --myra-border: rgba(79,209,197,0.3);
+    --myra-border-soft: rgba(79,209,197,0.15);
+    --myra-border-on-dark: rgba(255,255,255,0.12);
+
+    --myra-grad-1: #04101D;
+    --myra-grad-2: #08223B;
+    --myra-grad-3: #123E66;
+    --myra-grad-4: #EAF7FF;
+
+    --myra-scrollbar-track: #040b14;
+  }
+
+  /* Éjszakai mód: sötét kártyák, világos szöveg. A türkiz kiemelés marad. */
+  html[data-theme="night"] {
+    --myra-bg: #01050a;
+
+    --myra-surface: rgba(11,29,48,0.94);
+    --myra-surface-strong: #0d2338;
+    --myra-surface-alt: rgba(9,25,42,0.88);
+    --myra-glass: rgba(255,255,255,0.045);
+    --myra-glass-strong: rgba(255,255,255,0.085);
+    --myra-primary-dark: #01060d;
+    --myra-primary-soft: #0a2138;
+
+    --myra-text-primary: #e9f1fa;
+    --myra-text-secondary: #b3c3d6;
+    --myra-text-muted: #8ba0b8;
+
+    --myra-border: rgba(79,209,197,0.2);
+    --myra-border-soft: rgba(79,209,197,0.1);
+    --myra-border-on-dark: rgba(255,255,255,0.07);
+
+    /* A negyedik megálló eddig majdnem fehér volt - ez borul be. */
+    --myra-grad-1: #01050B;
+    --myra-grad-2: #03101d;
+    --myra-grad-3: #0a2138;
+    --myra-grad-4: #14344f;
+
+    --myra-scrollbar-track: #01050a;
+  }

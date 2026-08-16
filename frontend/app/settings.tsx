@@ -451,7 +451,7 @@ function DocumentModal({ doc, onClose }: { doc: DocModal; onClose: () => void })
           <View style={styles.modalHeader}>
             <T variant="h2" color={theme.textPrimary} style={{ flex: 1 }}>{doc?.title}</T>
             <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-              <T variant="label" color={theme.primary}>Bezár</T>
+              <T variant="label" color={theme.textPrimary}>Bezár</T>
             </TouchableOpacity>
           </View>
           <ScrollView style={styles.docScroll} showsVerticalScrollIndicator>
@@ -496,7 +496,7 @@ function ConfirmModal({ visible, title, text, confirmLabel, passwordValue, onPas
           ) : null}
           <View style={styles.confirmActions}>
             <TouchableOpacity style={styles.confirmCancel} onPress={onCancel} disabled={busy}>
-              <T variant="title" color={theme.primary}>Mégse</T>
+              <T variant="title" color={theme.textPrimary}>Mégse</T>
             </TouchableOpacity>
             <TouchableOpacity style={styles.confirmGo} onPress={onConfirm} disabled={busy}>
               {busy ? <ActivityIndicator color={theme.white} /> : <T variant="title" color={theme.white}>{confirmLabel}</T>}

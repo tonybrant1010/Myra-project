@@ -60,12 +60,12 @@ export default function RootLayout() {
                 height: 8px;
               }
               ::-webkit-scrollbar-track {
-                background: #040b14;
+                background: var(--myra-scrollbar-track);
               }
               ::-webkit-scrollbar-thumb {
                 background: rgba(79, 209, 197, 0.25);
                 border-radius: 99px;
-                border: 2px solid #040b14;
+                border: 2px solid var(--myra-scrollbar-track);
                 transition: background 0.3s ease;
               }
               ::-webkit-scrollbar-thumb:hover {

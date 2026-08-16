@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { AccessibilityInfo, Animated, Easing, Platform, StyleSheet, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { theme } from "@/src/theme";
+import { backgroundGradient, theme } from "@/src/theme";
 
 type Props = {
   children: React.ReactNode;
@@ -63,7 +63,9 @@ export default function ContentBackground({ children, style }: Props) {
 
   return (
     <LinearGradient
-      colors={["#04101D", "#08223B", "#123E66", "#EAF7FF"]}
+      // A négy megálló a témából jön: weben CSS-változó, natívon fix érték.
+      // Éjszakai módban a negyedik (nappal majdnem fehér) megálló is besötétedik.
+      colors={backgroundGradient}
       locations={[0, 0.42, 0.78, 1]}
       start={{ x: 0, y: 0 }}
       end={{ x: 1, y: 1 }}

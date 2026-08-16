@@ -171,7 +171,7 @@ export default function RegisterScreen() {
             <View style={styles.modalHeader}>
               <T variant="h2">{docModal?.title}</T>
               <TouchableOpacity onPress={() => setDocModal(null)} style={styles.closeBtn}>
-                <T variant="label" color={theme.primary}>Bezár</T>
+                <T variant="label" color={theme.textPrimary}>Bezár</T>
               </TouchableOpacity>
             </View>
             <ScrollView showsVerticalScrollIndicator style={{ flex: 1 }}>

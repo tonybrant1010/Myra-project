@@ -6,6 +6,7 @@ import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { authedFetch, useAuth } from "@/src/auth/AuthContext";
 import { shadow, theme } from "@/src/theme";
+import { getThemeMode, toggleThemeMode, type ThemeMode } from "@/src/themeMode";
 import { T } from "@/src/components/Typography";
 
 type Session = { id: string; code: string; created_at: string };
@@ -33,6 +34,14 @@ export default function SideMenu({ visible, onClose, forumUnread }: Props) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [adminExpanded, setAdminExpanded] = useState(false);
+  // A megjelenítési mód. Kezdőértéknek szándékosan "day" kell, és csak utána
+  // olvassuk be a tényleges értéket: szerveroldali renderelésnél nincs
+  // localStorage, és az eltérő kezdőérték hidratálási hibát okozna.
+  const [themeMode, setThemeModeState] = useState<ThemeMode>("day");
+
+  useEffect(() => {
+    setThemeModeState(getThemeMode());
+  }, []);
 
   const loadSessions = () => {
     if (!token) return;
@@ -123,6 +132,13 @@ export default function SideMenu({ visible, onClose, forumUnread }: Props) {
                   <MenuItem label="Fórum" icon="chatbubbles-outline" onPress={() => { onClose(); router.push("/forum" as any); }} testID="menu-forum" badge={forumUnread} />
                   <MenuItem label="Új mérés" icon="analytics-outline" onPress={() => setConfirmRetake(true)} testID="menu-retake" disabled={busy} />
                   <MenuItem label="Beállítások" icon="person-circle-outline" onPress={() => { onClose(); router.push("/settings" as any); }} testID="menu-settings" />
+                  {/* A menü szándékosan nyitva marad: így rögtön látszik a váltás. */}
+                  <MenuItem
+                    label={themeMode === "night" ? "Nappali mód" : "Éjszakai mód"}
+                    icon={themeMode === "night" ? "sunny-outline" : "moon-outline"}
+                    onPress={() => setThemeModeState(toggleThemeMode())}
+                    testID="menu-theme-toggle"
+                  />
                 </MenuGroup>
 
                 <MenuGroup title="Béta">
@@ -335,7 +351,7 @@ function ConfirmModal({ visible, title, text, confirmLabel, onCancel, onConfirm,
           <T variant="body" color={theme.textSecondary} style={{ marginTop: 8 }}>{text}</T>
           <View style={styles.confirmActions}>
             <TouchableOpacity style={styles.confirmCancel} onPress={onCancel} disabled={busy}>
-              <T variant="title" color={theme.primary}>Mégse</T>
+              <T variant="title" color={theme.textPrimary}>Mégse</T>
             </TouchableOpacity>
             <TouchableOpacity style={[styles.confirmGo, danger && { backgroundColor: theme.danger }]} onPress={onConfirm} disabled={busy}>
               {busy ? <ActivityIndicator color={theme.white} /> : <T variant="title" color={theme.white}>{confirmLabel}</T>}
