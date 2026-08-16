@@ -62,6 +62,20 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+      # FONTOS: a server.py lifespan-jében a RAG warmup a `yield` ELŐTT fut
+      # (server.py: `await _warmup_rag_runtime()`), ezért az uvicorn kb. 7 percig
+      # egyáltalán nem fogad kapcsolatot. start_period nélkül a Docker 3 sikertelen
+      # próba után — vagyis már ~90 másodperccel az indulás után — "unhealthy"-re
+      # állítja a konténert, teljesen egészséges build esetén is. A start_period
+      # alatt a sikertelen próbák nem számítanak bele a retries-be, az állapot
+      # "starting" marad, és az első sikeres próbánál azonnal "healthy" lesz.
+      #
+      # Az érték MÉRÉS alapján 900s, nem becslés: a 2026-08-16-i deploynál a
+      # warmup 596.6 másodpercig tartott (a korábbi mérés még 439s volt), tehát
+      # egy 600s-os kerettől mindössze 3 másodperc választotta el. A warmup ideje
+      # a VM memórianyomásától függ (969 MB RAM, jelentős swap), ezért ingadozik —
+      # a keretnek a lassú esetet kell elbírnia, nem az átlagot.
+      start_period: 900s
 
   # Cloudflare Tunnel: kifelé épített kapcsolat, nincs bejövő port a VM-en.
   # A publikus hosztnév (api.myra-project.hu) és az útvonalszűrő (^/api/.*$) NEM itt,

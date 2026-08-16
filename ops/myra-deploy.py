@@ -15,6 +15,17 @@ LETEZIK-e. Ha letezik es vedett, 401-et ad. Ha nincs meg, 404-et. Pontosan ez a
 kulonbseg fogta volna meg a 2026-08-14-i esetet, amikor a /api/forum/latest
 egy elavult server.py-jal eltunt a rendszerbol.
 
+FONTOS a "unhealthy" allapotrol (2026-08-16-i javitas):
+A server.py lifespan-jeben a `await _warmup_rag_runtime()` a `yield` ELOTT fut,
+ezert az uvicorn ~7 percig egyaltalan nem fogad kapcsolatot. A compose
+healthcheckje kozben 30 mp-enkent probalkozik, 3 sikertelen probalkozas utan
+pedig a Docker "unhealthy"-re allitja a konteneri allapotat -- vagyis kb. 90
+masodperccel minden egyes indulas utan, teljesen egeszseges build eseten is.
+Az "unhealthy" a Dockerben NEM vegallapot: a probak tovabb futnak, es az elso
+sikeres probanal visszavalt "healthy"-re. Ezert itt az "unhealthy" varakozasra
+ok, nem visszaallasra. Csak ezek jelentenek valodi bukast: a konteneri leall,
+ujraindulasi hurokba kerul, vagy lejar az idokeret.
+
 Fuggosegek: csak a Python standard konyvtar. A titkokat a ~/myra/.env-bol olvassa.
 """
 
@@ -32,9 +43,22 @@ KONTENER = "myra-backend"
 IMAGE = "myra-backend"
 ROLLBACK_TAG = "myra-backend:rollback"
 
-# A warmup egyedul ~7 perc, ezert bo keret kell.
-HEALTH_TIMEOUT_S = int(os.environ.get("MYRA_HEALTH_TIMEOUT_S", "900"))
+# A warmup hossza a VM memorianyomasatol fugg es eleg szelesen ingadozik:
+# 439 mp (2026-08-13) es 596.6 mp (2026-08-16) is volt mar, az utobbi eseten a
+# konteneri 720 mp-nel lett healthy. A 900 mp-es regi keret ezt meg elbirta, de
+# csak 180 mp tartalekkal -- egy lassabb induals mar hamis visszaallast okozott
+# volna. Az idotullepes itt vegso vedohalo: a valodi bukast (leallas,
+# ujrainditasi hurok) a ciklus kulon, azonnal eszreveszi, ezert a bo keret nem
+# keslelteti a hibafelismerest, csak a ritka "elindult, de sosem lesz kesz"
+# esetben var tovabb.
+HEALTH_TIMEOUT_S = int(os.environ.get("MYRA_HEALTH_TIMEOUT_S", "1800"))
 HEALTH_POLL_S = 10
+# Ennyi masodpercenkent irunk ki egy "meg megy" sort, hogy ne tunjon lefagyottnak.
+HALADAS_S = 60
+# A server.py "RAG warmup kesz: ..." vagy "RAG warmup figyelmeztetes: ..." sort ir
+# ki, amikor a warmup lefutott. Ez a fajl szandekosan ekezet nelkuli, a logban
+# viszont ekezetes a szoveg -- ezert csak az ekezet elotti reszre illesztunk.
+WARMUP_JELEK = ("RAG warmup k", "RAG warmup figyelmeztet")
 
 # (metodus, utvonal, vart statusz)
 #   200 = nyilvanos
@@ -147,25 +171,79 @@ def kimenet(parancs):
     return (p.stdout or "").strip()
 
 
-def health_allapot():
-    return kimenet(["docker", "inspect", "--format",
-                    "{{.State.Health.Status}}", KONTENER])
+def kontener_allapot():
+    """(futasi allapot, health allapot, ujrainditasok szama) egy hivasbol."""
+    nyers = kimenet(["docker", "inspect", "--format",
+                     "{{.State.Status}}|{{.State.Health.Status}}|{{.RestartCount}}",
+                     KONTENER])
+    reszek = (nyers or "||").split("|")
+    while len(reszek) < 3:
+        reszek.append("")
+    return reszek[0], reszek[1], reszek[2]
+
+
+def warmup_lefutott():
+    naplo = kimenet(["docker", "logs", "--tail", "80", KONTENER])
+    return any(jel in naplo for jel in WARMUP_JELEK)
 
 
 def varj_healthre():
-    hatarido = time.time() + HEALTH_TIMEOUT_S
-    utolso = ""
+    """Megvarja, amig a konteneri healthy lesz.
+
+    Az "unhealthy" itt SZANDEKOSAN nem bukas: a warmup alatt minden egeszseges
+    indulas atmegy rajta (lasd a modul tetejen levo magyarazatot). Valodi bukas
+    csak a leallas, az ujrainditasi hurok es az idotullepes.
+    """
+    kezdet = time.time()
+    hatarido = kezdet + HEALTH_TIMEOUT_S
+    utolso_allapot = ""
+    utolso_haladas = kezdet
+    kezdeti_restart = None
+    warmup_jelezve = False
+
     while time.time() < hatarido:
-        allapot = health_allapot()
-        if allapot != utolso:
-            print("[deploy] healthcheck: %s" % (allapot or "(nincs valasz)"))
-            utolso = allapot
-        if allapot == "healthy":
+        futas, egeszseg, restart = kontener_allapot()
+        if kezdeti_restart is None:
+            kezdeti_restart = restart
+
+        eltelt = int(time.time() - kezdet)
+        jelenlegi = "%s / %s" % (futas or "?", egeszseg or "nincs healthcheck")
+
+        if jelenlegi != utolso_allapot:
+            megjegyzes = ""
+            if egeszseg == "unhealthy":
+                megjegyzes = "  <- varhato a warmup alatt, varunk tovabb"
+            print("[deploy] %4d mp | %s%s" % (eltelt, jelenlegi, megjegyzes))
+            utolso_allapot = jelenlegi
+            utolso_haladas = time.time()
+
+        if egeszseg == "healthy":
+            print("[deploy] %4d mp | a konteneri healthy." % eltelt)
             return True
-        if allapot == "unhealthy":
+
+        # Ezek valodi bukasok.
+        if futas in ("exited", "dead"):
+            print("[deploy] A konteneri leallt (%s), nincs ertelme tovabb varni." % futas)
             return False
+        if kezdeti_restart is not None and restart != kezdeti_restart:
+            print("[deploy] A konteneri ujraindult (RestartCount %s -> %s): "
+                  "ujrainditasi hurok." % (kezdeti_restart, restart))
+            return False
+
+        if time.time() - utolso_haladas >= HALADAS_S:
+            if not warmup_jelezve and warmup_lefutott():
+                print("[deploy] %4d mp | a RAG warmup lefutott, a health mar csak "
+                      "a kovetkezo probara var." % eltelt)
+                warmup_jelezve = True
+            else:
+                print("[deploy] %4d mp | meg varunk (%s)." % (eltelt, jelenlegi))
+            utolso_haladas = time.time()
+
         time.sleep(HEALTH_POLL_S)
+
     print("[deploy] Idotullepes: a konteneri nem lett healthy %s mp alatt." % HEALTH_TIMEOUT_S)
+    print("[deploy] Utolso 30 naplosor:")
+    print(kimenet(["docker", "logs", "--tail", "30", KONTENER]))
     return False
 
 
