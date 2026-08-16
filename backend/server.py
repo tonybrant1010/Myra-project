@@ -5825,6 +5825,15 @@ async def update_forum_profile(body: ForumProfileUpdate, user: User = Depends(ge
     return {"ok": True, "nickname": nick, "avatar": avatar}
 
 
+@api.get("/forum/latest")
+async def get_forum_latest(_: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """A legfrissebb fórumposzt időpontja. A menüben megjelenő jelzéshez kell:
+    a kliens ezt veti össze a helyben tárolt "utoljára megnéztem" időponttal."""
+    res = await db.execute(select(func.max(ForumPost.created_at)))
+    latest = res.scalar()
+    return {"latest": latest.isoformat() if latest else None}
+
+
 @api.get("/forum/posts")
 async def get_forum_posts(_: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     q = (
