@@ -43,21 +43,35 @@ def test_build_chat_kb_query_specific_message_stays_clean():
     assert "Emelkedett" not in q
 
 
-def test_build_chat_kb_query_short_message_pulls_context():
+# 2026-08-17: a rövid üzenetek "feldúsítása" megszűnt. Korábban négynél kevesebb
+# érdemi szó esetén az ELŐZŐ user-üzenet és az állapotprofil is bekerült a
+# lekérdezésbe — emiatt a keresés nem arra futott, amit a felhasználó éppen írt.
+# Mérés: a "szia" 0,493-as találati értéket kapott és öt PDF-részletet hozott,
+# mert az előző mondatra és az állapotkódra keresett. Az alábbi három teszt ezt
+# az új szerződést rögzíti: a lekérdezés MINDIG az input üzenet, vagy semmi.
+
+
+def test_build_chat_kb_query_short_message_stays_on_input():
     q = _build_chat_kb_query(
         "És miért?",
         [_msg("user", "Folyton ugyanazon a dolgon pörgök és nem tudom elengedni."), _msg("assistant", "...")],
         STATE,
     )
-    assert "pörgök" in q
-    assert "És miért?" in q
-    assert "Emelkedett stressz" in q
+    assert q == "És miért?"
+    assert "pörgök" not in q
+    assert "Emelkedett stressz" not in q
 
 
-def test_build_chat_kb_query_short_message_without_history():
+def test_build_chat_kb_query_greeting_stays_on_input():
     q = _build_chat_kb_query("Szia!", [], STATE)
-    assert "Szia!" in q
-    assert "Emelkedett stressz" in q
+    assert q == "Szia!"
+    assert "Emelkedett stressz" not in q
+
+
+def test_build_chat_kb_query_empty_without_searchable_terms():
+    """Ha nincs mire keresni, ne is keressen: a hívó ilyenkor kihagyja a RAG-ot."""
+    assert _build_chat_kb_query("ok", [_msg("user", "hosszabb korábbi üzenet")], STATE) == ""
+    assert _build_chat_kb_query(":)", [], STATE) == ""
 
 
 def test_fts_query_filters_stopwords():

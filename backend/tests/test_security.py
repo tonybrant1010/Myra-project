@@ -246,9 +246,12 @@ def test_rag_search_query_stays_compact_for_short_message():
 
     query = _build_chat_kb_query("aktuális kérdés", [], state)
 
-    assert "aktuális kérdés" in query
-    assert "Teszt profil" in query
-    assert "kozepes" in query
+    # 2026-08-17 óta a lekérdezés MINDIG csak az input üzenet: sem az állapotprofil,
+    # sem a cím/súlyosság nem kerül bele. Korábban a rövid üzeneteket ezekkel
+    # dúsította a kód, és emiatt nem arra keresett, amit a felhasználó írt.
+    assert query == "aktuális kérdés"
+    assert "Teszt profil" not in query
+    assert "kozepes" not in query
     assert len(query) < len(state.profile)
 
 
