@@ -103,6 +103,35 @@ frontend/src/components/ContentBackground.tsx
 frontend/src/components/TopBar.tsx
 ```
 
+### Nappali / éjszakai mód (2026-08-16)
+
+A menüben (Alapműveletek → Beállítások alatt) váltható. Az éjszakai mód klasszikus sötét
+mód: sötét kártyák, világos szöveg, a színátmenet világos vége is beborul.
+
+A megvalósítás azért nem JS-alapú, mert **27 képernyő modulszintű `StyleSheet.create`-et
+használ**, ami importáláskor egyszer fut le és beégeti a színt — egy futásidejű
+témaváltás azoknál nem érne semmit. Helyette a mód-függő tokenek CSS-változóra mutatnak
+(`var(--myra-...)`), amit a böngésző festéskor old fel, így egyetlen attribútum
+átbillentése átszínez mindent, újrarenderelés nélkül:
+
+```text
+frontend/scripts/theme-tokens.css   <- a paletta EGYETLEN forrása
+frontend/scripts/patch-dist.js      <- build után beszúrja a dist/index.html <head>-jébe
+frontend/src/theme.ts               <- a tokenek var(--myra-*)-ra mutatnak (weben)
+frontend/src/themeMode.ts           <- a kapcsoló, localStorage-ba ment
+```
+
+Ezt a React Native Web és az `expo-linear-gradient` is szándékosan támogatja: mindkettőben
+van egy `isWebColor` ellenőrzés, ami a `var(`-ral **kezdődő** stringet érintetlenül
+továbbengedi. A `var(` csak a string elején állhat — `"rgba(var(--x), 0.5)"` már nem megy át.
+
+**A paletta NEM az `app/+html.tsx`-ben van.** Az `app.json`-ban `web.output: "single"`, és
+ilyenkor az Expo Router nem használja a `+html.tsx`-et, hanem a saját sablonjából generál
+`index.html`-t — a fájl tartalma soha nem kerül a buildbe. Ha valaha `output: "static"`-ra
+váltasz, a `theme-tokens.css` tartalmát oda is be kell húzni.
+
+Natívon (iOS/Android) nincs CSS-változó, ezért ott a nappali paletta fix értékei élnek.
+
 Design módosításnál az alapelv: a működő app-felület maradjon az első képernyő, ne marketing landing page
 legyen belőle. A chat és a Live felület maradjon alacsony zajszintű, gyors, könnyen olvasható és mobilon is
 stabil. Új színpaletta, nagyobb vizuális átalakítás vagy Myra promptot érintő változtatás csak külön jóváhagyással
@@ -239,14 +268,31 @@ ugyanabban a chunkban kellett volna szerepelnie. Helyette VAGY-alapú `to_tsquer
 lekérdezésből, a 7 karakternél hosszabb szavak prefixként (`ambivalencia:*`), mert a
 magyar szótövező külön lexémát csinál az `ambivalencia` és az `ambivalens` alakból.
 
-Ugyanekkor megszűnt a találati szűrés: a rangsor élén álló `limit` darab chunk **mindig**
-átmegy az LLM-hez. Korábban abszolút távolságküszöb vágott, ami magyar szövegen
-véletlenszerűen vágott — krízis-megfogalmazásoknál rendszeresen üresen ment ki a prompt.
-Egy közepesen illeszkedő részlet ára pár száz token; a nulla részleté hiányos válasz.
+2026-08-13-tól 2026-08-17-ig a találati szűrés ki volt kapcsolva: a rangsor élén álló
+`limit` darab chunk **mindig** átment az LLM-hez, akármilyen laza volt az illeszkedés.
+
+**Változás 2026-08-17 — két hiba a chat promptjában.**
+
+*Első:* a keresés nem arra futott, amit a felhasználó éppen írt. A `_build_chat_kb_query`
+a rövid üzeneteket „feldúsította": négynél kevesebb érdemi szó esetén az ELŐZŐ
+user-üzenetet és az állapotprofilt is beletette a lekérdezésbe. Mérés: a `szia` 0,493-as
+találati értéket kapott és öt PDF-részletet hozott, mert nem a `szia`-ra keresett.
+Mostantól a keresés **mindig az aktuális input üzenetre** megy; ha abban egyetlen érdemi
+szó sincs, a keresés elmarad.
+
+*Második:* nem volt „csak ha van releváns" ág. A `RAG_VECTOR_MAX_DISTANCE` konstans
+definiálva volt, de a kód **sehol nem használta** — a szűrő meg volt írva, csak nem volt
+bekötve. Mostantól szűr: a küszöb feletti találatok kimaradnak, és ha egy sem elég közeli,
+nem megy tudásanyag-blokk a promptba.
+
+A kettő együtt adja azt, hogy a részletek száma az üzenethez igazodik. Mért példa
+(2026-08-17): `kept=1..2` hétköznapi üzenetnél, `kept=5` témába vágónál; a prompt mérete
+ezzel együtt 10 600 és 15 900 karakter között mozog.
 
 RAG-hoz hangolható env változók:
 
 ```env
+RAG_CHAT_CHUNKS=5
 RAG_VECTOR_MAX_DISTANCE=0.62
 RAG_CANDIDATE_POOL=20
 RAG_KEEPWARM_INTERVAL_S=240
@@ -254,10 +300,16 @@ DISABLE_RAG_STARTUP_WARMUP=false
 FASTEMBED_MODEL_NAME=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 ```
 
-- `RAG_VECTOR_MAX_DISTANCE`: 2026-08-13 óta **nem szűr**, csak diagnosztikai viszonyítási pont a logban.
+- `RAG_CHAT_CHUNKS`: hány részlet mehet legfeljebb egy chat-üzenethez. `0` esetén a keresés is elmarad — ez a 2026-08-12 (a tudásanyag újraindexelése) előtti állapot, és kérésenként 2-8 másodpercet spórol.
+- `RAG_VECTOR_MAX_DISTANCE`: 2026-08-17 óta **ténylegesen szűr**. Kisebb szám = szigorúbb. `1.0` kikapcsolja.
 - `RAG_CANDIDATE_POOL`: a hibrid fuzio jeloltszama aganként.
 - `RAG_KEEPWARM_INTERVAL_S`: keep-warm gyakorisag masodpercben; `0` kikapcsolja.
 - `DISABLE_RAG_STARTUP_WARMUP=true`: kikapcsolja a startup RAG warmupot, ha gyors kontenerinditas fontosabb az elso RAG keresesi kesleltetesnel.
+
+**FIGYELEM — ezek a változók csak akkor élnek, ha a `docker-compose.yml` át is adja őket.**
+2026-08-17-ig egyikük sem szerepelt az `environment:` listában, ezért a kód mindig a
+beépített alapértékkel futott, hiába állította bárki a `.env`-ben. Ugyanez a hiba volt
+korábban a `TTS_ENGINE`-nél. Ha új változót veszel fel, a compose-ba is fel kell venni.
 
 Diagnosztika: minden keresés `rag_search candidates=... txt_hits=... kept=... best_dist=...`
 sort logol. A `txt_hits` a szöveges ág találatait mutatja — ha tartósan 0, a lexikális ág
@@ -562,7 +614,16 @@ A deploy folyamat:
 2. `scripts/patch-dist.js` javítja a `dist` kimenetet.
 3. Létrejön a Vercel proxy function.
 4. Frissül a `dist/vercel.json`.
-5. Vercel production deploy fut.
+5. A nappali/éjszakai paletta (`scripts/theme-tokens.css`) beszúródik a `dist/index.html` `<head>`-jébe.
+6. Vercel production deploy fut.
+
+A `patch-dist.js` az 5. lépés után **ellenőriz is**: ha a paletta bármi miatt nem került be
+az `index.html`-be, kivételt dob és a deploy megáll. Palettát nem tartalmazó `index.html`
+esetén ugyanis minden szín feloldatlan `var(--myra-*)` maradna, vagyis szín nélkül menne ki
+az oldal.
+
+Ezért a `npm run deploy:upload` önmagában **nem elég**, ha a `+html.tsx`-en vagy a
+palettán változtattál: a beszúrás az `expo export` utáni `patch-dist` lépésben történik.
 
 ## Lokális Fejlesztés
 
@@ -622,13 +683,29 @@ MYRA_PROXY_SECRET=...
 GMAIL_USER=...
 GMAIL_APP_PASSWORD=...
 TRUST_PROXY=true
-TTS_ENGINE=piper
+TTS_ENGINE=gemini
+GEMINI_TTS_VOICE=Kore
+GEMINI_TTS_MODEL=gemini-3.1-flash-tts-preview
 CLOUDFLARE_TUNNEL_TOKEN=...
 MYRA_ALERT_EMAIL=...
+RAG_CHAT_CHUNKS=5
+RAG_VECTOR_MAX_DISTANCE=0.62
+CHAT_HISTORY_MAX_MESSAGES=120
+CHAT_HISTORY_MAX_CHARS=45000
 ```
+
+**A `.env.example` a repóban az egyetlen hiteles lista.** A titkok ott üresen állnak, a
+nem titkos beállítások viszont az élesben futó értéket tartalmazzák — így a rendszer új
+gépen is reprodukálható. A `.gitignore` `.env.*` sora ezt is kizárná, ezért van mellette
+egy `!.env.example` kivétel.
 
 A `MYRA_ALERT_EMAIL` a futásidejű figyelő (`ops/myra-watch.py`) címzettje. Ha nincs
 megadva, a `GMAIL_USER` értékére küld.
+
+A `CHAT_HISTORY_MAX_MESSAGES` és `CHAT_HISTORY_MAX_CHARS` szabja meg, mennyit lát a modell
+a beszélgetésből. A kód felső határa 300 üzenet és 120 000 karakter; ennél többhöz a
+`server.py`-ban a `_env_int` korlátait is emelni kell. A limit elérésekor a rendszer
+**csendben eldobja a legrégebbi üzeneteket** — nincs róla se hibaüzenet, se logsor.
 
 A `CLOUDFLARE_TUNNEL_TOKEN` a `cloudflared` konténeré. Ha kiszivárog, a Cloudflare Zero
 Trust felületen töröld a tunnelt és hozz létre újat — a token nem forgatható a helyén.

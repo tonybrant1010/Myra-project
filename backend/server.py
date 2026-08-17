@@ -199,20 +199,23 @@ def _is_allowed_cors_origin(origin: str) -> bool:
 
 
 def _build_chat_kb_query(user_message: str, history: list, state: Any) -> str:
-    """Rövid/homályos üzenetnél bevonja az előző user-üzenetet és az állapotprofilt,
-    konkrét üzenetnél csak magát az üzenetet keresi (a profil ne torzítsa a találatokat)."""
+    """A keresés MINDIG az aktuális input üzenetre megy.
+
+    Korábban a rövid üzeneteket "feldúsította": négynél kevesebb érdemi szó esetén
+    az ELŐZŐ user-üzenetet és az állapotprofilt is beletette a keresésbe. Emiatt a
+    keresés nem arra futott, amit a felhasználó éppen írt — a 2026-08-17-i mérésben
+    a "szia" 0,493-as találati értéket kapott és öt PDF-részletet hozott, mert nem
+    a "szia"-ra keresett, hanem az előző mondatra és az állapotkódra.
+
+    Ha az üzenetben nincs egyetlen érdemi szó sem (köszönés, hangulatjel, "ok"),
+    üres stringet adunk vissza, és a hívó kihagyja a keresést: ilyenkor nulla
+    részlet megy a promptba. A `history` és a `state` paraméter szándékosan a
+    helyén marad, hogy a hívási pontok változatlanok maradjanak.
+    """
     terms = _knowledge_terms(user_message, max_terms=12)
-    if len(terms) >= 4:
-        return user_message.strip()
-    parts: list[str] = []
-    prev_user_texts = [m.text for m in history if getattr(m, "role", "") == "user"]
-    if prev_user_texts:
-        parts.append(prev_user_texts[-1][:400])
-    parts.append(user_message)
-    state_line = f"{getattr(state, 'title', '') or ''} {getattr(state, 'severity', '') or ''}".strip()
-    if state_line:
-        parts.append(state_line)
-    return "\n".join(p for p in parts if p).strip()
+    if not terms:
+        return ""
+    return user_message.strip()
 
 
 def _normalize_database_url(url: str) -> str:
@@ -265,6 +268,11 @@ def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
 CHAT_HISTORY_MAX_MESSAGES = _env_int("CHAT_HISTORY_MAX_MESSAGES", 120, 20, 300)
 CHAT_HISTORY_MAX_CHARS = _env_int("CHAT_HISTORY_MAX_CHARS", 45000, 8000, 120000)
 RAG_CANDIDATE_POOL = _env_int("RAG_CANDIDATE_POOL", 20, 5, 50)
+# Hány PDF-részlet mehet a chat promptjába. 0 = egyáltalán ne menjen.
+# 2026-08-12 óta fordulónként 5 részlet (~5400 karakter) kerül a rendszerutasításba;
+# azelőtt ez a blokk üres volt. Ezzel a kapcsolóval a régi állapot visszaállítható
+# újraépítés nélkül, a .env-ből.
+RAG_CHAT_CHUNKS = _env_int("RAG_CHAT_CHUNKS", 5, 0, 10)
 RAG_KEEPWARM_INTERVAL_S = _env_int("RAG_KEEPWARM_INTERVAL_S", 240, 0, 3600)
 try:
     RAG_VECTOR_MAX_DISTANCE = float(os.environ.get("RAG_VECTOR_MAX_DISTANCE", "0.62"))
@@ -1386,9 +1394,16 @@ async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> 
                     best_dist = dist
                 if row["txt_rnk"] is not None:
                     txt_hits += 1
-                # Nincs szures: a sorok mar RRF szerint rendezettek, a legjobb
-                # "limit" darab mindig atmegy az LLM-hez. Egy kozepesen illeszkedo
-                # reszlet ara par szaz token; a nulla reszlet ara hianyos valasz.
+                # Tavolsagszures. A RAG_VECTOR_MAX_DISTANCE eddig definialva volt, de
+                # sehol nem hasznaltuk: emiatt MINDIG a legjobb "limit" darab ment at,
+                # akarmilyen laza volt a talalat. Egy 2026-08-17-i meres szerint a valos
+                # uzeneteknel a best_dist 0.52-0.64 kozott mozgott (a jol illeszkedo
+                # warmup lekerdezes 0.259), vagyis fordulonkent ~5400 karakternyi, alig
+                # kapcsolodo szoveg terhelte a promptot. A kuszob feletti talalatok
+                # mostantol kimaradnak; ha nem marad egy sem, akkor nincs tudasanyag-blokk.
+                # Kikapcsolashoz: RAG_VECTOR_MAX_DISTANCE=1.0 a .env-ben.
+                if dist is not None and dist > RAG_VECTOR_MAX_DISTANCE:
+                    continue
                 kept.append(row)
                 if len(kept) >= limit:
                     break
@@ -4376,11 +4391,22 @@ def _build_system_prompt(
         "egyszerűen csak küldd el a tiszta válaszodat.\n"
     )
     
-    parts = [system_prompt, "", state_block, "", time_block]
+    # A sorrend szándékos: az adminban beállított rendszerprompt a LEGVÉGÉN áll.
+    #
+    # Miért: 2026-08-12 11:31-től (a tudásanyag újraindexelése óta) minden egyes
+    # fordulóban ~5 400 karakternyi PDF-részlet kerül ebbe a blokkba; azelőtt üres
+    # volt. Amíg a prompt legelöl állt, a modell utolsóként PDF-szöveget olvasott,
+    # és pont a korlátozó szabályok estek ki: a 2026-08-16-i beszélgetésben a
+    # hosszarány-szabály 11/11 válaszban sérült, és 7/11 válasz kérdéssel zárult,
+    # holott a prompt ezt kifejezetten tiltja. A sorrend megfordításával a
+    # rendszerprompt az utolsó szó.
+    parts = []
+    if kb_text.strip():
+        parts += ["TUDÁSANYAG (csak felismeréshez, soha ne idézd):", kb_text, ""]
+    parts += [state_block, "", time_block]
     if extra_context.strip():
         parts += ["", extra_context]
-    if kb_text.strip():
-        parts += ["", "TUDÁSANYAG (csak felismeréshez, soha ne idézd):", kb_text]
+    parts += ["", system_prompt]
     return "\n".join(parts)
 
 
@@ -4707,7 +4733,12 @@ async def chat_send(
 
     kb_query = _build_chat_kb_query(text, db_history, sc)
     phase_started = time.perf_counter()
-    retrieved_chunks = await search_pdf_knowledge(db, kb_query, limit=5)
+    if RAG_CHAT_CHUNKS > 0 and kb_query:
+        retrieved_chunks = await search_pdf_knowledge(db, kb_query, limit=RAG_CHAT_CHUNKS)
+    else:
+        # RAG_CHAT_CHUNKS=0 esetén a keresést át is ugorjuk: így nemcsak a prompt
+        # rövidül, hanem a kérésenkénti 2-8 másodperc RAG-idő is elmarad.
+        retrieved_chunks = []
     mark_timing("rag", phase_started)
     retrieved_kb_context = _build_retrieved_kb_context(retrieved_chunks)
     
@@ -4942,7 +4973,10 @@ async def create_live_token(
 
     system_prompt = await get_setting(db, "system_prompt", DEFAULT_SYSTEM_PROMPT)
     kb_query = f"{state_code.title}\n{state_code.profile}\n{state_code.severity or ''}"
-    retrieved_chunks = await search_pdf_knowledge(db, kb_query, limit=5)
+    retrieved_chunks = (
+        await search_pdf_knowledge(db, kb_query, limit=RAG_CHAT_CHUNKS)
+        if RAG_CHAT_CHUNKS > 0 else []
+    )
     retrieved_kb_context = _build_retrieved_kb_context(retrieved_chunks)
     live_system_prompt = _build_system_prompt(system_prompt, retrieved_kb_context, state_code, user.name)
     now_ts_str = _to_local(_now()).strftime("%Y.%m.%d %H:%M")

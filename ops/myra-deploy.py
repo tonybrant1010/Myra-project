@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Myra backend deploy fusttesztel es automatikus visszaallassal.
+"""Myra backend deploy fustteszttel es automatikus visszaallassal.
 
 A `docker compose up -d --build backend` helyett ezt futtasd. Amit csinal:
 
@@ -247,7 +247,7 @@ def varj_healthre():
     return False
 
 
-def fusztteszt():
+def fustteszt():
     script = BELSO_TESZT.replace("__CHECKS__", repr(ELLENORZESEK))
     p = subprocess.run(
         ["docker", "compose", "exec", "-T", "backend", "python", "-"],
@@ -300,9 +300,9 @@ def main():
                        most()))
         return 1
 
-    # 4. Fuszttesz.
-    print("[deploy] Fuszttesz indul.")
-    rendben, naplo = fusztteszt()
+    # 4. Fustteszt.
+    print("[deploy] Fustteszt indul.")
+    rendben, naplo = fustteszt()
 
     if rendben:
         email_kuld("[Myra] Deploy rendben",
@@ -317,10 +317,10 @@ def main():
     else:
         allapot = "FIGYELEM: nem volt mentett image, a hibas verzio fut!"
 
-    email_kuld("[Myra] Deploy VISSZAALLITVA - fusztteszt bukott",
+    email_kuld("[Myra] Deploy VISSZAALLITVA - fustteszt bukott",
                "Az uj verzio elindult, de nem minden vegpont volt a helyen.\n\n"
                "%s\n\n%s\nIdopont: %s" % (naplo, allapot, most()))
-    print("[deploy] A fusztteszt bukott.")
+    print("[deploy] A fustteszt bukott.")
     return 1
 
 

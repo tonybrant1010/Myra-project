@@ -37,6 +37,10 @@ frontend/.metro-cache/
 .env
 .env.*
 *.env
+# Kivétel: a sablon nem tartalmaz titkot, és kell a verziókövetésbe, hogy az
+# élesben futó (nem titkos) beállítások reprodukálhatók legyenek. A fenti
+# `.env.*` sor enélkül ezt is kizárná.
+!.env.example
 *token.json*
 *credentials.json*
 credentials.json

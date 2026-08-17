@@ -47,6 +47,21 @@ services:
       - GMAIL_USER=${GMAIL_USER:-}
       - GMAIL_APP_PASSWORD=${GMAIL_APP_PASSWORD:-}
       - DOCKER_SOCKET_PROXY_URL=http://docker-socket-proxy:2375
+      # A Geminihez küldött csomag mérete. Ezek a kód szerint eddig is állíthatók
+      # voltak, de ide nem voltak felvéve, ezért SOHA nem jutottak el a konténerbe —
+      # ugyanaz a hiba, mint korábban a TTS_ENGINE-nél. Mostantól a .env-ből
+      # hangolhatók, újraépítés nélkül (elég egy `docker compose up -d backend`).
+      #
+      # RAG_CHAT_CHUNKS=0        -> egyáltalán nincs PDF-részlet a promptban
+      #                             (a 2026-08-12 előtti állapot), és elmarad a
+      #                             kérésenkénti 2-8 mp RAG-idő is
+      # RAG_VECTOR_MAX_DISTANCE  -> ennél lazább találat nem megy át (1.0 = nincs szűrés)
+      - CHAT_HISTORY_MAX_MESSAGES=${CHAT_HISTORY_MAX_MESSAGES:-120}
+      - CHAT_HISTORY_MAX_CHARS=${CHAT_HISTORY_MAX_CHARS:-45000}
+      - RAG_CHAT_CHUNKS=${RAG_CHAT_CHUNKS:-5}
+      - RAG_VECTOR_MAX_DISTANCE=${RAG_VECTOR_MAX_DISTANCE:-0.62}
+      - RAG_CANDIDATE_POOL=${RAG_CANDIDATE_POOL:-20}
+      - RAG_KEEPWARM_INTERVAL_S=${RAG_KEEPWARM_INTERVAL_S:-240}
       # Felolvasás. Korábban ez a három sor hiányzott, ezért a TTS_ENGINE sosem
       # jutott el a konténerbe: alapértelmezésben "none" maradt, és a /tts/speak
       # végpont élesben 503-at adott. Értéke "gemini", "piper" vagy "none".
