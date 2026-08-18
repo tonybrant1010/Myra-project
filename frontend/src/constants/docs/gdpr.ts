@@ -1,6 +1,6 @@
 export const gdprText = `ADATKEZELÉSI TÁJÉKOZTATÓ
 
-Hatályos: 2026. július 22.
+Hatályos: 2026. augusztus 17.
 
 1. Az adatkezelő
 Név: Ódor Antal
@@ -70,6 +70,8 @@ A szolgáltatás működéséhez igényve vett külső szolgáltatók lehetnek k
 - mesterséges intelligencia szolgáltatók (Google, OpenAI, Anthropic),
 - biztonsági, naplózási vagy üzemeltetési szolgáltatások.
 
+Harmadik országba történő adattovábbítás. A felsorolt szolgáltatók egy része az Európai Gazdasági Térségen kívül, elsősorban az Amerikai Egyesült Államokban is végezhet adatfeldolgozást. Az ilyen továbbítás jogalapja az Európai Bizottság 2023. július 10-i, az EU–USA adatvédelmi keretre (Data Privacy Framework) vonatkozó megfelelőségi határozata azon szolgáltatók esetében, amelyek a keret tanúsított résztvevői, egyéb esetben az Európai Bizottság által elfogadott általános szerződési feltételek (GDPR 46. cikk (2) bekezdés c) pont). Az adatkezelő a szolgáltatóválasztásnál törekszik arra, hogy a tartós adattárolás (felhasználói adatbázis) az Európai Unión belül maradjon; a harmadik országba irányuló továbbítás a válaszgeneráláshoz szükséges átmeneti feldolgozásra korlátozódik.
+
 8. Adatmegőrzési idő
 Az adatok a felhasználói fiók aktív fennállásáig kerülnek megőrzésre. Mivel a Myra egy nonprofit kutatási és önismereti projekt, jogszabály nem írja elő az adatok kötelező megőrzési idejét.
 
@@ -91,7 +93,9 @@ NAIH elérhetőség:
 Nemzeti Adatvédelmi és Információszabadság Hatóság
 Web: https://www.naih.hu
 
-10. Automatizált döntéshozatal
+10. Automatizált döntéshozatal és mesterséges intelligencia
+A felhasználó a chatben mesterséges intelligencia rendszerrel áll kapcsolatban, nem emberi beszélgetőpartnerrel; erről az alkalmazás a beszélgetési felületen is tájékoztat (az (EU) 2024/1689 rendelet 50. cikk (1) bekezdése).
+
 A Myra nem hoz hivatalos joghatással járó vagy a felhasználót hasonlóan jelentős mértékben érintő automatizált döntést. Az állapotkódok, kategóriák és chatbot-válaszok tájékoztató, önismereti és reflektív célú visszajelzések, nem hivatalos diagnózisok és nem egészségügyi döntések.
 
 11. Kiskorúak

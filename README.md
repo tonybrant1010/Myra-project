@@ -258,7 +258,8 @@ KB_TEXT_UPLOAD_MAX_BYTES=2097152
 Postgres/Supabase alatt a keresés hibrid: pgvector cosine keresés és magyar szótövezett
 full-text ág (`to_tsquery('hungarian')`, GIN indexszel) fut egy SQL-ben, az eredmény
 RRF-fúzióval áll össze. SQLite (fejlesztői) módban FTS5/BM25 keresés fut. A chunkolás
-1400 karakter / 200 átfedés, az embedding a dokumentumcímmel együtt készül. A modellt
+**400 karakter / 80 átfedés** (2026-08-18 előtt 1400/200 volt — lásd lentebb), az
+embedding a dokumentumcímmel együtt készül. A modellt
 egy háttérfolyamat tartja melegen, hogy kevés RAM-ú VM-en se swapoljon ki tétlenség
 alatt.
 
@@ -289,6 +290,53 @@ A kettő együtt adja azt, hogy a részletek száma az üzenethez igazodik. Mér
 (2026-08-17): `kept=1..2` hétköznapi üzenetnél, `kept=5` témába vágónál; a prompt mérete
 ezzel együtt 10 600 és 15 900 karakter között mozog.
 
+**Változás 2026-08-18 — a beágyazó modell 128 tokennél elvágott mindent.**
+
+A `paraphrase-multilingual-MiniLM-L12-v2` `max_seq_length` értéke **128 token**. Magyar
+szakszövegen ez kb. **500 karakter**: efölött a szöveg vége nem kerül bele a vektorba.
+Cloud Shellben mérve, valódi tudásanyag-részleten: 500 karakternél az eltérés már csak
+0,117, **550-nél pontosan 0,000000** — vagyis a farok láthatatlan.
+
+A régi 1400-as darabolással ez azt jelentette, hogy **980 részletből 825 (84%) csonkolva
+indexelődött**, és a tudásanyag **601 619 karaktere — 57% — soha nem került be a
+szemantikus keresésbe**. A kulcsszavas ág (`to_tsquery`) viszont a teljes szöveget látja,
+ezért az hordta a rendszert: a szöveges találatok hoztak olyasmit, amit a vektoros ág meg
+sem talált.
+
+Javítás: a darabolás **400 karakter / 80 átfedés**, hogy a dokumentumcímmel együtt
+(leghosszabb cím 77 karakter) is beleférjen az ablakba. Mérés utána: 67 PDF, ~3100
+részlet, **nulla 400 karakter fölött, nulla embedding nélkül**, a tudásanyag 100%-a
+kereshető a 43% helyett.
+
+**A darabolót is javítani kellett** (2026-08-18): a régi verzió pontos karakterpozícióra
+vágott, ezért szó közepén tört, és a bekezdés végén pár karakteres törmelék maradt
+(`.`, `lja`, `ás).`, `zsgálatát.`). 1400-as mérettel ez nem tűnt fel, 400-asnál 3166
+darabból 108 lett ilyen. Mostantól **szóhatáron vág**, a következő darab mindig legalább
+egy új szóval kezdődik (csak-átfedésből álló darab nem jöhet létre), és a szóköz nélküli
+hosszú szövegek (URL, táblázat, hibás PDF-kinyerés) karakterre vágódnak, hogy azok se
+lépjék túl az ablakot.
+
+**Mérés az újradarabolás után (2026-08-18, irányított teszt).** Öt témapár, egyszer
+szaknyelven, egyszer hétköznapi megfogalmazásban:
+
+| kérdés | `best_dist` |
+|---|---|
+| Mit jelent a koreguláció a csoportban? | 0,368 |
+| Miért nyugszom meg attól, ha valaki higgadt marad mellettem? | 0,382 |
+| Hogyan zárul le a gyász pszichofiziológiailag? | 0,160 |
+| Egy éve halt meg apám, és még mindig ugyanúgy fáj. | 0,555 |
+
+Mind a tíz talált, és a hétköznapi megfogalmazás nem rosszabb — ez volt a cél. A prompt
+mérete 15 500-ról **11 300 karakterre** esett, a RAG-idő 2-11,5 mp-ről **0,2-1,1 mp-re**.
+
+**Nyitott, tudatosan meghagyva:** a `RAG_VECTOR_MAX_DISTANCE` küszöb a **csak szöveges**
+találatokra nem vonatkozik (nincs vektortávolságuk, ezért a szűrő feltétele nem fog
+rájuk). Emiatt zajos kérdésre is bemehet 3-5 részlet. Mérés szerint viszont a hétköznapi,
+valódi üzenetek egy részét is **ez az ág menti meg** (0,566-0,637-es vektortávolság
+mellett), ezért a kiskapu bezárása találatvesztéssel járna. A rendszerprompt amúgy is
+elhárítja a nem mentálhigiénés kérdéseket, tehát a zaj tokent és időt visz, nem
+válaszminőséget.
+
 RAG-hoz hangolható env változók:
 
 ```env
@@ -296,6 +344,9 @@ RAG_CHAT_CHUNKS=5
 RAG_VECTOR_MAX_DISTANCE=0.62
 RAG_CANDIDATE_POOL=20
 RAG_KEEPWARM_INTERVAL_S=240
+RAG_CHUNK_MAX_CHARS=400
+RAG_CHUNK_OVERLAP=80
+RAG_CHUNK_MIN_CHARS=120
 DISABLE_RAG_STARTUP_WARMUP=false
 FASTEMBED_MODEL_NAME=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 ```
@@ -303,6 +354,11 @@ FASTEMBED_MODEL_NAME=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 - `RAG_CHAT_CHUNKS`: hány részlet mehet legfeljebb egy chat-üzenethez. `0` esetén a keresés is elmarad — ez a 2026-08-12 (a tudásanyag újraindexelése) előtti állapot, és kérésenként 2-8 másodpercet spórol.
 - `RAG_VECTOR_MAX_DISTANCE`: 2026-08-17 óta **ténylegesen szűr**. Kisebb szám = szigorúbb. `1.0` kikapcsolja.
 - `RAG_CANDIDATE_POOL`: a hibrid fuzio jeloltszama aganként.
+- `RAG_CHUNK_MAX_CHARS` / `RAG_CHUNK_OVERLAP` / `RAG_CHUNK_MIN_CHARS`: a darabolás mérete,
+  átfedése és az a minimum, amely alatt a darab beolvad az előzőbe (ha belefér). **A
+  400-as alapérték a beágyazó modell 128 tokenes ablakához igazodik — feljebb véve a
+  darabok vége megint kimarad az indexből.** Változtatás után **újraindexelés kell**,
+  különben a régi vektorok maradnak.
 - `RAG_KEEPWARM_INTERVAL_S`: keep-warm gyakorisag masodpercben; `0` kikapcsolja.
 - `DISABLE_RAG_STARTUP_WARMUP=true`: kikapcsolja a startup RAG warmupot, ha gyors kontenerinditas fontosabb az elso RAG keresesi kesleltetesnel.
 
@@ -364,6 +420,40 @@ Az admin felületen a **Tudásanyag élesítése** gomb háttérfolyamatot indí
 
 Fontos: rebuild közben a tábla átmenetileg kiürülhet. Ez normális, amíg a chunk szám utána újra növekszik.
 
+**Amit érdemes tudni róla, mielőtt elindítod (2026-08-18-i tapasztalat):**
+
+- **Az első lépés egy `DELETE`.** A teljes futás alatt a chatbotnak nincs tudásanyaga,
+  minden fordulónál `kept=0` lesz. Ez nem hiba.
+- **Időtartam:** 67 PDF / ~3100 részlet nagyjából **45-75 perc** az e2-micro VM-en. A gép
+  CPU-ja végig terhelt, a chat lassabb.
+- **A gomb futás közben nem csinál semmit.** Az endpoint első sora `if
+  _kb_reindex_state.get("running"): return {"status": "already_running"}` — a többszöri
+  nyomás ártalmatlan, de a felületen úgy tűnhet, mintha „folytatná".
+- **Az admin munkamenet 1 óra, fix lejárattal** (nem tétlenségi — lásd
+  `create_access_token`). Egy hosszabb élesítést a bejelentkezésed **túlél**: menet közben
+  401-et kapsz és kidob. **A háttérfolyamat ettől függetlenül fut tovább**, csak a
+  státuszt nem látod. Jelentkezz be újra.
+- **Kapcsolatszakadás egy PDF-nél nem állítja meg a folyamatot**: a hiba fájlonként el van
+  kapva, a fájl a `skipped` listára kerül, a ciklus megy tovább. A végén ellenőrizd a
+  PDF-számot.
+- **Darabolási paraméter változtatása után kötelező.** A régi vektorok különben bent
+  maradnak, és a kód új beállítása nem érvényesül.
+
+Ellenőrzés a futás után:
+
+```sql
+SELECT count(*)                                       AS reszlet,
+       count(DISTINCT source_name)                    AS pdf,
+       count(*) FILTER (WHERE embedding_384 IS NULL)  AS embedding_nelkul,
+       count(*) FILTER (WHERE length(content) > 400)  AS tul_hosszu,
+       count(*) FILTER (WHERE length(content) < 50)   AS tormelek,
+       min(length(content))                           AS legrovidebb
+FROM knowledge_chunks;
+```
+
+Rendben van, ha a `pdf` annyi, ahány fájl a szerveren van, és az `embedding_nelkul`,
+`tul_hosszu`, `tormelek` mind **nulla**.
+
 ## Chat
 
 A chat az aktuális mérési sessionhöz kötődik. A backend a beszélgetés korábbi üzeneteiből kontrollált méretű kontextust ad át az LLM-nek.
@@ -414,17 +504,46 @@ a beszélgetés folyamatát kövesse, de ne húzza be feleslegesen a teljes rég
 
 ### Időkezelés
 
-A modell minden időbélyeget **magyar helyi időben** kap: az előzmény-üzenetek bélyegét, az
-aktuális üzenetét és a system prompt „Aktuális időpont" sorát is. Az adatbázis továbbra is
-UTC-ben tárol; a váltás csak a megjelenítésnél történik (`_to_local`, nyári/téli
-időszámítással, és kézi EU-s tartalékszabállyal, ha a konténerből hiányzik a tz-adatbázis).
+A modell minden időbélyeget **magyar helyi időben** kap. Az adatbázis továbbra is UTC-ben
+tárol; a váltás csak a megjelenítésnél történik (`_to_local`, nyári/téli időszámítással, és
+kézi EU-s tartalékszabállyal, ha a konténerből hiányzik a tz-adatbázis).
 
 2026-08-12 előtt a modell nyers UTC-t látott, ezért 14:20-kor 12:20-at hitt, és ennek
 megfelelően köszönt vagy tájékozódott az időben.
 
-A válaszból az esetleg beszivárgó `[ÉÉÉÉ.HH.NN ÓÓ:PP]` bélyeg eltávolításra kerül. A szűrő
-a hiányzó záró zárójelet és a zárójelen belüli sortörést is kezeli — a modell mindkettőt
-produkálta élesben.
+**Változás 2026-08-17 — időbélyeg csak a felhasználó üzenetein.**
+
+Korábban az előzmény **mindkét** szereplőjének üzenete `[2026.08.17 19:20] ` előtaggal ment
+vissza a kontextusba, és az aktuális üzenet is. A modell ebből azt olvasta ki, hogy „így írok
+én", és sajátmaga is időbélyeggel kezdte a választ — sőt, ha már átirat-módban volt, korábbi
+fordulókat is újraválaszolt.
+
+Mérés (2026-08-17-i felhasználói teszt, 21 forduló): **0-22 előzményüzenetnél nulla anomália**,
+utána 24, 30, 32 és 40-nél sorban egy-egy — két időbélyeg, egy `</div>`, egy U+2060. A javítás
+után ugyanaz a hossz (sőt 120-as előzmény) **nulla anomáliát** adott, két másik felhasználón is.
+
+Mostantól:
+- **időbélyeget csak a felhasználó üzenetei kapnak**, Myra saját korábbi válaszai nem;
+- a bélyeg **másodpercet is tartalmaz** (`2026.08.17 19:22:44`), mert azonos percbe eső két
+  üzenetnél enélkül nem állapítható meg a sorrend;
+- az aktuális időpont a system prompt `[IDŐ KONTEXTUS]` blokkjából is megvan, tehát a
+  „jó reggelt este" hiba ettől nem jön vissza.
+
+**Kimeneti biztonsági háló.** A válasz elejéről levágjuk az esetleg átszivárgó
+`[ÉÉÉÉ.HH.NN ÓÓ:PP]` bélyeget, a `</div>` típusú formátum-törmeléket és a láthatatlan
+karaktereket (U+200B–U+200F, U+2060, U+FEFF). A vágás **ismétlődik**, amíg tiszta nem lesz: a
+korábbi egyszeri `re.sub` csak az ELSŐ előtagot vitte el, ezért ha a modell kettőt írt egymás
+után, a második bennmaradt — pontosan ez került ki a felhasználóhoz.
+
+Ha a háló ténylegesen levág valamit, egy sor megy a logba:
+
+```
+reply_cleaned context=chat removed_chars=20
+```
+
+Üzenettartalmat szándékosan **nem** naplózunk, csak a tényt és a karakterszámot — így mérhető,
+hogy a bemeneti oldali javítás után próbálkozik-e még a modell. 2026-08-17 óta négy mérésen
+(köztük 120-as előzményen) egyetlen ilyen sor sem keletkezett.
 
 ## Live Beszélgetés
 

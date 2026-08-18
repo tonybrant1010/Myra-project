@@ -788,8 +788,8 @@ export default function ChatScreen() {
 
           <View style={styles.disclaimerBar}>
             <FeedbackButton context="chat" />
-            <T variant="small" color="rgba(247,251,255,0.42)" align="center" style={styles.disclaimerText}>
-              A Myra egy mesterséges intelligenciával támogatott önismereti asszisztens. Nem ad orvosi tanácsot és nem helyettesíti a szakembert.
+            <T variant="small" color="rgba(247,251,255,0.58)" align="center" style={styles.disclaimerText}>
+              Mesterséges intelligenciával beszélgetsz, nem emberrel. A Myra nem ad orvosi tanácsot és nem helyettesíti a szakembert.
             </T>
           </View>
         </KeyboardAvoidingView>

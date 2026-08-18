@@ -274,6 +274,22 @@ RAG_CANDIDATE_POOL = _env_int("RAG_CANDIDATE_POOL", 20, 5, 50)
 # újraépítés nélkül, a .env-ből.
 RAG_CHAT_CHUNKS = _env_int("RAG_CHAT_CHUNKS", 5, 0, 10)
 RAG_KEEPWARM_INTERVAL_S = _env_int("RAG_KEEPWARM_INTERVAL_S", 240, 0, 3600)
+# A beagyazo modell (paraphrase-multilingual-MiniLM-L12-v2) max_seq_length ertek 128 TOKEN.
+# Magyar szakszovegen ez ~500 karakter: efolott a szoveg vege NEM kerul be a vektorba.
+# 2026-08-18-i meres (Cloud Shell, valodi tudasanyag-reszlet): 500 karakternel az elteres
+# mar csak 0.117, 550-nel pontosan 0.000000 -- vagyis a farok lathatatlan.
+# A regi 1400-as darabolassal a 980 reszletbol 825 (84%) csonkolva indexelodott, es a
+# tudasanyag 601 619 karaktere (57%) SOHA nem kerult be a szemantikus keresesbe. A
+# kulcsszavas ag (Postgres to_tsquery) a teljes szoveget latja -- ezert az hordta eddig
+# a rendszert.
+# A cim is a beagyazasba megy ("{title}\n{chunk}"), a leghosszabb cim 77 karakter,
+# ezert a darab merete 400, hogy a cimmel egyutt is beleferjen.
+# FONTOS: a valtoztatas utan UJRAINDEXELES kell, kulonben a regi, csonkolt vektorok
+# maradnak az adatbazisban.
+RAG_CHUNK_MAX_CHARS = _env_int("RAG_CHUNK_MAX_CHARS", 400, 120, 2000)
+RAG_CHUNK_OVERLAP = _env_int("RAG_CHUNK_OVERLAP", 80, 0, 400)
+# Ennel rovidebb darab ne alljon onalloan az indexben, ha a szomszedjaba beolvaszthato.
+RAG_CHUNK_MIN_CHARS = _env_int("RAG_CHUNK_MIN_CHARS", 120, 0, 1000)
 try:
     RAG_VECTOR_MAX_DISTANCE = float(os.environ.get("RAG_VECTOR_MAX_DISTANCE", "0.62"))
 except ValueError:
@@ -1136,7 +1152,80 @@ def _extract_pdf_text(path: Path) -> str:
     return "\n\n".join(pages).strip()
 
 
-def _chunk_text(text: str, max_chars: int = 1400, overlap: int = 200) -> list[str]:
+def _split_long_paragraph(paragraph: str, max_chars: int, overlap: int) -> list[str]:
+    """Hosszu bekezdes darabolasa SZOHATARON.
+
+    A korabbi valtozat pontos karakterpoziciokra vagott (paragraph[start:start+max_chars]),
+    ezert szo kozepen tort, es a bekezdes VEGEN gyakran par karakteres torzs maradt:
+    ".", "lja", "as).", "zsgalatat.". 2026-08-18-i ujraindexelesnel 3166 darabbol 108 volt
+    ilyen -- mindegyik szo szerint benne volt az elozo darabban is (a 80-as atfedes miatt),
+    vagyis tiszta zaj a vektorindexben. Itt szavankent epitunk, es a kovetkezo darab mindig
+    legalabb egy UJ szoval kezdodik, tehat csak-atfedes darab nem jon letre.
+    """
+    words: list[str] = []
+    for szo in paragraph.split():
+        if len(szo) <= max_chars:
+            words.append(szo)
+        else:
+            # Egyetlen "szo" hosszabb a keretnel: URL, tablazat, vagy hibas PDF-kinyeres
+            # (szokozok nelkuli szoveg). Itt nincs szohatar, amin vaghatnank, tehat
+            # karakterre vagunk -- kulonben a darab tullepne a modell 128 tokenes ablakat,
+            # es megint csonkolva indexelodne.
+            words.extend(szo[k:k + max_chars] for k in range(0, len(szo), max_chars))
+    if not words:
+        return []
+    out: list[str] = []
+    i = 0
+    while i < len(words):
+        current: list[str] = []
+        used = 0
+        j = i
+        while j < len(words):
+            extra = len(words[j]) if not current else len(words[j]) + 1
+            if current and used + extra > max_chars:
+                break
+            current.append(words[j])
+            used += extra
+            j += 1
+        out.append(" ".join(current))
+        if j >= len(words):
+            break
+        # Atfedes: a kovetkezo darab az elozo utolso par szavaval indul, de a kezdopont
+        # mindig elorebb lep (s >= i+1), kulonben vegtelen ciklus lenne.
+        s = j
+        vissza = 0
+        while s > i + 1 and vissza + len(words[s - 1]) + 1 <= overlap:
+            s -= 1
+            vissza += len(words[s]) + 1
+        i = s
+    return out
+
+
+def _merge_short_chunks(chunks: list[str], max_chars: int, min_chars: int) -> list[str]:
+    """A tul rovid darabokat beolvasztja az elozobe, ha belefernek.
+
+    Torolni nem szabad oket: a rovid darabok egy resze valodi, egyedi tartalom
+    (cimsor, felsorolas). Ha nem fer bele az elozobe, marad onalloan.
+    """
+    if min_chars <= 0:
+        return chunks
+    out: list[str] = []
+    for chunk in chunks:
+        if (out and len(chunk) < min_chars
+                and len(out[-1]) + len(chunk) + 2 <= max_chars):
+            out[-1] = f"{out[-1]}\n\n{chunk}"
+        else:
+            out.append(chunk)
+    return out
+
+
+def _chunk_text(text: str, max_chars: Optional[int] = None, overlap: Optional[int] = None,
+                min_chars: Optional[int] = None) -> list[str]:
+    max_chars = RAG_CHUNK_MAX_CHARS if max_chars is None else max_chars
+    overlap = RAG_CHUNK_OVERLAP if overlap is None else overlap
+    min_chars = RAG_CHUNK_MIN_CHARS if min_chars is None else min_chars
+    overlap = min(overlap, max(0, max_chars - 1))  # kulonben a ciklus nem halad
+    min_chars = min(min_chars, max_chars)
     text = _clean_pdf_text(text)
     if not text:
         return []
@@ -1148,21 +1237,17 @@ def _chunk_text(text: str, max_chars: int = 1400, overlap: int = 200) -> list[st
             if current:
                 chunks.append(current.strip())
                 current = ""
-            start = 0
-            while start < len(paragraph):
-                chunks.append(paragraph[start:start + max_chars].strip())
-                start += max_chars - overlap
+            chunks.extend(_split_long_paragraph(paragraph, max_chars, overlap))
             continue
         candidate = (current + "\n\n" + paragraph).strip() if current else paragraph
         if len(candidate) > max_chars and current:
             chunks.append(current.strip())
-            tail = current[-overlap:].strip()
-            current = (tail + "\n\n" + paragraph).strip() if tail else paragraph
+            current = paragraph
         else:
             current = candidate
     if current.strip():
         chunks.append(current.strip())
-    return chunks
+    return _merge_short_chunks([c for c in chunks if c.strip()], max_chars, min_chars)
 
 
 def _knowledge_title_from_file(path: Path) -> str:
@@ -4618,12 +4703,49 @@ async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str,
     raise HTTPException(status_code=400, detail=f"Ismeretlen LLM provider: {provider}")
 
 
+# A modell idonkent atveszi az elozmeny formatumat, es sajat idobelyeggel vagy
+# formatum-tormelekkel kezdi a valaszt (2026-08-17-i felhasznaloi teszt: ket idobelyeg,
+# egy "</div>", egy U+2060). A korabbi egyszeri re.sub csak AZ ELSO elotagot vitte el,
+# ezert ha a modell kettot irt egymas utan, a masodik bennmaradt. Most ismetelve vagunk.
+_TS_PREFIX_RX = re.compile(r"^\s*\[\s*\d{4}\.\d{2}\.\d{2}\.?\s+\d{1,2}[:.]\d{2}(?:[:.]\d{2})?\s*\]?\s*")
+_MARKUP_PREFIX_RX = re.compile(r"^\s*</?[a-zA-Z][a-zA-Z0-9-]*\s*/?>\s*")
+_INVISIBLE_RX = re.compile(r"[\u200b-\u200f\u2060\ufeff]")
+
+
+def _clean_llm_reply(raw: Any, context: str = "chat") -> str:
+    """Levagja a valasz elejerol az atszivargott formatumot.
+
+    Szandekosan NEM naplozunk uzenettartalmat, csak a tenyt es a levagott karakterszamot.
+    Igy merheto, hogy a bemeneti oldali javitas (idobelyeg csak a felhasznalon) utan
+    probalkozik-e meg a modell: ha a "reply_cleaned" sorok elfogynak, kesz vagyunk.
+    """
+    original = str(raw).strip()
+    text = _INVISIBLE_RX.sub("", original)
+    while True:
+        stripped = _MARKUP_PREFIX_RX.sub("", _TS_PREFIX_RX.sub("", text))
+        if stripped == text:
+            break
+        text = stripped
+    text = text.strip()
+    if text != original:
+        logger.warning("reply_cleaned context=%s removed_chars=%d", context, len(original) - len(text))
+    return text
+
+
 def _format_chat_history_for_llm(messages: list[ChatMessage]) -> list[dict]:
     formatted: list[dict] = []
     used_chars = 0
     selected = list(messages[-CHAT_HISTORY_MAX_MESSAGES:])
     for m in reversed(selected):
-        ts_str = _to_local(m.created_at).strftime("%Y.%m.%d %H:%M") if m.created_at else ""
+        # Idobelyeg CSAK a felhasznaloi uzeneteken. Amig Myra sajat korabbi valaszai is
+        # "[2026.08.17 19:20] " elotaggal jottek vissza a kontextusba, a modell azt olvasta
+        # ki beloluk, hogy "igy irok en", es sajat idobelyeggel kezdte a valaszt. A szogletes
+        # zarojel mostantol kizarolag a felhasznalo oldalan jelenik meg.
+        # Masodperc: azonos percbe eso ket uzenetnel enelkul nem allapithato meg a sorrend.
+        ts_str = (
+            _to_local(m.created_at).strftime("%Y.%m.%d %H:%M:%S")
+            if (m.created_at and m.role == "user") else ""
+        )
         prefix = f"[{ts_str}] " if ts_str else ""
         text = f"{prefix}{m.text}"
         message_cost = len(text) + 24
@@ -4768,10 +4890,10 @@ async def chat_send(
     sys_prompt = _build_system_prompt(sys_prompt_base, effective_kb, sc, user.name, user.code_verified_at, extra_context=goals_block)
     mark_timing("prompt", phase_started)
     try:
-        now_ts_str = _to_local(_now()).strftime("%Y.%m.%d %H:%M")
+        now_ts_str = _to_local(_now()).strftime("%Y.%m.%d %H:%M:%S")
         phase_started = time.perf_counter()
         reply = await _call_llm(provider, model, api_key, sys_prompt, history, f"[{now_ts_str}] {text}")
-        reply = re.sub(r"^\s*\[\s*\d{4}\.\d{2}\.\d{2}\.?\s+\d{1,2}[:.]\d{2}\s*\]?\s*", "", str(reply))
+        reply = _clean_llm_reply(reply, "chat")
         mark_timing("llm", phase_started)
     except HTTPException:
         raise
@@ -4930,7 +5052,7 @@ async def chat_checkin(request: Request, user: User = Depends(get_current_user),
             settings["llm_provider"], settings["llm_model"], settings["llm_api_key"],
             sys_prompt, history, CHECKIN_INSTRUCTION,
         )
-        reply = re.sub(r"^\s*\[\s*\d{4}\.\d{2}\.\d{2}\.?\s+\d{1,2}[:.]\d{2}\s*\]?\s*", "", str(reply)).strip()
+        reply = _clean_llm_reply(reply, "checkin")
     except Exception:
         logger.exception("Proactive check-in LLM error")
         return {"message": None}

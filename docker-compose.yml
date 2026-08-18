@@ -62,6 +62,10 @@ services:
       - RAG_VECTOR_MAX_DISTANCE=${RAG_VECTOR_MAX_DISTANCE:-0.62}
       - RAG_CANDIDATE_POOL=${RAG_CANDIDATE_POOL:-20}
       - RAG_KEEPWARM_INTERVAL_S=${RAG_KEEPWARM_INTERVAL_S:-240}
+      # A beágyazó modell 128 tokennél (~500 karakter) elvág. Ennél nagyobb darab
+      # vége nem kerül a vektorba. Változtatás után ÚJRAINDEXELÉS kell!
+      - RAG_CHUNK_MAX_CHARS=${RAG_CHUNK_MAX_CHARS:-400}
+      - RAG_CHUNK_OVERLAP=${RAG_CHUNK_OVERLAP:-80}
       # Felolvasás. Korábban ez a három sor hiányzott, ezért a TTS_ENGINE sosem
       # jutott el a konténerbe: alapértelmezésben "none" maradt, és a /tts/speak
       # végpont élesben 503-at adott. Értéke "gemini", "piper" vagy "none".

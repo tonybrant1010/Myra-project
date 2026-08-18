@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Myra backend deploy fustteszttel es automatikus visszaallassal.
+"""Myra backend deploy fusttesztel es automatikus visszaallassal.
 
 A `docker compose up -d --build backend` helyett ezt futtasd. Amit csinal:
 

@@ -520,8 +520,8 @@ export default function MyraLiveScreen() {
         </ScrollView>
         <View style={styles.disclaimerBar}>
           <FeedbackButton context="live" />
-          <T variant="small" color="rgba(247,251,255,0.42)" align="center" style={styles.disclaimerText}>
-            A Myra Live egy mesterséges intelligenciával támogatott önismereti asszisztens. Nem ad orvosi tanácsot és nem helyettesíti a szakembert.
+          <T variant="small" color="rgba(247,251,255,0.58)" align="center" style={styles.disclaimerText}>
+            Mesterséges intelligenciával beszélgetsz, nem emberrel. A Myra Live nem ad orvosi tanácsot és nem helyettesíti a szakembert.
           </T>
         </View>
       </ContentBackground>
