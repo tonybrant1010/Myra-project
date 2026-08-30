@@ -10,6 +10,7 @@ import {
   Platform,
   Alert,
   type LayoutChangeEvent,
+  type ViewStyle,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth, authedFetch } from "@/src/auth/AuthContext";
@@ -18,7 +19,6 @@ import { theme } from "@/src/theme";
 import TopBar from "@/src/components/TopBar";
 import ContentBackground from "@/src/components/ContentBackground";
 import { T } from "@/src/components/Typography";
-import type { ViewStyle } from "react-native";
 
 /** A `backdropFilter` bongeszos CSS-tulajdonsag: RN Web futasidoben atengedi a DOM-nak,
  *  a ViewStyle tipus viszont nem ismeri, ezert a `tsc --noEmit` elhasal rajta. Igy a
@@ -51,13 +51,13 @@ type ChatActivity = {
   last_7d: { assistant_messages: number; user_messages: number; active_users: number };
   last_30d: { assistant_messages: number; user_messages: number; active_users: number };
   last_message_at: string | null;
-  top_users_24h: Array<{
+  top_users_24h: {
     id: number;
     name: string;
     email: string;
     message_count: number;
     last_message_at: string | null;
-  }>;
+  }[];
 };
 
 const chartDimensions = [

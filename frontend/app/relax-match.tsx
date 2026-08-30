@@ -43,7 +43,7 @@ export default function RelaxMatchScreen() {
         if (val !== null) {
           setHighScore(parseInt(val, 10));
         }
-      } catch (e) {}
+      } catch {}
     };
     loadHighScore();
     startNewGame();
@@ -251,7 +251,7 @@ export default function RelaxMatchScreen() {
         } else {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }
-      } catch (e) {
+      } catch {
         Vibration.vibrate(50);
       }
 
@@ -316,7 +316,7 @@ export default function RelaxMatchScreen() {
       setTimeout(() => setShowShuffleBanner(false), 2000);
       try {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      } catch (e) {}
+      } catch {}
     }
 
     setAnimating(false);
@@ -341,7 +341,7 @@ export default function RelaxMatchScreen() {
         }
         try {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-        } catch (e) {}
+        } catch {}
       }
       return currentMoves;
     });
@@ -370,7 +370,7 @@ export default function RelaxMatchScreen() {
       setSelected({ r, c });
       try {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      } catch (e) {}
+      } catch {}
       return;
     }
 
@@ -394,7 +394,7 @@ export default function RelaxMatchScreen() {
 
         try {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-        } catch (e) {
+        } catch {
           Vibration.vibrate(80);
         }
         await sleep(250);
@@ -408,7 +408,7 @@ export default function RelaxMatchScreen() {
       setSelected({ r, c });
       try {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      } catch (e) {}
+      } catch {}
     }
   };
 

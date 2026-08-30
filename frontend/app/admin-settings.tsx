@@ -19,7 +19,7 @@ import TopBar from "@/src/components/TopBar";
 import { T } from "@/src/components/Typography";
 import { shadow, theme } from "@/src/theme";
 
-type Provider = "openai" | "anthropic" | "gemini" | "groq" | "cerebras" | "mistral";
+type Provider = "openai" | "anthropic" | "gemini" | "groq" | "cerebras" | "mistral" | "ollama";
 
 type Settings = {
   llm_provider: Provider;
@@ -34,7 +34,7 @@ type Settings = {
   live_api_key_preview: string;
 };
 
-const PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "groq", "cerebras", "mistral"];
+const PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "groq", "cerebras", "mistral", "ollama"];
 const MODEL_MAX_CHARS = 160;
 const API_KEY_MAX_CHARS = 4096;
 const SYSTEM_PROMPT_MAX_CHARS = 50000;

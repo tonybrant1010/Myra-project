@@ -51,7 +51,7 @@ export default function RelaxSnakeScreen() {
         if (val !== null) {
           setHighScore(parseInt(val, 10));
         }
-      } catch (e) {}
+      } catch {}
     };
     loadHighScore();
   }, []);
@@ -138,7 +138,7 @@ export default function RelaxSnakeScreen() {
       setFood(generateFood(newSnake));
       try {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      } catch (e) {
+      } catch {
         Vibration.vibrate(40);
       }
     } else {
@@ -166,7 +166,7 @@ export default function RelaxSnakeScreen() {
     }
     try {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-    } catch (e) {
+    } catch {
       Vibration.vibrate(150);
     }
   };
@@ -182,7 +182,7 @@ export default function RelaxSnakeScreen() {
     directionRef.current = newDir;
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch (e) {}
+    } catch {}
   };
 
   const startNewGame = () => {
@@ -223,7 +223,7 @@ export default function RelaxSnakeScreen() {
     setIsRunning(false);
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    } catch (e) {}
+    } catch {}
   };
 
   const toggleGame = () => {
@@ -233,7 +233,7 @@ export default function RelaxSnakeScreen() {
       setIsRunning((prev) => !prev);
       try {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      } catch (e) {}
+      } catch {}
     }
   };
 
@@ -353,7 +353,7 @@ export default function RelaxSnakeScreen() {
                             setSpeed(s);
                             try {
                               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                            } catch (e) {}
+                            } catch {}
                           }}
                           activeOpacity={0.8}
                         >

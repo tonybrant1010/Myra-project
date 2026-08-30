@@ -156,7 +156,6 @@ export default function RelaxSudokuScreen() {
   const { token } = useAuth();
 
   const [boardSize, setBoardSize] = useState<SudokuSize>(4);
-  const [solvedBoard, setSolvedBoard] = useState<number[][]>([]);
   const [puzzleBoard, setPuzzleBoard] = useState<(number | null)[][]>([]);
   const [playerBoard, setPlayerBoard] = useState<(number | null)[][]>([]);
 
@@ -180,7 +179,7 @@ export default function RelaxSudokuScreen() {
         } else {
           setBestTime(null);
         }
-      } catch (e) {}
+      } catch {}
     };
     loadBestTime();
   }, [boardSize]);
@@ -215,13 +214,12 @@ export default function RelaxSudokuScreen() {
   }
 
   const startNewGame = (size: SudokuSize) => {
-    const { solved, puzzle } = generateSudoku(size);
+    const { puzzle } = generateSudoku(size);
 
 
     const initBoard = puzzle.map((row) => row.map((val) => (val === 0 ? null : val)));
     const playBoard = puzzle.map((row) => row.map((val) => (val === 0 ? null : val)));
 
-    setSolvedBoard(solved);
     setPuzzleBoard(initBoard);
     setPlayerBoard(playBoard);
     setSelectedCell(null);
@@ -237,7 +235,7 @@ export default function RelaxSudokuScreen() {
 
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    } catch (e) {}
+    } catch {}
   };
 
   const handleCellPress = (r: number, c: number) => {
@@ -247,7 +245,7 @@ export default function RelaxSudokuScreen() {
     setSelectedCell({ r, c });
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch (e) {}
+    } catch {}
   };
 
   const handleNumberInput = (num: number | null) => {
@@ -260,7 +258,7 @@ export default function RelaxSudokuScreen() {
 
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch (e) {}
+    } catch {}
 
 
     const hasConflictsList = checkConflicts(newBoard, boardSize);
@@ -298,7 +296,7 @@ export default function RelaxSudokuScreen() {
 
       try {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      } catch (e) {
+      } catch {
         Vibration.vibrate(200);
       }
     }
@@ -312,7 +310,7 @@ export default function RelaxSudokuScreen() {
         await AsyncStorage.setItem(key, timer.toString());
         setBestTime(timer);
       }
-    } catch (e) {}
+    } catch {}
   };
 
   const resetToStartScreen = () => {
@@ -519,7 +517,7 @@ export default function RelaxSudokuScreen() {
                           setBoardSize(size);
                           try {
                             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                          } catch (e) {}
+                          } catch {}
                         }}
                         activeOpacity={0.8}
                       >

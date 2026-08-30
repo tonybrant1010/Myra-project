@@ -219,7 +219,7 @@ function EditorModal({
         return;
       }
       onSaved();
-    } catch (err) {
+    } catch {
       setError("Hálózati hiba történt a mentés során.");
     } finally {
       setBusy(false);

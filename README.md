@@ -56,6 +56,7 @@ A frontend Vercelen fut. A backend Google Cloud VM-en fut Docker konténerben, C
 - felhasználói fiók és adatok végleges önkiszolgáló törlése (GDPR Art. 17);
 - Gemini Live beszélgetés az aktuális kapcsolat idejére korlátozott kontextussal;
 - Fórum (csoportos üzenőfal) egyedi becenevekkel, 12 választható emoji-avatarral, magyar trágárságszűrővel és szerzői/adminisztrátori törlési jogkörökkel;
+- Játszótér (Kikapcsolódás): kifestő, memóriajáték, kígyó és sudoku, globális ranglistával és választható becenévvel;
 - PDF-alapú hibrid (pgvector + magyar full-text, RRF) RAG tudásvisszakeresés relevancia-küszöbbel;
 - FastEmbed in-memory normalizált embedding gyorsítótár a válaszok gyorsításához és erőforrás-takarékossághoz;
 - admin tudásanyag-kezelés PDF feltöltéssel, törléssel és háttérben futó élesítéssel;
@@ -79,7 +80,9 @@ A frontend Vercelen fut. A backend Google Cloud VM-en fut Docker konténerben, C
 - JWT auth
 - Gmail SMTP MFA kódokhoz
 - Docker / Docker Compose
-- LLM provider admin felületről konfigurálva
+- LLM provider admin felületről konfigurálva: OpenAI, Anthropic, Gemini, Groq, Cerebras, Mistral,
+  valamint **Ollama** helyben futó modellekhez (`http://localhost:11434`, API kulcs nélkül;
+  ajánlott modellek: `myra`, `puli`, `racka`)
 - Statikus kód- és függőség-sérülékenység ellenőrzés (bandit, pip-audit)
 - Automatizált pytest tesztcsomag (biztonsági és megfelelőségi tesztek: OWASP szűrések, JWT token érvényesség, MFA ellenőrzés, biztonsági HTTP fejlécek validálása és GDPR megfelelőségi folyamatok)
 
@@ -586,6 +589,12 @@ frontend/
     chat.tsx
     forum.tsx
     myra-live.tsx
+    relax.tsx
+    relax-coloring.tsx
+    relax-match.tsx
+    relax-snake.tsx
+    relax-sudoku.tsx
+    relax-leaderboard.tsx
   src/
     components/
       FeedbackButton.tsx

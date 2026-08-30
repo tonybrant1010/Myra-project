@@ -20,6 +20,14 @@ import TopBar from "@/src/components/TopBar";
 import ContentBackground from "@/src/components/ContentBackground";
 import { T } from "@/src/components/Typography";
 import { setForumSeenAt, newestCreatedAt } from "@/src/utils/forumSeen";
+import type { TextStyle } from "react-native";
+
+/** A `word-break` / `overflow-wrap` bongeszos CSS-tulajdonsag: RN Web futasidoben
+ *  atengedi a DOM-nak, a TextStyle tipus viszont nem ismeri, ezert a `tsc --noEmit`
+ *  elhasal rajta. Nativon nincs ra szukseg, ott a Text amugy is tor. */
+const webWordBreak = (Platform.OS === "web"
+  ? { wordBreak: "break-word", overflowWrap: "break-word" }
+  : {}) as TextStyle;
 
 type ForumPost = {
   id: number;
@@ -388,6 +396,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(79,209,197,0.16)",
     position: "relative",
+    // A maxWidth: "85%" a SZULON (messageWrapper) van, a buborekon nem. RN-ben a
+    // flexShrink alapertelmezesben 0, ezert a buborek a sajat tartalmi szelesseget
+    // vette fel es kilogott a szulojebol. Sajat bejegyzesnel (row-reverse) balra,
+    // masenal jobbra -- innen jott, hogy az egyik telefonon az eleje, a masikon a
+    // vege hianyzott. Asztali gepen a viewport eleg szeles volt, ezert nem latszott.
+    flexShrink: 1,
+    minWidth: 0,
   },
   messageBubbleOwn: {
     backgroundColor: "rgba(6,42,67,0.85)",
@@ -408,6 +423,10 @@ const styles = StyleSheet.create({
   },
   messageText: {
     lineHeight: 20,
+    // Egy hosszu, szokoz nelkuli szovegfolyam (link, egybeirt szo) onmagaban
+    // szelesebb, mint a buborek -- a zsugoritas ezt egyedul nem oldja meg,
+    // torni is kell tudni.
+    ...webWordBreak,
   },
   deleteBtn: {
     padding: 4,

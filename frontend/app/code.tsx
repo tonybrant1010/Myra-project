@@ -24,7 +24,7 @@ export default function CodeScreen() {
   const [digits, setDigits] = useState<string[]>(["", "", "", ""]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const refs = useRef<Array<TextInput | null>>([null, null, null, null]);
+  const refs = useRef<(TextInput | null)[]>([null, null, null, null]);
 
   const handleChange = (idx: number, raw: string) => {
     const v = raw.replace(/[^0-9]/g, "").slice(-1);

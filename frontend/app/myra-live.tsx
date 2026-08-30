@@ -85,8 +85,6 @@ export default function MyraLiveScreen() {
   const { token } = useAuth();
   const [phase, setPhase] = useState<LivePhase>("idle");
   const [status, setStatus] = useState("Érintsd meg a mikrofont a beszélgetéshez.");
-  const [userTranscript, setUserTranscript] = useState("");
-  const [myraTranscript, setMyraTranscript] = useState("");
   const pulse = useRef(new Animated.Value(0)).current;
   const sessionRef = useRef<Session | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -267,12 +265,8 @@ export default function MyraLiveScreen() {
       setStatus("Hallgatlak.");
     }
     if (content.inputTranscription?.text) {
-      setUserTranscript((current) => `${current}${content.inputTranscription.text}`);
       setPhase("thinking");
       setStatus("Myra figyel.");
-    }
-    if (content.outputTranscription?.text) {
-      setMyraTranscript((current) => `${current}${content.outputTranscription.text}`);
     }
 
     const parts = content.modelTurn?.parts || [];
@@ -294,7 +288,6 @@ export default function MyraLiveScreen() {
         if (!mountedRef.current || !sessionRef.current) return;
         setPhase("listening");
         setStatus("Hallgatlak.");
-        setUserTranscript("");
       }, remainingMs + 80);
     }
   }, [playAudioChunk, stopPlayback]);
@@ -348,8 +341,6 @@ export default function MyraLiveScreen() {
 
     setPhase("connecting");
     setStatus("Kapcsolódás Myrához...");
-    setUserTranscript("");
-    setMyraTranscript("");
     closingRef.current = false;
 
     let connectTimer: ReturnType<typeof globalThis.setTimeout> | null = null;

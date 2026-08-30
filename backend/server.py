@@ -2250,7 +2250,7 @@ class StateCodeIn(BaseModel):
 
 
 class SettingsIn(BaseModel):
-    llm_provider: Optional[Literal["openai", "anthropic", "gemini", "groq", "cerebras", "mistral"]] = None
+    llm_provider: Optional[Literal["openai", "anthropic", "gemini", "groq", "cerebras", "mistral", "ollama"]] = None
     llm_model: Optional[str] = Field(None, max_length=160)
     llm_api_key: Optional[str] = None
     system_prompt: Optional[str] = None
@@ -4537,43 +4537,6 @@ async def _get_fastembed_embedding(text: str) -> list[float]:
     return await asyncio.to_thread(_sync_get_fastembed_embedding, text)
 
 
-async def _unused_external_embedding(api_key: str, text: str) -> list[float]:
-    if not api_key:
-        raise ValueError("API kulcs hiányzik az embedding generáláshoz.")
-    url = ""
-    payload = {
-        "content": {
-            "parts": [{"text": text}]
-        },
-        "output_dimensionality": 768,
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": api_key,
-    }
-    max_retries = 3
-    last_err = ""
-    for attempt in range(max_retries):
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                r = await client.post(url, headers=headers, json=payload)
-            if r.status_code == 200:
-                data = r.json()
-                values = []
-                if isinstance(data.get("embedding"), dict):
-                    values = data["embedding"].get("values", [])
-                elif isinstance(data.get("embeddings"), list) and data["embeddings"]:
-                    values = data["embeddings"][0].get("values", [])
-                if len(values) == 768:
-                    return [float(x) for x in values]
-                raise ValueError("Üres embedding érkezett a Gemini API-tól.")
-            last_err = f"status={r.status_code} response={r.text[:200]}"
-        except Exception as e:
-            last_err = str(e)
-        if attempt < max_retries - 1:
-            await asyncio.sleep(2 ** attempt)
-    raise RuntimeError(f"Nem sikerült az embedding lekérése a Gemini-től: {last_err}")
-
 
 def _llm_remaining_budget(deadline: float) -> float:
     """Hátralévő idő a teljes LLM-keretből; 0 vagy kevesebb esetén nincs újrapróbálkozás."""
@@ -4581,12 +4544,13 @@ def _llm_remaining_budget(deadline: float) -> float:
 
 
 async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str, history: List[dict], user_message: str) -> str:
-    if not api_key:
+    if provider != "ollama" and not api_key:
         raise HTTPException(status_code=400, detail="Nincs API kulcs beállítva. Az admin a Beállítások menüben megadhatja.")
 
-    if provider in ("openai", "groq", "cerebras", "mistral"):
+    if provider in ("openai", "groq", "cerebras", "mistral", "ollama"):
         base_url = (
-            "https://api.openai.com/v1/chat/completions" if provider == "openai"
+            "http://localhost:11434/v1/chat/completions" if provider == "ollama"
+            else "https://api.openai.com/v1/chat/completions" if provider == "openai"
             else "https://api.groq.com/openai/v1/chat/completions" if provider == "groq"
             else "https://api.cerebras.ai/v1/chat/completions" if provider == "cerebras"
             else "https://api.mistral.ai/v1/chat/completions"
@@ -5214,6 +5178,9 @@ SUGGESTED_MODELS = {
     "mistral": [
         "mistral-large-latest", "mistral-medium-latest", "mistral-small-latest",
         "open-mistral-nemo", "codestral-latest",
+    ],
+    "ollama": [
+        "myra", "puli", "racka",
     ],
 }
 

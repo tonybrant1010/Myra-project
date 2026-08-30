@@ -62,7 +62,7 @@ export default function ResetPasswordScreen() {
       } else {
         setError(data.detail || "Hiba történt a jelszó visszaállítása során.");
       }
-    } catch (e) {
+    } catch {
       setBusy(false);
       setError("Nem sikerült elérni a szervert.");
     }

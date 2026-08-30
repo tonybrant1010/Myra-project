@@ -107,7 +107,7 @@ export default function RelaxColoringScreen() {
 
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch (e) {}
+    } catch {}
   };
 
   return (
@@ -132,7 +132,7 @@ export default function RelaxColoringScreen() {
                     setActiveTemplate(name);
                     try {
                       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                    } catch (e) {}
+                    } catch {}
                   }}
                   activeOpacity={0.75}
                 >
@@ -198,7 +198,7 @@ export default function RelaxColoringScreen() {
                       setActiveColor(color);
                       try {
                         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      } catch (e) {}
+                      } catch {}
                     }}
                     activeOpacity={0.8}
                   >

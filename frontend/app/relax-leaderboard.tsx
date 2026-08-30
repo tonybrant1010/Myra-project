@@ -70,7 +70,7 @@ export default function RelaxLeaderboardScreen() {
       } else {
         setError("Nem sikerült letölteni a ranglistát.");
       }
-    } catch (e) {
+    } catch {
       setError("Hálózati hiba a ranglista letöltésekor.");
     } finally {
       setLoading(false);
@@ -87,7 +87,7 @@ export default function RelaxLeaderboardScreen() {
     if (!cleanNickname) {
       try {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      } catch (e) {}
+      } catch {}
       return;
     }
 
@@ -104,7 +104,7 @@ export default function RelaxLeaderboardScreen() {
         setIsEditingNickname(false);
         try {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        } catch (e) {}
+        } catch {}
         Keyboard.dismiss();
 
         loadLeaderboard();
@@ -112,7 +112,7 @@ export default function RelaxLeaderboardScreen() {
         const d = await response.json().catch(() => ({}));
         Alert.alert("Hiba", d.detail || "Hiba történt a becenév mentésekor.");
       }
-    } catch (e) {
+    } catch {
       Alert.alert("Hiba", "Hálózati hiba történt.");
     } finally {
       setSavingNickname(false);
@@ -213,7 +213,7 @@ export default function RelaxLeaderboardScreen() {
                   setIsEditingNickname(true);
                   try {
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  } catch (e) {}
+                  } catch {}
                 }}
                 activeOpacity={0.7}
               >
@@ -308,7 +308,7 @@ export default function RelaxLeaderboardScreen() {
                 loadLeaderboard();
                 try {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                } catch (e) {}
+                } catch {}
               }}
               disabled={loading}
               activeOpacity={0.7}
