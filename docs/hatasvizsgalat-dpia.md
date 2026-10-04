@@ -161,7 +161,7 @@ A besorolás: **valószínűség × súlyosság**, három fokozatban (alacsony /
 |---|---|
 | **Hatás** | a mentális állapotról összesített, AI által írt kivonat jön létre; pontatlan lehet, és megismerése súlyosabb a különálló üzeneteknél |
 | **Kezelés nélküli kockázat** | **közepes–magas** |
-| **Intézkedések** | külön, önálló hozzájárulás, alapból kikapcsolva; kikapcsoláskor azonnali törlés; leíró jelleg, nem diagnózis, nem automatizált döntés; Myra nem idézheti fel nyíltan; a felhasználó a JSON-exportban látja a pontos szövegét; az admin általi újraképzés és törlés naplózott |
+| **Intézkedések** | külön, önálló hozzájárulás, alapból kikapcsolva; kikapcsoláskor a kivonat és az üzenet-keresővektorok azonnali törlése; a keresővektorok a saját szerveren készülnek, külső szolgáltatóhoz nem kerülnek; Myra magától csak magas relevanciájú korábbi részletet hozhat elő; leíró jelleg, nem diagnózis, nem automatizált döntés; Myra nem idézheti fel nyíltan; a felhasználó a JSON-exportban látja a pontos szövegét; az admin általi újraképzés és törlés naplózott |
 | **Maradék kockázat** | **alacsony–közepes** |
 
 ---

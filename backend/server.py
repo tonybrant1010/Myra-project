@@ -319,7 +319,7 @@ RAG_RERANK_THREADS = _env_int("RAG_RERANK_THREADS", 0, 0, 64)
 # (soha nem inkrementalis toldozas), mert egy hibas kovetkeztetes kulonben
 # beegne, es onnantol onmagat erositene.
 PROFILE_ENABLED = os.environ.get("PROFILE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
-PROFILE_MAX_CHARS = _env_int("PROFILE_MAX_CHARS", 1500, 300, 6000)
+PROFILE_MAX_CHARS = _env_int("PROFILE_MAX_CHARS", 2800, 300, 6000)
 PROFILE_SOURCE_MAX_CHARS = _env_int("PROFILE_SOURCE_MAX_CHARS", 60000, 2000, 400000)
 PROFILE_REFRESH_MESSAGES = _env_int("PROFILE_REFRESH_MESSAGES", 30, 5, 500)
 # A beszelgetes-diagram (v1.3, 2026-08-30) parameterei. Ezek NEM szabadon
@@ -341,6 +341,26 @@ RECALL_MAX_ITEMS = _env_int("RECALL_MAX_ITEMS", 3, 1, 10)
 RECALL_CANDIDATES = _env_int("RECALL_CANDIDATES", 20, 3, 100)
 RECALL_MAX_CHARS = _env_int("RECALL_MAX_CHARS", 1200, 200, 6000)
 RECALL_SNIPPET_CHARS = _env_int("RECALL_SNIPPET_CHARS", 320, 80, 1200)
+# Jelentes szerinti (vektoros) felidezes, 2026-10. A felhasznalo uzenetei a helyi
+# embedding-modellel vektort kapnak (chat_message_embeddings tabla), igy a mas szavakkal
+# leirt hasonlo helyzetek is megtalalhatok. Csak bekapcsolt memoria mellett, es a
+# memoria kikapcsolasakor a vektorok torlodnek.
+RECALL_VECTOR_ENABLED = os.environ.get("RECALL_VECTOR_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+RECALL_EMBED_CHARS = _env_int("RECALL_EMBED_CHARS", 1500, 100, 4000)
+RECALL_MIN_MESSAGE_CHARS = _env_int("RECALL_MIN_MESSAGE_CHARS", 20, 1, 500)
+RECALL_BACKFILL_BATCH = _env_int("RECALL_BACKFILL_BATCH", 32, 1, 256)
+# Az ujrarangsorolo (bge-reranker) pontszamanak kuszobe. Ha a felhasznalo maga utal a
+# multra, lazabb; ha Myra magatol hozna elo egy korabbi helyzetet, szigorubb, hogy ne
+# zokkentse ki a beszelgetest egy alig kapcsolodo emlek.
+try:
+    RECALL_EXPLICIT_MIN_SCORE = float(os.environ.get("RECALL_EXPLICIT_MIN_SCORE", "-4.0"))
+except ValueError:
+    RECALL_EXPLICIT_MIN_SCORE = -4.0
+try:
+    RECALL_PROACTIVE_MIN_SCORE = float(os.environ.get("RECALL_PROACTIVE_MIN_SCORE", "2.0"))
+except ValueError:
+    RECALL_PROACTIVE_MIN_SCORE = 2.0
+RECALL_PROACTIVE_MAX_ITEMS = _env_int("RECALL_PROACTIVE_MAX_ITEMS", 2, 1, 10)
 try:
     RAG_VECTOR_MAX_DISTANCE = float(os.environ.get("RAG_VECTOR_MAX_DISTANCE", "0.62"))
 except ValueError:
@@ -1845,6 +1865,27 @@ async def _run_startup_migrations() -> None:
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_source_name ON knowledge_chunks (source_name)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_source_hash ON knowledge_chunks (source_hash)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_security_events_created_at ON security_events (created_at DESC)"))
+        try:
+            async with conn.begin_nested():
+                # Uzenet-vektorok a jelentes szerinti felidezeshez. Kulon tabla, hogy a memoria
+                # kikapcsolasakor egyetlen DELETE-tel eltuntetheto legyen; az uzenet vagy a
+                # felhasznalo torlesekor kaszkadolva torlodik. RLS be, policy nelkul, mint a
+                # tobbi tablan: a Supabase REST API-n at nem olvashato.
+                await conn.execute(sql_text(
+                    "CREATE TABLE IF NOT EXISTS chat_message_embeddings ("
+                    " message_id VARCHAR(40) PRIMARY KEY REFERENCES chat_messages(id) ON DELETE CASCADE,"
+                    " user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,"
+                    " created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now())"
+                ))
+                await conn.execute(sql_text(
+                    f"ALTER TABLE chat_message_embeddings ADD COLUMN IF NOT EXISTS {EMBED_COL} vector({EMBED_DIM})"
+                ))
+                await conn.execute(sql_text(
+                    "CREATE INDEX IF NOT EXISTS ix_chat_message_embeddings_user_id ON chat_message_embeddings (user_id)"
+                ))
+                await conn.execute(sql_text("ALTER TABLE chat_message_embeddings ENABLE ROW LEVEL SECURITY"))
+        except Exception as _e:
+            print(f"[startup] chat_message_embeddings warning: {_e}")
         await _ensure_user_fk_cascade(conn)
         await _reset_postgres_sequences(conn)
 
@@ -2144,6 +2185,8 @@ async def lifespan(app: FastAPI):
                 except Exception as e:
                     print(f"[startup] Figyelmeztetés: default_kb.pdf nem tölthető be: {e}")
     await _warmup_rag_runtime()
+    if DB_DIALECT != "sqlite" and RECALL_ENABLED and RECALL_VECTOR_ENABLED:
+        _spawn_background_task(_backfill_message_embeddings())
     keepwarm_task = None
     if DB_DIALECT != "sqlite" and RAG_KEEPWARM_INTERVAL_S > 0:
         keepwarm_task = asyncio.create_task(_rag_keepwarm_loop())
@@ -3401,6 +3444,7 @@ async def put_user_memory(body: ProfileMemoryBody, user: User = Depends(get_curr
     user.profile_memory_enabled = enabled
     if not enabled:
         await db.execute(delete(UserProfile).where(UserProfile.user_id == uid))
+        await _delete_message_embeddings(db, uid)
     # Bekapcsolaskor azonnal elkeszul a visszamenoleges profil a korabbi meresekbol es
     # beszelgetesekbol, nem csak a kovetkezo chat-uzenetnel. Hatterben fut, a valasz nem var ra.
     start_job = enabled and await _profile_feature_on(db)
@@ -3412,6 +3456,8 @@ async def put_user_memory(body: ProfileMemoryBody, user: User = Depends(get_curr
                 _profile_jobs.add(uid)
         if start_job:
             _spawn_background_task(_run_profile_job(uid))
+    if enabled and RECALL_ENABLED and RECALL_VECTOR_ENABLED:
+        _spawn_background_task(_backfill_message_embeddings(uid))
     return {"ok": True, "enabled": enabled, "available": PROFILE_ENABLED}
 
 
@@ -3934,27 +3980,51 @@ def _goal_out(g: "UserGoal") -> dict:
 
 # ---------------------------------------------------------------- PROFIL
 PROFILE_GENERATOR_PROMPT = """Klinikai dokumentacios segedkent dolgozol. A feladatod, hogy a megadott
-meresi adatokbol es beszelgetes-reszletekbol tomor, tenyszeru kivonatot irj a Myra szamara.
+meresi adatokbol, celokbol es beszelgetes-reszletekbol tomor esetosszefoglalot irj a Myra
+szamara, hogy a kovetkezo beszelgetesekben folytonosan, a felhasznalo sajat nyelven
+tudjon kapcsolodni hozza.
 
 SZABALYOK:
-- Csak azt irhatod le, ami az adatokban benne van. Nem kovetkeztetsz, nem altalanositasz,
-  nem allitasz fel diagnozist, es nem hasznalsz klinikai kategoriakat.
+- Csak az adatokbol dolgozhatsz. Mintazatot akkor irhatsz le, ha legalabb ket kulon
+  beszelgetesben megjelenik; ilyenkor felteteles modban fogalmazz ("ugy tunik",
+  "tobbszor elofordult, hogy").
+- Nem allitasz fel diagnozist, nem hasznalsz klinikai kategoriakat, tunet- vagy
+  zavarneveket, es nem minosited a felhasznalot.
 - Ha egy mezohoz nincs eleg adat, oda pontosan ezt ird: nincs eleg adat
 - A felhasznalo sajat szavait idezd, ha az pontosabb, mint a korulirasa.
-- Semmit ne ird le, ami harmadik szemelyrol szol.
+- Mas szemelyekrol ne irj reszletet; legfeljebb szerepkent emlitsd oket (pl. "egy baratja",
+  "a munkahelye"), nev nelkul.
 - Osszesen legfeljebb {max_chars} karakter. Nincs bevezeto es nincs zaro mondat.
+  Mezonkent rovid, pontokba szedett sorok.
 
-PONTOSAN EZT A HAROM MEZOT ird ki, ebben a sorrendben, mas semmit. A meresi ivet
-es a torespontot NE ird ki: azokat a rendszer szamolja, nem a te feladatod.
+PONTOSAN EZEKET A MEZOKET ird ki, ebben a sorrendben, mas semmit. A meresi ivet es a
+torespontot NE ird ki: azokat a rendszer szamolja, nem a te feladatod.
 
 [VISSZATERO TEMAK]
 (ami tobb beszelgetesben is elojon, a felhasznalo sajat szohasznalataval)
+
+[SAJAT SZAVAI]
+(jellemzo kifejezesei, kepei, metaforai, ahogyan a helyzetet nevezi - szo szerint)
+
+[ISMETLODO MINTAZATOK]
+(mi szokta elinditani a nehez allapotot, mi kiseri, mi tartja fenn vagy erositi;
+csak ami tobbszor megjelent)
+
+[EROFORRASOK]
+(amit o maga emlitett tamaszkent: tevekenyseg, kepesseg, kapcsolat szerepkent,
+korabbi sikeres megkuzdes)
 
 [AMI LEVEZETETT]
 (mi utan zarult le nyugodtabban egy beszelgetes)
 
 [AMI NEM MUKODOTT]
 (mi utan szakadt meg vagy merevedett be a beszelgetes)
+
+[CELOK ES ELMOZDULAS]
+(vallalt celjai es mi tortent veluk; minden valtozas, amit o maga megfogalmazott)
+
+[NYITOTT SZALAK]
+(amit elkezdett, de nem jutott a vegere, vagy amire maga jelezte, hogy visszaterne)
 """
 
 
@@ -4101,53 +4171,221 @@ def _is_past_reference(text: str) -> bool:
     return bool(_PAST_REFERENCE_RE.search(text or ""))
 
 
-async def _recall_past_exchanges(db: AsyncSession, user_id: int, session_id: Optional[str], query: str) -> list[dict]:
+def _message_embed_text(text: str) -> str:
+    """Az uzenet-vektor bemenete. Szimmetrikus (uzenet-uzenet) hasonlosaghoz az e5
+    mindket oldalon a "query: " elotagot ajanlja, igy az aktualis uzenet vektora a
+    tarolt vektorokkal kozvetlenul osszevetheto."""
+    return f"{EMBED_QUERY_PREFIX}{(text or '')[:RECALL_EMBED_CHARS]}"
+
+
+def _vec_literal(values: list[float]) -> str:
+    return "[" + ",".join(str(float(x)) for x in values) + "]"
+
+
+def _sync_embed_batch(texts: list[str]) -> list[list[float]]:
+    """Kotegelt embedding a visszamenoleges feltolteshez. A gyorsitotarat szandekosan
+    megkeruli: a regi uzenetek ne szoritsak ki a tudasanyag-kereses cache-ebol a
+    gyakori kerdeseket. A normalizalas ugyanaz, mint a cache-elt utvonalon."""
+    global _fastembed_model
+    with _fastembed_lock:
+        if _fastembed_model is None:
+            from fastembed import TextEmbedding
+            _fastembed_model = TextEmbedding(model_name=FASTEMBED_MODEL_NAME)
+    norms = [re.sub(r"\s+", " ", t).strip().lower() for t in texts]
+    out = []
+    for emb in _fastembed_model.embed(norms):
+        values = emb.tolist() if hasattr(emb, "tolist") else list(emb)
+        if len(values) != EMBED_DIM:
+            raise ValueError(f"Invalid FastEmbed dimension: {len(values)}")
+        out.append([float(x) for x in values])
+    return out
+
+
+async def _store_message_embedding(db: AsyncSession, message_id: str, user_id: int, emb: list[float]) -> None:
+    if DB_DIALECT == "sqlite":
+        return
+    # EMBED_COL egesz szambol kepzett oszlopnev, minden ertek parameterkent megy.
+    stmt = f"INSERT INTO chat_message_embeddings (message_id, user_id, {EMBED_COL}) VALUES (:mid, :uid, CAST(:vec AS vector)) ON CONFLICT (message_id) DO UPDATE SET {EMBED_COL} = EXCLUDED.{EMBED_COL}"  # nosec B608
+    await db.execute(sql_text(stmt), {"mid": message_id, "uid": user_id, "vec": _vec_literal(emb)})
+
+
+async def _delete_message_embeddings(db: AsyncSession, user_id: int) -> None:
+    if DB_DIALECT == "sqlite":
+        return
+    await db.execute(sql_text("DELETE FROM chat_message_embeddings WHERE user_id = :uid"), {"uid": user_id})
+
+
+_backfill_lock = asyncio.Lock()
+
+
+async def _backfill_message_embeddings(user_id: Optional[int] = None) -> None:
+    """A bekapcsolt memoriaju felhasznalok korabbi uzeneteinek vektorositasa, kotegekben,
+    hatterben. Indulaskor es a memoria bekapcsolasakor fut. Minden koteg utan torli a
+    kozben kikapcsolt memoriaju felhasznalok vektorait, igy versenyhelyzetben sem marad
+    hozzajarulas nelkuli adat."""
+    if DB_DIALECT == "sqlite" or not (RECALL_ENABLED and RECALL_VECTOR_ENABLED):
+        return
+    async with _backfill_lock:
+        total = 0
+        started = time.perf_counter()
+        try:
+            while True:
+                async with SessionLocal() as db:
+                    params = {"min_len": RECALL_MIN_MESSAGE_CHARS, "lim": RECALL_BACKFILL_BATCH}
+                    user_filter = ""
+                    if user_id is not None:
+                        user_filter = "AND u.id = :uid"
+                        params["uid"] = user_id
+                    res = await db.execute(sql_text(f"""
+                        SELECT m.id, m.user_id, m.text
+                        FROM chat_messages m
+                        JOIN users u ON u.id = m.user_id
+                        LEFT JOIN chat_message_embeddings e ON e.message_id = m.id
+                        WHERE u.profile_memory_enabled
+                          AND m.role = 'user'
+                          AND length(m.text) >= :min_len
+                          AND (e.message_id IS NULL OR e.{EMBED_COL} IS NULL)
+                          {user_filter}
+                        ORDER BY m.created_at ASC
+                        LIMIT :lim
+                    """), params)  # nosec B608 - csak rogzitett szovegdarabok, az ertekek parameterek
+                    rows = res.mappings().all()
+                    if rows:
+                        vectors = await asyncio.to_thread(
+                            _sync_embed_batch, [_message_embed_text(r["text"]) for r in rows]
+                        )
+                        for row, vec in zip(rows, vectors):
+                            await _store_message_embedding(db, row["id"], row["user_id"], vec)
+                    await db.execute(sql_text(
+                        "DELETE FROM chat_message_embeddings e USING users u "
+                        "WHERE e.user_id = u.id AND NOT u.profile_memory_enabled"
+                    ))
+                    await db.commit()
+                if not rows:
+                    break
+                total += len(rows)
+                await asyncio.sleep(0.2)
+        except Exception as e:
+            logger.warning(f"uzenet-vektor feltoltesi hiba: {e}")
+        if total:
+            logger.info("recall_backfill messages=%d took=%.1fs", total, time.perf_counter() - started)
+
+
+async def _recall_past_exchanges(
+    db: AsyncSession,
+    user_id: int,
+    session_id: Optional[str],
+    query: str,
+    query_emb: Optional[list[float]] = None,
+    explicit: bool = True,
+) -> list[dict]:
     """A felhasznalo KORABBI uleseibol keres sajat mondatokat, es mindegyikhez
     odaveszi a ra kovetkezo Myra-valaszt. Az aktualis ules kimarad: az amugy is
-    ott van az elozmenyben."""
+    ott van az elozmenyben.
+
+    Jeloltek ket uton jonnek: jelentes szerint (uzenet-vektor) es szoegyezessel
+    (magyar full-text). A vegso valogatast az ujrarangsorolo vegzi kuszobbel:
+    `explicit` (a felhasznalo a multra utalt) eseten lazabb, kulonben szigorubb."""
     if DB_DIALECT == "sqlite":
         return []
+    myra_sub = """
+        (SELECT a.text FROM chat_messages a
+          WHERE a.user_id = u.user_id AND a.session_id IS NOT DISTINCT FROM u.session_id
+            AND a.role <> 'user' AND a.created_at > u.created_at
+          ORDER BY a.created_at ASC LIMIT 1) AS myra_text
+    """
+    candidates: dict = {}
+    vec_hits = 0
+    txt_hits = 0
+    if query_emb is not None and RECALL_VECTOR_ENABLED:
+        stmt = sql_text(f"""
+            SELECT u.id, u.created_at, u.text AS user_text, u.session_id, {myra_sub},
+                   (e.{EMBED_COL} <=> CAST(:qv AS vector)) AS dist
+            FROM chat_message_embeddings e
+            JOIN chat_messages u ON u.id = e.message_id
+            WHERE e.user_id = :uid
+              AND u.role = 'user'
+              AND u.session_id IS DISTINCT FROM :sid
+              AND e.{EMBED_COL} IS NOT NULL
+            ORDER BY dist ASC
+            LIMIT :pool
+        """)  # nosec B608 - EMBED_COL egesz szambol kepzett oszlopnev, a tobbi parameter
+        res = await db.execute(stmt, {
+            "uid": user_id, "sid": session_id, "qv": _vec_literal(query_emb), "pool": RECALL_CANDIDATES,
+        })
+        for r in res.mappings().all():
+            candidates[r["id"]] = dict(r)
+            vec_hits += 1
     ts_query = _build_ts_query(_expand_knowledge_query(query))
-    if not ts_query:
-        return []
-    stmt = sql_text("""
-        SELECT u.id, u.created_at, u.text AS user_text, u.session_id,
-               (SELECT a.text FROM chat_messages a
-                 WHERE a.user_id = u.user_id AND a.session_id IS NOT DISTINCT FROM u.session_id
-                   AND a.role <> 'user' AND a.created_at > u.created_at
-                 ORDER BY a.created_at ASC LIMIT 1) AS myra_text
-        FROM chat_messages u
-        WHERE u.user_id = :uid
-          AND u.role = 'user'
-          AND u.session_id IS DISTINCT FROM :sid
-          AND to_tsvector('hungarian', u.text) @@ to_tsquery('hungarian', :ts_query)
-        ORDER BY ts_rank_cd(to_tsvector('hungarian', u.text), to_tsquery('hungarian', :ts_query)) DESC,
-                 u.created_at DESC
-        LIMIT :pool
-    """)
-    res = await db.execute(stmt, {"uid": user_id, "sid": session_id, "ts_query": ts_query, "pool": RECALL_CANDIDATES})
-    rows = [dict(r) for r in res.mappings().all()]
+    if ts_query:
+        stmt = sql_text(f"""
+            SELECT u.id, u.created_at, u.text AS user_text, u.session_id, {myra_sub}
+            FROM chat_messages u
+            WHERE u.user_id = :uid
+              AND u.role = 'user'
+              AND u.session_id IS DISTINCT FROM :sid
+              AND length(u.text) >= :min_len
+              AND to_tsvector('hungarian', u.text) @@ to_tsquery('hungarian', :ts_query)
+            ORDER BY ts_rank_cd(to_tsvector('hungarian', u.text), to_tsquery('hungarian', :ts_query)) DESC,
+                     u.created_at DESC
+            LIMIT :pool
+        """)  # nosec B608 - csak rogzitett szovegdarab kerul bele, az ertekek parameterek
+        res = await db.execute(stmt, {
+            "uid": user_id, "sid": session_id, "ts_query": ts_query,
+            "min_len": RECALL_MIN_MESSAGE_CHARS, "pool": max(5, RECALL_CANDIDATES // 2),
+        })
+        for r in res.mappings().all():
+            txt_hits += 1
+            candidates.setdefault(r["id"], dict(r))
+    rows = [r for r in candidates.values() if len((r.get("user_text") or "").strip()) >= RECALL_MIN_MESSAGE_CHARS]
     if not rows:
         return []
 
-    if RAG_RERANKER_MODEL and len(rows) > RECALL_MAX_ITEMS:
+    max_items = RECALL_MAX_ITEMS if explicit else RECALL_PROACTIVE_MAX_ITEMS
+    min_score = RECALL_EXPLICIT_MIN_SCORE if explicit else RECALL_PROACTIVE_MIN_SCORE
+    best_score = None
+    if RAG_RERANKER_MODEL:
         try:
             scores = await _rerank_scores(query, [r["user_text"][:RAG_RERANK_DOC_CHARS] for r in rows])
-            rows = [rows[i] for i in sorted(range(len(rows)), key=lambda i: scores[i], reverse=True)]
+            for r, sc in zip(rows, scores):
+                r["score"] = sc
+            rows.sort(key=lambda r: r["score"], reverse=True)
+            best_score = rows[0]["score"]
+            rows = [r for r in rows if r["score"] >= min_score]
         except Exception as _e:
-            logger.warning(f"recall rerank hiba, marad a szoveges rangsor: {_e}")
+            logger.warning(f"recall rerank hiba: {_e}")
+            if not explicit:
+                rows = []
+            else:
+                rows.sort(key=lambda r: (r.get("dist") is None, r.get("dist") or 0.0))
+    elif not explicit:
+        # Ujrarangsorolo nelkul nincs megbizhato kuszob, ezert magatol nem hoz elo emleket.
+        rows = []
+    kept = rows[:max_items]
+    logger.info(
+        "recall_search explicit=%s vec=%d txt=%d kept=%d best_score=%s",
+        explicit, vec_hits, txt_hits, len(kept),
+        f"{best_score:.3f}" if best_score is not None else "-",
+    )
+    return kept
 
-    return rows[:RECALL_MAX_ITEMS]
 
-
-def _build_recall_block(rows: list[dict]) -> str:
+def _build_recall_block(rows: list[dict], explicit: bool = True) -> str:
     if not rows:
         return ""
-    lines = [
-        "[KORÁBBI BESZÉLGETÉSEKBŐL]",
-        "A felhasználó a múltra utalt, ezért ide bekerült néhány korábbi részlet. Csak akkor "
-        "használd, ha tényleg arról van szó; ne olvasd fel és ne sorold fel őket.",
-    ]
+    if explicit:
+        intro = (
+            "A felhasználó a múltra utalt, ezért ide bekerült néhány korábbi részlet. Csak akkor "
+            "használd, ha tényleg arról van szó; ne olvasd fel és ne sorold fel őket."
+        )
+    else:
+        intro = (
+            "A felhasználó korábbi beszélgetéseiben a mostanihoz hasonló helyzet fordult elő. "
+            "Ha illik a beszélgetés menetébe, természetesen, egy mondatban visszautalhatsz rá "
+            "(pl. hogy korábban is írt hasonlóról), és építhetsz arra, ami akkor segített. "
+            "Ne olvasd fel, ne sorold fel, és ne erőltesd, ha most nem ide tartozik."
+        )
+    lines = ["[KORÁBBI BESZÉLGETÉSEKBŐL]", intro]
     used = 0
     for row in rows:
         when = _to_local(row.get("created_at"))
@@ -4206,6 +4444,20 @@ async def _collect_profile_source(db: AsyncSession, user_id: int) -> tuple[str, 
         norm_txt = " ".join(f"{k}={v:.2f}" for k, v in norms.items() if isinstance(v, (int, float)))
         lines.append(f"- {when.strftime('%Y.%m.%d') if when else '?'} kod={sub.code} {norm_txt}")
 
+    goal_res = await db.execute(
+        select(UserGoal).where(UserGoal.user_id == user_id).order_by(UserGoal.created_at.asc())
+    )
+    goals = goal_res.scalars().all()
+    lines.append("")
+    lines.append("CELOK:")
+    if not goals:
+        lines.append("- nincs vallalt cel")
+    for goal in goals:
+        g_when = _to_local(goal.created_at)
+        d_when = _to_local(goal.done_at) if goal.done_at else None
+        state = f"teljesitve {d_when.strftime('%Y.%m.%d')}" if (goal.status == "done" and d_when) else goal.status
+        lines.append(f"- {g_when.strftime('%Y.%m.%d') if g_when else '?'} [{state}] {goal.text}")
+
     msg_res = await db.execute(
         select(ChatMessage).where(ChatMessage.user_id == user_id).order_by(ChatMessage.created_at.desc()).limit(2000)
     )
@@ -4250,12 +4502,13 @@ async def _regenerate_user_profile(user_id: int) -> Optional[str]:
         if msg_count == 0 and sub_count == 0:
             return None
         started = time.perf_counter()
+        computed = _format_computed_block(subs, _arc_metrics(messages))
+        llm_budget = max(400, PROFILE_MAX_CHARS - len(computed) - 2)
         raw = await _call_llm(
             settings["llm_provider"], settings["llm_model"], settings["llm_api_key"],
-            PROFILE_GENERATOR_PROMPT.format(max_chars=PROFILE_MAX_CHARS),
+            PROFILE_GENERATOR_PROMPT.format(max_chars=llm_budget),
             [], source,
         )
-        computed = _format_computed_block(subs, _arc_metrics(messages))
         written = _clean_llm_reply(raw, context="profile")
         # A szamitott blokk elsobbseget elvez: ha a keret szuk, az LLM-resz vagodik.
         remaining = max(0, PROFILE_MAX_CHARS - len(computed) - 2)
@@ -5385,13 +5638,33 @@ async def chat_send(
     active_goals = await _get_active_goals(db, user.id)
     goals_block = _build_goals_block(active_goals)
     recall_rows = []
-    if RECALL_ENABLED and bool(user.profile_memory_enabled) and _is_past_reference(text):
-        try:
-            recall_rows = await _recall_past_exchanges(db, user.id, active_session_id, text)
-        except Exception as _e:
-            logger.warning(f"felidezesi hiba: {_e}")
-            await db.rollback()
-    recall_block = _build_recall_block(recall_rows)
+    recall_explicit = False
+    if RECALL_ENABLED and bool(user.profile_memory_enabled):
+        recall_explicit = _is_past_reference(text)
+        clean_text = (text or "").strip()
+        query_emb = None
+        if RECALL_VECTOR_ENABLED and DB_DIALECT != "sqlite":
+            try:
+                query_emb = await _get_fastembed_embedding(_message_embed_text(clean_text))
+            except Exception as _e:
+                logger.warning(f"uzenet-vektor hiba: {_e}")
+        # Rovid, tartalom nelkuli uzenetnel ("igen", "koszi") Myra magatol nem keres emleket.
+        if recall_explicit or len(clean_text) >= RECALL_MIN_MESSAGE_CHARS * 2:
+            try:
+                async with db.begin_nested():
+                    recall_rows = await _recall_past_exchanges(
+                        db, user.id, active_session_id, text, query_emb, recall_explicit,
+                    )
+            except Exception as _e:
+                logger.warning(f"felidezesi hiba: {_e}")
+                recall_rows = []
+        if query_emb is not None and len(clean_text) >= RECALL_MIN_MESSAGE_CHARS:
+            try:
+                async with db.begin_nested():
+                    await _store_message_embedding(db, user_msg.id, user.id, query_emb)
+            except Exception as _e:
+                logger.warning(f"uzenet-vektor mentesi hiba: {_e}")
+    recall_block = _build_recall_block(recall_rows, recall_explicit)
 
     profile_on = PROFILE_ENABLED and bool(user.profile_memory_enabled)
     user_profile = await _get_user_profile(db, user.id) if profile_on else None

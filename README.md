@@ -71,7 +71,7 @@ a Supabase-ben van. A frontend továbbra is Vercelen fut, a Vercel CLI-vel telep
 - admin rendszerbeállítások, karbantartási mód és SOS eszközök;
 - biztonsági adminisztrátori audit naplózás és megerősített brute-force védelem;
 - 30 napos mérési érvényességi ciklus és archivált, olvasható beszélgetések;
-- „Myra memóriája”: külön hozzájárulással, a korábbi mérésekből és beszélgetésekből képzett profil-kivonat (bekapcsoláskor azonnal, visszamenőleg elkészül), valamint korábbi beszélgetésrészletek felidézése, ha a felhasználó a múltra utal;
+- „Myra memóriája”: külön hozzájárulással, a korábbi mérésekből, célokból és beszélgetésekből képzett esetösszefoglaló (bekapcsoláskor azonnal, visszamenőleg elkészül; mezők: visszatérő témák, saját szavai, ismétlődő mintázatok, erőforrások, ami levezetett / nem működött, célok és elmozdulás, nyitott szálak), valamint jelentés szerinti felidézés: a felhasználói üzenetek a helyi e5-large modellel vektort kapnak (`chat_message_embeddings`), Myra a hasonló korábbi helyzeteket a múltra utalás nélkül is előhozhatja (újrarangsoroló küszöbbel: `RECALL_PROACTIVE_MIN_SCORE`, `RECALL_EXPLICIT_MIN_SCORE`); kikapcsoláskor a vektorok törlődnek;
 - admin felületen felhasználónkénti profilnézet (megtekintés, újraképzés, törlés);
 - admin adatbázis-mentés letöltés: a legfrissebb óránkénti, tudásanyag-index nélküli felhasználói mentés (`userdata-*.sql.gz`);
 - karbantartás / karantén alatt a felhasználók tájékoztató oldalt látnak (`MaintenanceGate`), a karbantartás végén az oldal magától újratöltődik;

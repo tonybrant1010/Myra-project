@@ -131,11 +131,11 @@ teljesül. A nyilvántartás vezetése kötelező, és kérésre a NAIH rendelke
 
 | | |
 |---|---|
-| **Cél** | a korábbi mérésekből és beszélgetésekből képzett rövid kivonat, amelyet Myra a válaszadásnál figyelembe vesz; korábbi beszélgetésrészletek visszakeresése, ha a felhasználó a múltra utal |
+| **Cél** | a korábbi mérésekből, célokból és beszélgetésekből képzett esetösszefoglaló, amelyet Myra a válaszadásnál figyelembe vesz; a mostanihoz hasonló korábbi beszélgetésrészletek jelentés szerinti visszakeresése |
 | **Jogalap** | 6. cikk (1) a) + **9. cikk (2) a) — külön, önálló kifejezett hozzájárulás** (alapból kikapcsolva, a felhasználó kapcsolja be a Beállításokban) |
-| **Adatkategóriák** | AI által képzett, leíró jellegű kivonat a mérésekről és a beszélgetésekről — **különleges adat: mentális állapotra utaló információ**; forrás-üzenetszám, mérésszám, készítés ideje |
+| **Adatkategóriák** | AI által képzett, leíró jellegű kivonat a mérésekről, célokról és a beszélgetésekről — **különleges adat: mentális állapotra utaló információ**; forrás-üzenetszám, mérésszám, készítés ideje; a felhasználói üzenetekből a saját szerveren képzett keresővektorok (`chat_message_embeddings`) |
 | **Címzettek** | Supabase (tárolás), Google (Gemini API — a kivonat elkészítéséhez és a válaszadáshoz); az adatkezelő az admin felületen megtekintheti, újraképezheti, törölheti |
-| **Törlési határidő** | a hozzájárulás visszavonásakor (kikapcsolás) azonnal; a fiók törlésekor azonnal; biztonsági mentésekből legkésőbb 30 napon belül |
+| **Törlési határidő** | a hozzájárulás visszavonásakor (kikapcsolás) azonnal, a keresővektorokkal együtt; a fiók vagy az üzenet törlésekor azonnal; biztonsági mentésekből legkésőbb 30 napon belül |
 | **Megjegyzés** | a bekapcsoláskor azonnal elkészül a korábbi adatokból, ezután új mérés vagy 30 új üzenet után frissül; nem diagnózis, nem szolgál automatizált döntés alapjául |
 
 ### 2.10 Biztonsági mentés
