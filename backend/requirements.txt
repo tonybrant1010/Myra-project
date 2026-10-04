@@ -12,7 +12,7 @@ asyncpg==0.31.0
 # Auth & Security
 passlib==1.7.4
 bcrypt==4.1.3
-PyJWT==2.13.0
+PyJWT==2.15.1
 
 # HTTP client
 httpx==0.28.1
@@ -23,7 +23,7 @@ pydantic==2.13.4
 email-validator==2.3.0
 
 # PDF
-pypdf==6.15.0
+pypdf==6.19.0
 fpdf2==2.8.7
 
 # Local embeddings (ONNX Runtime, no PyTorch)
