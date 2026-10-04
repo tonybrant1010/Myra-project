@@ -30,4 +30,4 @@ fpdf2==2.8.7
 fastembed==0.8.0
 
 # Gemini SDK
-google-genai>=2.2.0,<3
+google-genai>=2.17.0,<3
