@@ -13,7 +13,6 @@ import struct
 import time
 import traceback
 import uuid
-import wave
 import logging
 import smtplib
 import secrets
@@ -91,14 +90,11 @@ PIPER_NOISE_SCALE = os.environ.get("PIPER_NOISE_SCALE", "0.667")
 PIPER_NOISE_W = os.environ.get("PIPER_NOISE_W", "0.8")
 TTS_ENGINE = os.environ.get("TTS_ENGINE", "none").strip().lower()
 
-# Gemini TTS. A hangnév szándékosan azonos a Myra Live-ban használttal
-# (frontend/app/myra-live.tsx), hogy Myra ugyanazzal a hanggal szólaljon meg
-# a chatben és a hangbeszélgetésben is.
-GEMINI_TTS_MODEL = os.environ.get("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview")
-GEMINI_TTS_VOICE = os.environ.get("GEMINI_TTS_VOICE", "Kore")
-GEMINI_TTS_TIMEOUT_S = float(os.environ.get("GEMINI_TTS_TIMEOUT_S", "60"))
-# A Gemini TTS nyers PCM-et ad vissza, nem kész WAV-ot: 24 kHz, 16 bit, mono.
-GEMINI_TTS_SAMPLE_RATE = int(os.environ.get("GEMINI_TTS_SAMPLE_RATE", "24000"))
+# A felolvasó kizárólag a helyi Piper motort használja. A korábbi Gemini TTS
+# ág 2026-09-14-én kikerült: a Google megszüntette hozzá az ingyenes keretet,
+# és a helyi szintézis amúgy is gyorsabb (RTF ~0,09) és hálózatfüggetlen.
+# A Myra Live (frontend/app/myra-live.tsx) ettől független, az továbbra is
+# Gemini Live API-t használ.
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("myra")
@@ -267,7 +263,7 @@ def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
 
 CHAT_HISTORY_MAX_MESSAGES = _env_int("CHAT_HISTORY_MAX_MESSAGES", 120, 20, 300)
 CHAT_HISTORY_MAX_CHARS = _env_int("CHAT_HISTORY_MAX_CHARS", 45000, 8000, 120000)
-RAG_CANDIDATE_POOL = _env_int("RAG_CANDIDATE_POOL", 20, 5, 50)
+RAG_CANDIDATE_POOL = _env_int("RAG_CANDIDATE_POOL", 20, 5, 200)
 # Hány PDF-részlet mehet a chat promptjába. 0 = egyáltalán ne menjen.
 # 2026-08-12 óta fordulónként 5 részlet (~5400 karakter) kerül a rendszerutasításba;
 # azelőtt ez a blokk üres volt. Ezzel a kapcsolóval a régi állapot visszaállítható
@@ -290,6 +286,61 @@ RAG_CHUNK_MAX_CHARS = _env_int("RAG_CHUNK_MAX_CHARS", 400, 120, 2000)
 RAG_CHUNK_OVERLAP = _env_int("RAG_CHUNK_OVERLAP", 80, 0, 400)
 # Ennel rovidebb darab ne alljon onalloan az indexben, ha a szomszedjaba beolvaszthato.
 RAG_CHUNK_MIN_CHARS = _env_int("RAG_CHUNK_MIN_CHARS", 120, 0, 1000)
+
+# --- Beagyazo modell es ujrarangsorolas (2026-09) -----------------------------
+# A dimenzio es az oszlopnev ezentul egyutt mozog a modellel: egy 1024 dimenzios
+# modell sajat oszlopot kap (embedding_1024), a regi embedding_384 erintetlen
+# marad, igy ket modell kozott ujraindexeles nelkul is lehet oda-vissza valtani.
+EMBED_DIM = _env_int("EMBED_DIM", 384, 64, 4096)
+EMBED_COL = f"embedding_{EMBED_DIM}"
+# Az e5 csaladnal a prefix NEM opcionalis: prefix nelkul a kerdes es a bekezdes
+# vektora mas terbe kerul, es a talalati minoseg erdemben romlik.
+EMBED_QUERY_PREFIX = os.environ.get("EMBED_QUERY_PREFIX", "")
+EMBED_PASSAGE_PREFIX = os.environ.get("EMBED_PASSAGE_PREFIX", "")
+# Ures ertek = nincs ujrarangsorolas, a regi (tavolsag alapu) viselkedes marad.
+RAG_RERANKER_MODEL = os.environ.get("RAG_RERANKER_MODEL", "").strip()
+try:
+    RAG_RERANK_MIN_SCORE = float(os.environ.get("RAG_RERANK_MIN_SCORE", "0.0"))
+except (TypeError, ValueError):
+    RAG_RERANK_MIN_SCORE = 0.0
+# Az ujrarangsorolas ara linearis a jeloltek szamaval ES a szovegek hosszaval.
+# Merve (4 magos CPU, bge-reranker-base): 60 jelolt x 1500 karakter ~ 40 masodperc.
+# Ezert a rangsorolas SZUKEBB listan es ROVIDEBB szovegen fut, mint ami vegul a
+# promptba kerul: a dontesehez elég a reszlet eleje, a modell viszont a teljes
+# darabot kapja meg.
+RAG_RERANK_POOL = _env_int("RAG_RERANK_POOL", 20, 1, 200)
+RAG_RERANK_DOC_CHARS = _env_int("RAG_RERANK_DOC_CHARS", 700, 100, 4000)
+RAG_RERANK_THREADS = _env_int("RAG_RERANK_THREADS", 0, 0, 64)
+
+# --- Felhasznaloi profil (2026-09) -------------------------------------------
+# A profil NEM a beszelgetes osszefoglaloja, hanem fix mezos kivonat tobb
+# merési ciklusbol. Azert fix mezos, mert igy longitudinalisan osszevetheto es
+# egy szakember is el tudja olvasni; azert teljes ujrageneralas a forrasbol
+# (soha nem inkrementalis toldozas), mert egy hibas kovetkeztetes kulonben
+# beegne, es onnantol onmagat erositene.
+PROFILE_ENABLED = os.environ.get("PROFILE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+PROFILE_MAX_CHARS = _env_int("PROFILE_MAX_CHARS", 1500, 300, 6000)
+PROFILE_SOURCE_MAX_CHARS = _env_int("PROFILE_SOURCE_MAX_CHARS", 60000, 2000, 400000)
+PROFILE_REFRESH_MESSAGES = _env_int("PROFILE_REFRESH_MESSAGES", 30, 5, 500)
+# A beszelgetes-diagram (v1.3, 2026-08-30) parameterei. Ezek NEM szabadon
+# hangolhato izlesbeli ertekek: a jelolt kiugrasok tolük fuggenek, tehat
+# valtoztatas eseten a korabbi profilok mar mas szabaly szerint keszultek.
+CONV_SESSION_GAP_MIN = _env_int("CONV_SESSION_GAP_MIN", 30, 1, 1440)
+try:
+    CONV_SPIKE_K = float(os.environ.get("CONV_SPIKE_K", "2.5"))
+except (TypeError, ValueError):
+    CONV_SPIKE_K = 2.5
+
+# --- Celzott felidezes (2026-09) ---------------------------------------------
+# Nem minden fordulóban fut. A kiindulas az, hogy a korabbi beszelgetesbol vett
+# reszlet a beszelgetes kozepen kizokkent - kiveve, ha a felhasznalo EPPEN a
+# multra kerdez. Ezert kapuzott: elobb egy olcso mintaillesztes dont, es csak
+# utana indul barmilyen kereses.
+RECALL_ENABLED = os.environ.get("RECALL_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+RECALL_MAX_ITEMS = _env_int("RECALL_MAX_ITEMS", 3, 1, 10)
+RECALL_CANDIDATES = _env_int("RECALL_CANDIDATES", 20, 3, 100)
+RECALL_MAX_CHARS = _env_int("RECALL_MAX_CHARS", 1200, 200, 6000)
+RECALL_SNIPPET_CHARS = _env_int("RECALL_SNIPPET_CHARS", 320, 80, 1200)
 try:
     RAG_VECTOR_MAX_DISTANCE = float(os.environ.get("RAG_VECTOR_MAX_DISTANCE", "0.62"))
 except ValueError:
@@ -313,7 +364,8 @@ KB_TEXT_UPLOAD_MAX_BYTES = _env_int("KB_TEXT_UPLOAD_MAX_BYTES", 2 * 1024 * 1024,
 
 class pgvector_type(UserDefinedType):
     """Custom SQLAlchemy type for PostgreSQL pgvector columns."""
-    def __init__(self, dim: int = 384):
+    def __init__(self, dim: int = None):
+        dim = EMBED_DIM if dim is None else dim
         self.dim = dim
 
     def get_col_spec(self, **kw):
@@ -383,6 +435,9 @@ class User(Base):
     terms_accepted_at = Column(DateTime(timezone=True), nullable=True)
     forum_nickname = Column(String(50), nullable=True, unique=True)
     forum_avatar = Column(String(10), nullable=True)
+    # Onkentes: a profil-memoria csak akkor keszul es csak akkor kerul a promptba,
+    # ha a felhasznalo maga kapcsolta be a Beallitasokban. Alapertek: kikapcsolva.
+    profile_memory_enabled = Column(Boolean, nullable=False, default=False, server_default=sql_text("false"))
 
 
 class StateCode(Base):
@@ -441,6 +496,19 @@ class UserGoal(Base):
     done_at = Column(DateTime(timezone=True), nullable=True)
 
 
+class UserProfile(Base):
+    """Felhasznalonkent egy sor. A `content` a kesz, promptba illesztheto szoveg;
+    a szamlalok abbol dontenek, mikor avult el a profil."""
+    __tablename__ = "user_profiles"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    content = Column(Text, nullable=False, default="")
+    source_messages = Column(Integer, nullable=False, default=0)
+    source_sessions = Column(Integer, nullable=False, default=0)
+    model_name = Column(String(120), nullable=False, default="")
+    generated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class AppSetting(Base):
     """Key-value bag for admin-managed configuration (LLM provider/model/api_key/system_prompt/kb_text)."""
     __tablename__ = "app_settings"
@@ -458,7 +526,7 @@ class KnowledgeChunk(Base):
     chunk_index = Column(Integer, nullable=False)
     title = Column(String(260), nullable=False, default="")
     content = Column(Text, nullable=False)
-    embedding_384 = Column(pgvector_type(384), nullable=True)
+    embedding = Column(EMBED_COL, pgvector_type(EMBED_DIM), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
@@ -495,6 +563,27 @@ class AdminAuditLog(Base):
     ip = Column(String(80), nullable=False, default="")
     user_agent = Column(Text, nullable=False, default="")
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class SecurityEvent(Base):
+    """Biztonsági esemény napló.
+
+    Ide ír a hoston futó `ops/myra-watch.py` (közvetlenül psql-lel, hogy akkor is
+    menjen, ha a backend beragadt) és maga a backend is. Az admin felület ebből
+    a táblából mutatja, mi történt, amíg nem voltál gép közelben.
+
+    FIGYELEM: az oszlopnevek és típusok kötöttek — ha itt változtatsz,
+    a myra-watch.py DDL-jét is át kell írni.
+    """
+    __tablename__ = "security_events"
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    source = Column(String(20), nullable=False, default="watch")
+    kind = Column(String(40), nullable=False, default="")
+    severity = Column(String(20), nullable=False, default="info")
+    label = Column(String(200), nullable=False, default="")
+    detail = Column(Text, nullable=False, default="")
+    quarantined = Column(Boolean, nullable=False, default=False)
 
 
 class LeaderboardEntry(Base):
@@ -1349,7 +1438,7 @@ async def rebuild_pdf_knowledge_index(db: AsyncSession, source_dir: Optional[str
                 emb = None
                 if DB_DIALECT != "sqlite":
                     try:
-                        emb = await _get_fastembed_embedding(f"{title}\n{chunk}")
+                        emb = await _get_fastembed_embedding(f"{EMBED_PASSAGE_PREFIX}{title}\n{chunk}")
                     except Exception as e:
                         logger.warning(f"Nem sikerült az embedding lekérése a chunkhoz ({pdf_path.name} #{idx}): {e}")
                 db.add(KnowledgeChunk(
@@ -1359,7 +1448,7 @@ async def rebuild_pdf_knowledge_index(db: AsyncSession, source_dir: Optional[str
                     chunk_index=idx,
                     title=title,
                     content=chunk,
-                    embedding_384=emb,
+                    embedding=emb,
                 ))
                 pending += 1
                 file_chunk_count += 1
@@ -1395,7 +1484,7 @@ async def rebuild_pdf_knowledge_index(db: AsyncSession, source_dir: Optional[str
 
 
 async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> list[KnowledgeChunk]:
-    limit = max(1, min(limit, 10))
+    limit = max(1, min(limit, 20))
     expanded_query = _expand_knowledge_query(query)
     if DB_DIALECT == "sqlite":
         fts = _fts_query(expanded_query)
@@ -1426,18 +1515,18 @@ async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> 
 
     if DB_DIALECT != "sqlite":
         try:
-            query_emb = await _get_fastembed_embedding(query)
+            query_emb = await _get_fastembed_embedding(f"{EMBED_QUERY_PREFIX}{query}")
             query_vector_str = "[" + ",".join(str(f) for f in query_emb) + "]"
-            stmt = sql_text("""
+            stmt = sql_text(f"""
                 WITH vec AS (
                     SELECT id,
-                           (embedding_384 <=> CAST(:query_vector AS vector)) AS dist,
+                           ({EMBED_COL} <=> CAST(:query_vector AS vector)) AS dist,
                            ROW_NUMBER() OVER (
-                               ORDER BY embedding_384 <=> CAST(:query_vector AS vector)
+                               ORDER BY {EMBED_COL} <=> CAST(:query_vector AS vector)
                            ) AS rnk
                     FROM knowledge_chunks
-                    WHERE embedding_384 IS NOT NULL
-                    ORDER BY embedding_384 <=> CAST(:query_vector AS vector)
+                    WHERE {EMBED_COL} IS NOT NULL
+                    ORDER BY {EMBED_COL} <=> CAST(:query_vector AS vector)
                     LIMIT :pool
                 ),
                 txt AS (
@@ -1470,10 +1559,35 @@ async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> 
                 "pool": RAG_CANDIDATE_POOL,
             })
             rows = res.mappings().all()
+            # Ujrarangsorolas: a hibrid fuzio csak jeloltet valogat (vektortavolsag es
+            # kulcsszo-rang alapjan). A kereszt-kodolo ezzel szemben a kerdest es a
+            # reszletet EGYUTT olvassa, ezert olyan illeszkedest is lat, amit a ket
+            # kulon vektor nem. Ezert erdemes bo jeloltlistat felhozni (RAG_CANDIDATE_POOL)
+            # es csak utana szukiteni "limit" darabra.
+            rerank_scores = None
+            if RAG_RERANKER_MODEL and rows:
+                try:
+                    head = list(rows[:RAG_RERANK_POOL])
+                    tail = list(rows[RAG_RERANK_POOL:])
+                    docs = [
+                        f"{r['title']}\n{r['content']}"[:RAG_RERANK_DOC_CHARS]
+                        for r in head
+                    ]
+                    scores = await _rerank_scores(query, docs)
+                    order = sorted(range(len(head)), key=lambda i: scores[i], reverse=True)
+                    rows = [head[i] for i in order] + tail
+                    # A rangsoron kivul maradt jeloltek a lista vegere kerulnek, es
+                    # olyan pontszamot kapnak, ami a kuszob alatt van - igy csak
+                    # akkor jonnek szoba, ha a kuszob amugy sem szur.
+                    lowest = min(scores) if scores else 0.0
+                    rerank_scores = [scores[i] for i in order] + [lowest - 1.0] * len(tail)
+                except Exception as _e:
+                    logger.warning(f"rerank hiba, marad a tavolsag alapu szures: {_e}")
+                    rerank_scores = None
             kept = []
             best_dist = None
             txt_hits = 0
-            for row in rows:
+            for row_idx, row in enumerate(rows):
                 dist = float(row["vec_dist"]) if row["vec_dist"] is not None else None
                 if dist is not None and (best_dist is None or dist < best_dist):
                     best_dist = dist
@@ -1487,14 +1601,21 @@ async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> 
                 # kapcsolodo szoveg terhelte a promptot. A kuszob feletti talalatok
                 # mostantol kimaradnak; ha nem marad egy sem, akkor nincs tudasanyag-blokk.
                 # Kikapcsolashoz: RAG_VECTOR_MAX_DISTANCE=1.0 a .env-ben.
-                if dist is not None and dist > RAG_VECTOR_MAX_DISTANCE:
+                if rerank_scores is not None:
+                    # Ujrarangsorolasnal a vektortavolsag mar nem dontesi alap: a
+                    # kereszt-kodolo pontszama pontosabb, es mas a skalaja.
+                    if rerank_scores[row_idx] < RAG_RERANK_MIN_SCORE:
+                        continue
+                elif dist is not None and dist > RAG_VECTOR_MAX_DISTANCE:
                     continue
                 kept.append(row)
                 if len(kept) >= limit:
                     break
             logger.info(
-                "rag_search candidates=%d txt_hits=%d kept=%d best_dist=%s",
-                len(rows), txt_hits, len(kept), f"{best_dist:.3f}" if best_dist is not None else "-",
+                "rag_search candidates=%d txt_hits=%d kept=%d best_dist=%s best_score=%s",
+                len(rows), txt_hits, len(kept),
+                f"{best_dist:.3f}" if best_dist is not None else "-",
+                f"{rerank_scores[0]:.3f}" if rerank_scores else "-",
             )
             if kept:
                 return [
@@ -1650,6 +1771,9 @@ async def _run_startup_migrations() -> None:
             if "forum_avatar" not in _cols:
                 _conn.execute("ALTER TABLE users ADD COLUMN forum_avatar VARCHAR(10)")
                 print("[startup] migráció: users.forum_avatar hozzáadva")
+            if "profile_memory_enabled" not in _cols:
+                _conn.execute("ALTER TABLE users ADD COLUMN profile_memory_enabled BOOLEAN NOT NULL DEFAULT 0")
+                print("[startup] migráció: users.profile_memory_enabled hozzáadva")
             _cols2 = {row[1] for row in _conn.execute("PRAGMA table_info(chat_messages)")}
             if "session_id" not in _cols2:
                 _conn.execute("ALTER TABLE chat_messages ADD COLUMN session_id VARCHAR(40)")
@@ -1667,13 +1791,13 @@ async def _run_startup_migrations() -> None:
         except Exception as _e:
             print(f"[startup] postgresql vector extension warning: {_e}")
         try:
-            await conn.execute(sql_text("ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS embedding_384 vector(384)"))
+            await conn.execute(sql_text(f"ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS {EMBED_COL} vector({EMBED_DIM})"))
         except Exception as _e:
-            print(f"[startup] postgresql ADD COLUMN embedding_384 warning: {_e}")
+            print(f"[startup] postgresql ADD COLUMN {EMBED_COL} warning: {_e}")
         try:
-            await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_embedding_384 ON knowledge_chunks USING hnsw (embedding_384 vector_cosine_ops)"))
+            await conn.execute(sql_text(f"CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_{EMBED_COL} ON knowledge_chunks USING hnsw ({EMBED_COL} vector_cosine_ops)"))
         except Exception as _e:
-            print(f"[startup] postgresql embedding_384 index warning: {_e}")
+            print(f"[startup] postgresql {EMBED_COL} index warning: {_e}")
         try:
             await conn.execute(sql_text(
                 "CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_hu_tsv ON knowledge_chunks "
@@ -1700,6 +1824,14 @@ async def _run_startup_migrations() -> None:
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMP"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS forum_nickname VARCHAR(50)"))
         await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS forum_avatar VARCHAR(10)"))
+        await conn.execute(sql_text("ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_memory_enabled BOOLEAN NOT NULL DEFAULT false"))
+        try:
+            await conn.execute(sql_text(
+                "CREATE INDEX IF NOT EXISTS ix_chat_messages_hu_tsv ON chat_messages "
+                "USING gin (to_tsvector('hungarian', text))"
+            ))
+        except Exception as _e:
+            print(f"[startup] chat_messages tsvector index warning: {_e}")
         await conn.execute(sql_text("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS session_id VARCHAR(40)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_mfa_challenges_user_id ON mfa_challenges (user_id)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_trusted_devices_user_id ON trusted_devices (user_id)"))
@@ -1712,6 +1844,7 @@ async def _run_startup_migrations() -> None:
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_chat_messages_state_code ON chat_messages (state_code)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_source_name ON knowledge_chunks (source_name)"))
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_source_hash ON knowledge_chunks (source_hash)"))
+        await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_security_events_created_at ON security_events (created_at DESC)"))
         await _ensure_user_fk_cascade(conn)
         await _reset_postgres_sequences(conn)
 
@@ -1816,6 +1949,12 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="A munkamenet lejárt. Jelentkezz be újra.")
     if user.is_admin and not payload.get("mfa"):
         raise HTTPException(status_code=401, detail="Admin belépéshez kétlépcsős azonosítás szükséges.")
+    # Karbantartás / karantén: egyetlen kapu az összes hitelesített végpont előtt.
+    # Korábban csak három helyen volt ellenőrizve (chat, checkin, live token), így
+    # a karantén alatt a fórum, a mérés és a profil műveletek nyitva maradtak.
+    # Az admin (te) mindig átjut, hogy fel tudd oldani.
+    if not user.is_admin and await is_maintenance(db):
+        raise HTTPException(status_code=503, detail=MAINTENANCE_MESSAGE)
     return user
 
 
@@ -1871,7 +2010,35 @@ async def get_settings(db: AsyncSession, defaults: dict[str, str]) -> dict[str, 
     return {key: values.get(key, default) for key, default in defaults.items()}
 
 
+MAINTENANCE_MESSAGE = "A Myra jelenleg tervezett karbantartás miatt nem érhető el. Kérjük, próbáld meg később."
+
+# A karbantartás/karantén állapotot minden hitelesített kérés megnézi, ezért
+# rövid időre a folyamatban tartjuk. 5 másodperc: elég a felesleges DB-körök
+# kivédésére, és elég rövid ahhoz, hogy a feloldás azonnalinak tűnjön.
+MAINTENANCE_CACHE_TTL = float(os.environ.get("MAINTENANCE_CACHE_TTL", "5"))
+_maintenance_cache: dict[str, float] = {"value": 0.0, "at": 0.0}
+
+
+def _invalidate_maintenance_cache() -> None:
+    _maintenance_cache["at"] = 0.0
+
+
+async def is_maintenance(db: AsyncSession) -> bool:
+    now = time.monotonic()
+    if _maintenance_cache["at"] and (now - _maintenance_cache["at"]) < MAINTENANCE_CACHE_TTL:
+        return bool(_maintenance_cache["value"])
+    try:
+        value = await get_setting(db, "maintenance_mode", "false") == "true"
+    except Exception:  # noqa: BLE001 - DB hiba ne zárja ki a felhasználókat
+        return bool(_maintenance_cache["value"])
+    _maintenance_cache["value"] = 1.0 if value else 0.0
+    _maintenance_cache["at"] = now
+    return value
+
+
 async def set_setting(db: AsyncSession, key: str, value: str) -> None:
+    if key == "maintenance_mode":
+        _invalidate_maintenance_cache()
     res = await db.execute(select(AppSetting).where(AppSetting.key == key))
     s = res.scalar_one_or_none()
     if s:
@@ -1886,6 +2053,7 @@ async def set_setting(db: AsyncSession, key: str, value: str) -> None:
 # és mind a három törlési útvonal (auth/delete-account, user/data-delete, admin/users/{id})
 # automatikusan helyesen fog viselkedni.
 USER_OWNED_MODELS = (
+    UserProfile,
     ChatMessage,
     ForumPost,
     UserGoal,
@@ -1927,7 +2095,9 @@ async def _warmup_rag_runtime() -> None:
     started = time.perf_counter()
     try:
         print("[startup] RAG warmup indul")
-        await _get_fastembed_embedding("warmup")
+        await _get_fastembed_embedding(f"{EMBED_QUERY_PREFIX}warmup")
+        if RAG_RERANKER_MODEL:
+            await _rerank_scores("warmup", ["warmup"])
         async with SessionLocal() as db:
             await search_pdf_knowledge(db, "testi feszültség stressz szomatikus lezárás", limit=1)
         print(f"[startup] RAG warmup kész: {time.perf_counter() - started:.1f}s")
@@ -2258,6 +2428,7 @@ class SettingsIn(BaseModel):
     global_notice_text: Optional[str] = Field(None, max_length=1200)
     live_model: Optional[str] = None
     live_api_key: Optional[str] = None
+    profile_memory_enabled: Optional[bool] = None
 
 
 class ReindexPdfKnowledgeBody(BaseModel):
@@ -2340,9 +2511,7 @@ def _ensure_piper_ready() -> None:
         raise HTTPException(status_code=503, detail="A felolvasó (TTS) szolgáltatás jelenleg nem érhető el.")
 
 
-def _synthesize_tts_wav(text_value: str, api_key: str = "") -> Path:
-    if TTS_ENGINE == "gemini":
-        return _synthesize_gemini_wav(text_value, api_key)
+def _synthesize_tts_wav(text_value: str) -> Path:
     if TTS_ENGINE == "piper":
         return _synthesize_piper_wav(text_value)
     logger.error(f"Unknown TTS engine configured: {TTS_ENGINE}")
@@ -2410,78 +2579,6 @@ def _synthesize_piper_wav(text_value: str) -> Path:
         stderr = (completed.stderr or "").strip()[-500:]
         logger.error(f"Piper audio generation failed. Return code: {completed.returncode}, stderr: {stderr}")
         raise HTTPException(status_code=500, detail="Piper hanggenerálási hiba történt.")
-
-    tmp_path.replace(out_path)
-    return out_path
-
-
-def _synthesize_gemini_wav(text_value: str, api_key: str) -> Path:
-    """Gemini TTS. Ugyanazt a lemezes gyorsítótárat használja, mint a Piper-ág,
-    tehát egy már felolvasott szöveg másodszorra hálózati hívás nélkül jön."""
-    if not api_key:
-        logger.error("Gemini TTS: nincs API kulcs beallitva (live_api_key / llm_api_key).")
-        raise HTTPException(status_code=503, detail="A felolvasó (TTS) szolgáltatás jelenleg nem érhető el.")
-
-    PIPER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    _cleanup_piper_cache(PIPER_CACHE_DIR, PIPER_CACHE_MAX_AGE_DAYS)
-
-    cache_key = hashlib.sha256(
-        f"gemini|{GEMINI_TTS_MODEL}|{GEMINI_TTS_VOICE}|{GEMINI_TTS_SAMPLE_RATE}|{text_value}".encode("utf-8")
-    ).hexdigest()
-    out_path = PIPER_CACHE_DIR / f"{cache_key}.wav"
-    if out_path.exists() and out_path.stat().st_size > 44:
-        return out_path
-
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_TTS_MODEL}:generateContent"
-    payload = {
-        "contents": [{"parts": [{"text": text_value}]}],
-        "generationConfig": {
-            "responseModalities": ["AUDIO"],
-            "speechConfig": {
-                "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": GEMINI_TTS_VOICE}}
-            },
-        },
-    }
-    try:
-        with httpx.Client(timeout=GEMINI_TTS_TIMEOUT_S) as client:
-            r = client.post(
-                url,
-                headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-                json=payload,
-            )
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="A felolvasás túl sokáig tartott.")
-    except httpx.HTTPError:
-        logger.exception("Gemini TTS request failed")
-        raise HTTPException(status_code=503, detail="A felolvasó szolgáltatás most nem érhető el.")
-
-    if r.status_code != 200:
-        # A törzs API kulcsot nem tartalmaz, de a hosszát azért levágjuk.
-        logger.error(f"Gemini TTS failed: status={r.status_code}, body={r.text[:300]}")
-        raise HTTPException(status_code=502, detail="Hanggenerálási hiba történt.")
-
-    try:
-        parts = r.json()["candidates"][0]["content"]["parts"]
-        b64 = next(p["inlineData"]["data"] for p in parts if isinstance(p, dict) and "inlineData" in p)
-        pcm = base64.b64decode(b64)
-    except (KeyError, IndexError, TypeError, ValueError, StopIteration):
-        logger.error("Gemini TTS: varatlan valaszformatum")
-        raise HTTPException(status_code=502, detail="Hanggenerálási hiba történt.")
-
-    if len(pcm) < 1000:
-        logger.error(f"Gemini TTS: gyanusan rovid hang ({len(pcm)} bajt)")
-        raise HTTPException(status_code=502, detail="Hanggenerálási hiba történt.")
-
-    tmp_path = PIPER_CACHE_DIR / f"{cache_key}.tmp.wav"
-    try:
-        with wave.open(str(tmp_path), "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(GEMINI_TTS_SAMPLE_RATE)
-            wf.writeframes(pcm)
-    except OSError:
-        logger.exception("Gemini TTS: WAV iras sikertelen")
-        raise HTTPException(status_code=500, detail="Hanggenerálási hiba történt.")
 
     tmp_path.replace(out_path)
     return out_path
@@ -3036,8 +3133,8 @@ async def auth_change_password(
 
 
 @api.get("/auth/me")
-async def auth_me(user: User = Depends(get_current_user)):
-    return {"user": _user_out(user)}
+async def auth_me(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return {"user": _user_out(user, memory_available=await _profile_feature_on(db))}
 
 
 @api.post("/auth/logout")
@@ -3109,19 +3206,12 @@ async def tts_speak(
     body: TtsSpeakBody,
     request: Request,
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     _check_and_record_tts_limit(request, user.id)
     text_value = _normalize_tts_text(body.text)
     if not text_value:
         raise HTTPException(status_code=400, detail="Ures felolvasando szoveg.")
-    api_key = ""
-    if TTS_ENGINE == "gemini":
-        # Elsődlegesen a Live kulcsát használjuk: az biztosan Gemini-kulcs.
-        api_key = await get_setting(db, "live_api_key", "")
-        if not api_key and (await get_setting(db, "llm_provider", "")) == "gemini":
-            api_key = await get_setting(db, "llm_api_key", "")
-    wav_path = await asyncio.to_thread(_synthesize_tts_wav, text_value, api_key)
+    wav_path = await asyncio.to_thread(_synthesize_tts_wav, text_value)
     return FileResponse(
         str(wav_path),
         media_type="audio/wav",
@@ -3298,6 +3388,33 @@ async def post_user_consent(body: ConsentBody, user: User = Depends(get_current_
     return {"ok": True, "consent_given": user.consent_given}
 
 
+class ProfileMemoryBody(BaseModel):
+    enabled: bool
+
+
+@api.put("/user/memory")
+async def put_user_memory(body: ProfileMemoryBody, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """A profil-memoria be- es kikapcsolasa. Kikapcsolaskor a mar elkeszult
+    profilt is toroljuk: a hozzajarulas visszavonasa nem csak a jovore szol."""
+    uid = user.id
+    enabled = bool(body.enabled)
+    user.profile_memory_enabled = enabled
+    if not enabled:
+        await db.execute(delete(UserProfile).where(UserProfile.user_id == uid))
+    # Bekapcsolaskor azonnal elkeszul a visszamenoleges profil a korabbi meresekbol es
+    # beszelgetesekbol, nem csak a kovetkezo chat-uzenetnel. Hatterben fut, a valasz nem var ra.
+    start_job = enabled and await _profile_feature_on(db)
+    await db.commit()
+    if start_job:
+        with _profile_jobs_lock:
+            start_job = uid not in _profile_jobs
+            if start_job:
+                _profile_jobs.add(uid)
+        if start_job:
+            _spawn_background_task(_run_profile_job(uid))
+    return {"ok": True, "enabled": enabled, "available": PROFILE_ENABLED}
+
+
 @api.post("/user/data-export")
 async def post_user_data_export(body: ExportDataBody, request: Request, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     if not verify_password(body.current_password, user.password_hash):
@@ -3309,6 +3426,8 @@ async def post_user_data_export(body: ExportDataBody, request: Request, user: Us
     
     sub_res = await db.execute(select(QuizSubmission).where(QuizSubmission.user_id == user.id))
     submissions = [{"id": s.id, "answers": s.answers, "norms": s.norms, "code": s.code, "created_at": s.created_at.isoformat()} for s in sub_res.scalars().all()]
+
+    derived_profile = await _get_user_profile(db, user.id)
 
     goal_res = await db.execute(select(UserGoal).where(UserGoal.user_id == user.id))
     goals = [{"id": g.id, "text": g.text, "scale": g.scale, "status": g.status,
@@ -3326,7 +3445,16 @@ async def post_user_data_export(body: ExportDataBody, request: Request, user: Us
         },
         "chat_messages": messages,
         "quiz_submissions": submissions,
-        "goals": goals
+        "goals": goals,
+        # Szarmaztatott adat, de attol meg szemelyes adat: az Art. 20 exportnak
+        # tartalmaznia kell, kulonben a felhasznalo nem latja, mit tart rola a rendszer.
+        "derived_profile": ({
+            "content": derived_profile.content,
+            "generated_at": derived_profile.generated_at.isoformat() if derived_profile.generated_at else None,
+            "model_name": derived_profile.model_name,
+            "source_messages": derived_profile.source_messages,
+            "source_sessions": derived_profile.source_sessions,
+        } if derived_profile else None),
     }
 
 
@@ -3402,7 +3530,7 @@ async def post_ai_suggest(body: AiSuggestBody, user: User = Depends(get_current_
     return {"suggestions": ["Figyeld meg a jelenlegi érzéseidet.", "Írj le 3 dolgot, amiért hálás vagy.", "Sétálj egy pár percet a friss levegőn."]}
 
 
-def _user_out(u: User) -> dict:
+def _user_out(u: User, memory_available: Optional[bool] = None) -> dict:
     is_expired = False
     days_remaining = 0
     if u.state_code and u.code_verified_at:
@@ -3425,6 +3553,8 @@ def _user_out(u: User) -> dict:
         "mfa_forced": bool(u.is_admin),
         "is_code_expired": is_expired,
         "code_days_remaining": max(0, days_remaining),
+        "profile_memory_enabled": bool(u.profile_memory_enabled),
+        "profile_memory_available": PROFILE_ENABLED if memory_available is None else bool(memory_available),
     }
 
 
@@ -3800,6 +3930,390 @@ def _goal_out(g: "UserGoal") -> dict:
         "created_at": g.created_at.isoformat() if g.created_at else None,
         "done_at": g.done_at.isoformat() if g.done_at else None,
     }
+
+
+# ---------------------------------------------------------------- PROFIL
+PROFILE_GENERATOR_PROMPT = """Klinikai dokumentacios segedkent dolgozol. A feladatod, hogy a megadott
+meresi adatokbol es beszelgetes-reszletekbol tomor, tenyszeru kivonatot irj a Myra szamara.
+
+SZABALYOK:
+- Csak azt irhatod le, ami az adatokban benne van. Nem kovetkeztetsz, nem altalanositasz,
+  nem allitasz fel diagnozist, es nem hasznalsz klinikai kategoriakat.
+- Ha egy mezohoz nincs eleg adat, oda pontosan ezt ird: nincs eleg adat
+- A felhasznalo sajat szavait idezd, ha az pontosabb, mint a korulirasa.
+- Semmit ne ird le, ami harmadik szemelyrol szol.
+- Osszesen legfeljebb {max_chars} karakter. Nincs bevezeto es nincs zaro mondat.
+
+PONTOSAN EZT A HAROM MEZOT ird ki, ebben a sorrendben, mas semmit. A meresi ivet
+es a torespontot NE ird ki: azokat a rendszer szamolja, nem a te feladatod.
+
+[VISSZATERO TEMAK]
+(ami tobb beszelgetesben is elojon, a felhasznalo sajat szohasznalataval)
+
+[AMI LEVEZETETT]
+(mi utan zarult le nyugodtabban egy beszelgetes)
+
+[AMI NEM MUKODOTT]
+(mi utan szakadt meg vagy merevedett be a beszelgetes)
+"""
+
+
+
+# A kiugras-szamitas a myra_beszelgetes_diagram v1.3 modszertanabol, valtoztatas
+# nelkul. Szandekosan nem LLM vegzi: longitudinalis eszkozben ket meresi pont
+# kulonbsege nem szarmazhat egy generator szorasabol.
+_WORD_CHAR_RE = re.compile(r"[^\W_]", re.UNICODE)
+
+
+def _word_count(text: str) -> int:
+    """Szo = whitespace-token, amiben van legalabb egy betu vagy szamjegy.
+    Az onallo irasjel es emoji nem szo."""
+    return sum(1 for token in (text or "").split() if _WORD_CHAR_RE.search(token))
+
+
+def _median(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return float(ordered[mid])
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def _split_sessions(messages: list[ChatMessage]) -> list[list[ChatMessage]]:
+    """Uj ules ott kezdodik, ahol az elozo uzenet ota eltelt ido meghaladja a
+    CONV_SESSION_GAP_MIN erteket."""
+    sessions: list[list[ChatMessage]] = []
+    current: list[ChatMessage] = []
+    previous = None
+    for msg in messages:
+        stamp = msg.created_at
+        if previous is not None and stamp is not None:
+            a = previous if previous.tzinfo else previous.replace(tzinfo=timezone.utc)
+            b = stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+            if (b - a).total_seconds() > CONV_SESSION_GAP_MIN * 60:
+                sessions.append(current)
+                current = []
+        current.append(msg)
+        if stamp is not None:
+            previous = stamp
+    if current:
+        sessions.append(current)
+    return sessions
+
+
+def _arc_metrics(messages: list[ChatMessage]) -> dict:
+    sessions = _split_sessions(messages)
+    positions: list[int] = []
+    ratios: list[float] = []
+    settled = 0
+    broke = 0
+    marked_sessions = 0
+
+    for session in sessions:
+        user_counts = [_word_count(m.text) for m in session if m.role == "user"]
+        if len(user_counts) < 2:
+            continue
+        med = _median([float(c) for c in user_counts])
+        if med <= 0:
+            continue
+        last_myra = None
+        user_index = 0
+        first_spike_at = None
+        for msg in session:
+            if msg.role != "user":
+                last_myra = _word_count(msg.text)
+                continue
+            user_index += 1
+            words = _word_count(msg.text)
+            if last_myra is None:
+                continue
+            if words > last_myra and words >= CONV_SPIKE_K * med:
+                first_spike_at = user_index
+                ratios.append(words / med)
+                break
+        if first_spike_at is None:
+            continue
+        marked_sessions += 1
+        positions.append(first_spike_at)
+        after = user_counts[first_spike_at:]
+        # Levezetes: a kiugras utan meg legalabb ket felhasznaloi uzenet jott, es
+        # egyik sem kiugras tobbe - vagyis a sorozat visszatert a normal savba.
+        # (A diagram-eszkoz csak a kiugrast definialja; ez a resz sajat
+        # operacionalizacio, es ugyanazt a K kuszobot hasznalja.)
+        if len(after) >= 2 and max(after) < CONV_SPIKE_K * med:
+            settled += 1
+        else:
+            broke += 1
+
+    return {
+        "sessions": len(sessions),
+        "marked_sessions": marked_sessions,
+        "median_position": _median([float(p) for p in positions]) if positions else None,
+        "median_ratio": _median(ratios) if ratios else None,
+        "settled": settled,
+        "broke": broke,
+    }
+
+
+def _format_computed_block(subs: list, metrics: dict) -> str:
+    """A profil ket mezoje, kodbol szamolva. Ez a szoveg valtozatlanul kerul a
+    kesz profilba - az LLM nem irja at es nem is latja feladatkent."""
+    lines = ["[MERESI IV]"]
+    if not subs:
+        lines.append("nincs adat")
+    for sub in subs:
+        when = _to_local(sub.created_at)
+        norms = sub.norms if isinstance(sub.norms, dict) else {}
+        parts = [f"{k}={norms[k]:.2f}" for k in ("a", "p", "h", "c") if isinstance(norms.get(k), (int, float))]
+        lines.append(f"- {when.strftime('%Y.%m.%d') if when else '?'} kód={sub.code} " + " ".join(parts))
+
+    lines.append("")
+    lines.append("[AZ IV TORESPONTJA]")
+    if metrics.get("marked_sessions"):
+        pos = metrics["median_position"]
+        ratio = metrics["median_ratio"]
+        lines.append(
+            f"- {metrics['marked_sessions']} ülésben volt kiugrás {metrics['sessions']} ülésből "
+            f"(K={CONV_SPIKE_K}, ülés-szünet {CONV_SESSION_GAP_MIN} perc)"
+        )
+        lines.append(f"- az első kiugrás tipikusan a felhasználó {pos:.0f}. üzeneténél, {ratio:.1f}× az ülésmediánhoz képest")
+        lines.append(f"- a kiugrás után: {metrics['settled']} ülésben levezetés, {metrics['broke']} ülésben megszakadás")
+    else:
+        lines.append(f"nincs eleg adat ({metrics.get('sessions', 0)} ülés, egyetlen jelölt kiugrás sem)")
+    return "\n".join(lines)
+
+
+
+# A multra utalo fordulatok. Szandekosan bo lista es szandekosan olcso: egy
+# regex sosem fog annyiba kerulni, mint egy folosleges kereses.
+_PAST_REFERENCE_RE = re.compile(
+    r"(m[úu]ltkor|kor[áa]bban|legut[óo]bb|eml[ée]ksz|r[ée]gebben|annak idej[ée]n"
+    r"|m[úu]lt h[ée]ten|m[úu]lt h[óo]napban|tavaly|tegnap|el[őo]z[őo]leg"
+    r"|ahogy mondtam|mondtam m[áa]r|eml[íi]tettem|mes[ée]ltem|besz[ée]lt[üu]nk"
+    r"|arr[óo]l besz[ée]l|korábbi besz[ée]lget)",
+    re.IGNORECASE,
+)
+
+
+def _is_past_reference(text: str) -> bool:
+    return bool(_PAST_REFERENCE_RE.search(text or ""))
+
+
+async def _recall_past_exchanges(db: AsyncSession, user_id: int, session_id: Optional[str], query: str) -> list[dict]:
+    """A felhasznalo KORABBI uleseibol keres sajat mondatokat, es mindegyikhez
+    odaveszi a ra kovetkezo Myra-valaszt. Az aktualis ules kimarad: az amugy is
+    ott van az elozmenyben."""
+    if DB_DIALECT == "sqlite":
+        return []
+    ts_query = _build_ts_query(_expand_knowledge_query(query))
+    if not ts_query:
+        return []
+    stmt = sql_text("""
+        SELECT u.id, u.created_at, u.text AS user_text, u.session_id,
+               (SELECT a.text FROM chat_messages a
+                 WHERE a.user_id = u.user_id AND a.session_id IS NOT DISTINCT FROM u.session_id
+                   AND a.role <> 'user' AND a.created_at > u.created_at
+                 ORDER BY a.created_at ASC LIMIT 1) AS myra_text
+        FROM chat_messages u
+        WHERE u.user_id = :uid
+          AND u.role = 'user'
+          AND u.session_id IS DISTINCT FROM :sid
+          AND to_tsvector('hungarian', u.text) @@ to_tsquery('hungarian', :ts_query)
+        ORDER BY ts_rank_cd(to_tsvector('hungarian', u.text), to_tsquery('hungarian', :ts_query)) DESC,
+                 u.created_at DESC
+        LIMIT :pool
+    """)
+    res = await db.execute(stmt, {"uid": user_id, "sid": session_id, "ts_query": ts_query, "pool": RECALL_CANDIDATES})
+    rows = [dict(r) for r in res.mappings().all()]
+    if not rows:
+        return []
+
+    if RAG_RERANKER_MODEL and len(rows) > RECALL_MAX_ITEMS:
+        try:
+            scores = await _rerank_scores(query, [r["user_text"][:RAG_RERANK_DOC_CHARS] for r in rows])
+            rows = [rows[i] for i in sorted(range(len(rows)), key=lambda i: scores[i], reverse=True)]
+        except Exception as _e:
+            logger.warning(f"recall rerank hiba, marad a szoveges rangsor: {_e}")
+
+    return rows[:RECALL_MAX_ITEMS]
+
+
+def _build_recall_block(rows: list[dict]) -> str:
+    if not rows:
+        return ""
+    lines = [
+        "[KORÁBBI BESZÉLGETÉSEKBŐL]",
+        "A felhasználó a múltra utalt, ezért ide bekerült néhány korábbi részlet. Csak akkor "
+        "használd, ha tényleg arról van szó; ne olvasd fel és ne sorold fel őket.",
+    ]
+    used = 0
+    for row in rows:
+        when = _to_local(row.get("created_at"))
+        stamp = when.strftime("%Y.%m.%d") if when else "?"
+        user_text = (row.get("user_text") or "").strip()[:RECALL_SNIPPET_CHARS]
+        myra_text = (row.get("myra_text") or "").strip()[:RECALL_SNIPPET_CHARS]
+        block = f"- {stamp} — a felhasználó: \"{user_text}\""
+        if myra_text:
+            block += f"\n  Myra akkor: \"{myra_text}\""
+        if used + len(block) > RECALL_MAX_CHARS:
+            break
+        lines.append(block)
+        used += len(block)
+    return "\n".join(lines) if len(lines) > 2 else ""
+
+
+def _build_profile_block(profile: Optional["UserProfile"]) -> str:
+    """A promptba kerulo blokk. Ures, ha nincs profil vagy ki van kapcsolva."""
+    if not PROFILE_ENABLED or profile is None or not (profile.content or "").strip():
+        return ""
+    content = profile.content.strip()[:PROFILE_MAX_CHARS]
+    return (
+        "[FELHASZNALOI PROFIL - korabbi ciklusok kivonata]\n"
+        "Ezt a kivonatot SOHA ne olvasd fel es ne hivatkozz ra nyiltan; csak tajekozodasra hasznald.\n"
+        + content
+    )
+
+
+async def _profile_feature_on(db: AsyncSession) -> bool:
+    """A funkcio ket kapcsolon mulik: az env (telepites szintu vegso kikapcsolo)
+    es az admin beallitas (uzemeltetes kozben allithato). Ha az env kikapcsolja,
+    az admin kapcsolo mar nem szamit."""
+    if not PROFILE_ENABLED:
+        return False
+    value = await get_setting(db, "profile_memory_enabled", "true")
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def _get_user_profile(db: AsyncSession, user_id: int) -> Optional["UserProfile"]:
+    res = await db.execute(select(UserProfile).where(UserProfile.user_id == user_id))
+    return res.scalar_one_or_none()
+
+
+async def _collect_profile_source(db: AsyncSession, user_id: int) -> tuple[str, int, int, list, list]:
+    """Forrasanyag a generalashoz: meresek idorendben, majd a beszelgetesek
+    legfrissebb resze. A vagas a REGI vegen tortenik, mert a friss anyag
+    informativabb; a meresi sor viszont mindig teljes, mert az roviden is elfer."""
+    sub_res = await db.execute(
+        select(QuizSubmission).where(QuizSubmission.user_id == user_id).order_by(QuizSubmission.created_at.asc())
+    )
+    subs = sub_res.scalars().all()
+    lines = ["MERESEK:"]
+    for sub in subs:
+        when = _to_local(sub.created_at)
+        norms = sub.norms if isinstance(sub.norms, dict) else {}
+        norm_txt = " ".join(f"{k}={v:.2f}" for k, v in norms.items() if isinstance(v, (int, float)))
+        lines.append(f"- {when.strftime('%Y.%m.%d') if when else '?'} kod={sub.code} {norm_txt}")
+
+    msg_res = await db.execute(
+        select(ChatMessage).where(ChatMessage.user_id == user_id).order_by(ChatMessage.created_at.desc()).limit(2000)
+    )
+    messages = list(reversed(msg_res.scalars().all()))
+    budget = PROFILE_SOURCE_MAX_CHARS
+    chunks = []
+    for msg in reversed(messages):
+        when = _to_local(msg.created_at)
+        who = "FELHASZNALO" if msg.role == "user" else "MYRA"
+        line = f"[{when.strftime('%Y.%m.%d %H:%M') if when else '?'}] {who}: {msg.text}"
+        if len(line) > budget:
+            break
+        budget -= len(line)
+        chunks.append(line)
+    chunks.reverse()
+    lines.append("")
+    lines.append("BESZELGETESEK:")
+    lines.extend(chunks)
+    return "\n".join(lines), len(messages), len(subs), messages, subs
+
+
+_profile_jobs: set[int] = set()
+_profile_jobs_lock = threading.Lock()
+
+
+async def _regenerate_user_profile(user_id: int) -> Optional[str]:
+    """Teljes ujrageneralas a forrasbol. Sajat sessiont nyit, mert hatterben fut."""
+    async with SessionLocal() as db:
+        settings = await get_settings(db, {
+            "llm_provider": "gemini",
+            "llm_model": "gemini-2.5-flash",
+            "llm_api_key": "",
+        })
+        if settings["llm_provider"] != "ollama" and not settings["llm_api_key"]:
+            return None
+        owner = await db.get(User, user_id)
+        if owner is None or not owner.profile_memory_enabled:
+            # Hozzajarulas nelkul nem keszul profil - akkor sem, ha az admin
+            # inditja. A kapcsolo a felhasznaloe.
+            return None
+        source, msg_count, sub_count, messages, subs = await _collect_profile_source(db, user_id)
+        if msg_count == 0 and sub_count == 0:
+            return None
+        started = time.perf_counter()
+        raw = await _call_llm(
+            settings["llm_provider"], settings["llm_model"], settings["llm_api_key"],
+            PROFILE_GENERATOR_PROMPT.format(max_chars=PROFILE_MAX_CHARS),
+            [], source,
+        )
+        computed = _format_computed_block(subs, _arc_metrics(messages))
+        written = _clean_llm_reply(raw, context="profile")
+        # A szamitott blokk elsobbseget elvez: ha a keret szuk, az LLM-resz vagodik.
+        remaining = max(0, PROFILE_MAX_CHARS - len(computed) - 2)
+        content = (computed + "\n\n" + written[:remaining]).strip()
+        profile = await _get_user_profile(db, user_id)
+        if profile is None:
+            profile = UserProfile(user_id=user_id)
+            db.add(profile)
+        profile.content = content
+        profile.source_messages = msg_count
+        profile.source_sessions = sub_count
+        profile.model_name = settings["llm_model"]
+        profile.generated_at = _now()
+        await db.commit()
+        logger.info(
+            "profile_generated user=%s messages=%d sessions=%d chars=%d took=%.1fs",
+            user_id, msg_count, sub_count, len(content), time.perf_counter() - started,
+        )
+        return content
+
+
+async def _run_profile_job(user_id: int) -> None:
+    try:
+        await _regenerate_user_profile(user_id)
+    except Exception as e:
+        logger.warning(f"profil generalasi hiba (user={user_id}): {e}")
+    finally:
+        with _profile_jobs_lock:
+            _profile_jobs.discard(user_id)
+
+
+async def _maybe_refresh_profile(db: AsyncSession, user: "User", profile: Optional["UserProfile"]) -> None:
+    """Elavult-e a profil. Szandekosan NEM blokkolja a valaszt: a mostani forduló
+    meg a regi (vagy hianyzo) profillal megy ki, az ujragenerlas hatterben fut."""
+    if not PROFILE_ENABLED or not user.profile_memory_enabled:
+        return
+    user_id = user.id
+    stale = profile is None
+    if profile is not None:
+        msg_res = await db.execute(
+            select(func.count()).select_from(ChatMessage).where(ChatMessage.user_id == user_id)
+        )
+        msg_count = int(msg_res.scalar() or 0)
+        sub_res = await db.execute(
+            select(func.count()).select_from(QuizSubmission).where(QuizSubmission.user_id == user_id)
+        )
+        sub_count = int(sub_res.scalar() or 0)
+        stale = (
+            sub_count > profile.source_sessions
+            or msg_count - profile.source_messages >= PROFILE_REFRESH_MESSAGES
+        )
+    if not stale:
+        return
+    with _profile_jobs_lock:
+        if user_id in _profile_jobs:
+            return
+        _profile_jobs.add(user_id)
+    _spawn_background_task(_run_profile_job(user_id))
 
 
 @api.get("/goals/suggest")
@@ -4522,7 +5036,7 @@ def _sync_get_fastembed_embedding(text: str) -> list[float]:
     embedding = next(_fastembed_model.embed([norm]))
     
     values = embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
-    if len(values) != 384:
+    if len(values) != EMBED_DIM:
         raise ValueError(f"Invalid FastEmbed dimension: {len(values)}")
     emb = [float(x) for x in values]
     with _fastembed_cache_lock:
@@ -4535,6 +5049,29 @@ def _sync_get_fastembed_embedding(text: str) -> list[float]:
 
 async def _get_fastembed_embedding(text: str) -> list[float]:
     return await asyncio.to_thread(_sync_get_fastembed_embedding, text)
+
+
+_reranker_model = None
+_reranker_lock = threading.Lock()
+
+
+def _sync_rerank_scores(query: str, documents: list[str]) -> list[float]:
+    """Kereszt-kodolo pontszamok. A modell lusta toltodik, es egy peldany
+    szolgal ki minden kerest - a betoltes 1 GB korul van, tobb peldany
+    feleslegesen vinne a memoriat."""
+    global _reranker_model
+    with _reranker_lock:
+        if _reranker_model is None:
+            from fastembed.rerank.cross_encoder import TextCrossEncoder
+            _reranker_model = TextCrossEncoder(
+                model_name=RAG_RERANKER_MODEL,
+                threads=RAG_RERANK_THREADS or None,
+            )
+    return [float(x) for x in _reranker_model.rerank(query, documents)]
+
+
+async def _rerank_scores(query: str, documents: list[str]) -> list[float]:
+    return await asyncio.to_thread(_sync_rerank_scores, query, documents)
 
 
 
@@ -4754,8 +5291,8 @@ async def chat_send(
     def mark_timing(name: str, started: float) -> None:
         timings[name] = time.perf_counter() - started
 
-    if not user.is_admin and await get_setting(db, "maintenance_mode", "false") == "true":
-        raise HTTPException(status_code=503, detail="A Myra jelenleg tervezett karbantartás miatt nem érhető el. Kérjük, próbáld meg később.")
+    if not user.is_admin and await is_maintenance(db):
+        raise HTTPException(status_code=503, detail=MAINTENANCE_MESSAGE)
 
     if not user.state_code:
         raise HTTPException(status_code=400, detail="Először töltsd ki a kérdőívet.")
@@ -4847,11 +5384,27 @@ async def chat_send(
     phase_started = time.perf_counter()
     active_goals = await _get_active_goals(db, user.id)
     goals_block = _build_goals_block(active_goals)
+    recall_rows = []
+    if RECALL_ENABLED and bool(user.profile_memory_enabled) and _is_past_reference(text):
+        try:
+            recall_rows = await _recall_past_exchanges(db, user.id, active_session_id, text)
+        except Exception as _e:
+            logger.warning(f"felidezesi hiba: {_e}")
+            await db.rollback()
+    recall_block = _build_recall_block(recall_rows)
+
+    profile_on = PROFILE_ENABLED and bool(user.profile_memory_enabled)
+    user_profile = await _get_user_profile(db, user.id) if profile_on else None
+    profile_block = _build_profile_block(user_profile)
+    await _maybe_refresh_profile(db, user, user_profile)
     mark_timing("goals", phase_started)
 
     phase_started = time.perf_counter()
     effective_kb = "\n\n".join(part for part in [crisis_context, retrieved_kb_context] if part)
-    sys_prompt = _build_system_prompt(sys_prompt_base, effective_kb, sc, user.name, user.code_verified_at, extra_context=goals_block)
+    sys_prompt = _build_system_prompt(
+        sys_prompt_base, effective_kb, sc, user.name, user.code_verified_at,
+        extra_context="\n\n".join(part for part in [goals_block, profile_block, recall_block] if part.strip()),
+    )
     mark_timing("prompt", phase_started)
     try:
         now_ts_str = _to_local(_now()).strftime("%Y.%m.%d %H:%M:%S")
@@ -4939,7 +5492,7 @@ async def chat_checkin(request: Request, user: User = Depends(get_current_user),
     Szándékosan „best effort”: ha bármelyik feltétel nem teljesül, üres választ ad, sosem hibázik a felületen.
     """
     _check_and_record_chat_limit(request, user.id)
-    if not user.is_admin and await get_setting(db, "maintenance_mode", "false") == "true":
+    if not user.is_admin and await is_maintenance(db):
         return {"message": None}
     if not user.state_code or not user.code_verified_at:
         return {"message": None}
@@ -5002,13 +5555,18 @@ async def chat_checkin(request: Request, user: User = Depends(get_current_user),
 
     active_goals = await _get_active_goals(db, user.id)
     goals_block = _build_goals_block(active_goals)
+    profile_block = (
+        _build_profile_block(await _get_user_profile(db, user.id))
+        if (PROFILE_ENABLED and user.profile_memory_enabled) else ""
+    )
 
     recent_user_text = "\n".join(m.text for m in db_history[-6:] if m.role == "user")
     crisis_context = _build_crisis_safety_context() if _is_crisis_message(recent_user_text) else ""
 
     history = _format_chat_history_for_llm(db_history)
     sys_prompt = _build_system_prompt(
-        settings["system_prompt"], crisis_context, sc, user.name, user.code_verified_at, extra_context=goals_block
+        settings["system_prompt"], crisis_context, sc, user.name, user.code_verified_at,
+        extra_context="\n\n".join(part for part in [goals_block, profile_block] if part.strip())
     )
 
     try:
@@ -5040,8 +5598,8 @@ async def create_live_token(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if not user.is_admin and await get_setting(db, "maintenance_mode", "false") == "true":
-        raise HTTPException(status_code=503, detail="A Myra jelenleg tervezett karbantartás miatt nem érhető el. Kérjük, próbáld meg később.")
+    if not user.is_admin and await is_maintenance(db):
+        raise HTTPException(status_code=503, detail=MAINTENANCE_MESSAGE)
 
     if not GOOGLE_GENAI_AVAILABLE:
         raise HTTPException(status_code=503, detail="A Gemini Live kliens nincs telepítve a szerveren.")
@@ -5209,6 +5767,9 @@ async def admin_get_settings(_: User = Depends(require_admin), db: AsyncSession 
         "live_model": live_model,
         "live_api_key_set": bool(live_api_key),
         "live_api_key_preview": live_masked if live_api_key else "",
+        # Az env a vegso kikapcsolo: ha az tiltja, a kapcsolo nem is jelenik meg.
+        "profile_memory_available": PROFILE_ENABLED,
+        "profile_memory_enabled": await _profile_feature_on(db),
     }
 
 
@@ -5230,6 +5791,8 @@ async def admin_update_settings(body: SettingsIn, request: Request, admin: User 
         await set_setting(db, "live_model", body.live_model.strip())
     if body.live_api_key is not None:
         await set_setting(db, "live_api_key", body.live_api_key.strip())
+    if body.profile_memory_enabled is not None:
+        await set_setting(db, "profile_memory_enabled", "true" if body.profile_memory_enabled else "false")
     await _admin_audit(db, admin, request, "admin.settings.update")
     return {"ok": True}
 
@@ -5442,9 +6005,175 @@ async def admin_set_maintenance(body: MaintenanceModeBody, request: Request, adm
         raise HTTPException(status_code=400, detail="Hibás jelszó (jelszo).")
     val = "true" if body.maintenance_mode else "false"
     await set_setting(db, "maintenance_mode", val)
+    if not body.maintenance_mode:
+        # Kézi kikapcsolás a karantént is feloldja, különben a figyelő
+        # állapota és a tényleges állapot szétcsúszna.
+        await set_setting(db, "quarantine_active", "false")
     await db.commit()
+    _invalidate_maintenance_cache()
     await _admin_audit(db, admin, request, "admin.maintenance.toggle", f"enabled={val}")
     return {"ok": True, "maintenance_mode": body.maintenance_mode}
+
+
+# ---------------------------------------------------------------- karantén
+
+class SecurityActionBody(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    reason: str = Field(default="", max_length=200)
+
+
+_QUARANTINE_DEFAULTS = {
+    "quarantine_active": "false",
+    "quarantine_reason": "",
+    "quarantine_at": "",
+    "quarantine_source": "",
+    "maintenance_mode": "false",
+    "watch_heartbeat": "",
+}
+
+
+def _security_event_out(e: SecurityEvent) -> dict:
+    return {
+        "id": e.id,
+        "created_at": e.created_at.isoformat() if e.created_at else None,
+        "source": e.source or "",
+        "kind": e.kind or "",
+        "severity": e.severity or "info",
+        "label": e.label or "",
+        "detail": e.detail or "",
+        "quarantined": bool(e.quarantined),
+    }
+
+
+@api.get("/admin/security")
+async def admin_security_state(
+    limit: int = 50,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """A karantén állapota + a legutóbbi biztonsági események, egy körben."""
+    s = await get_settings(db, _QUARANTINE_DEFAULTS)
+    limit = max(1, min(int(limit or 50), 200))
+
+    res = await db.execute(
+        select(SecurityEvent)
+        .order_by(SecurityEvent.created_at.desc(), SecurityEvent.id.desc())
+        .limit(limit)
+    )
+    events = [_security_event_out(e) for e in res.scalars().all()]
+
+    since = _now() - timedelta(hours=24)
+    res2 = await db.execute(
+        select(SecurityEvent.severity, func.count(SecurityEvent.id))
+        .where(SecurityEvent.created_at >= since)
+        .group_by(SecurityEvent.severity)
+    )
+    counts = {row[0] or "info": int(row[1]) for row in res2.all()}
+
+    # A figyelő percenként frissíti a szívdobbanást; ha régi, nem fut.
+    heartbeat = s.get("watch_heartbeat", "")
+    watch_age_s = None
+    if heartbeat:
+        try:
+            beat = datetime.strptime(heartbeat, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=_now().tzinfo or timezone.utc
+            )
+            watch_age_s = max(0, int((_now() - beat).total_seconds()))
+        except Exception:  # noqa: BLE001
+            watch_age_s = None
+
+    return {
+        "quarantine_active": s.get("quarantine_active") == "true",
+        "quarantine_reason": s.get("quarantine_reason", ""),
+        "quarantine_at": s.get("quarantine_at", ""),
+        "quarantine_source": s.get("quarantine_source", ""),
+        "maintenance_mode": s.get("maintenance_mode") == "true",
+        "watch_heartbeat": heartbeat,
+        "watch_age_seconds": watch_age_s,
+        "counts_24h": {
+            "critical": counts.get("critical", 0),
+            "warn": counts.get("warn", 0),
+            "info": counts.get("info", 0),
+        },
+        "events": events,
+    }
+
+
+@api.post("/admin/security/release")
+async def admin_security_release(
+    body: SecurityActionBody,
+    request: Request,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Karantén feloldása: a platform újra kiszolgálja a felhasználókat."""
+    if not verify_password(body.current_password, admin.password_hash):
+        await _admin_audit(db, admin, request, "admin.security.release.denied", "reason=bad_password")
+        raise HTTPException(status_code=400, detail="Hibás jelszó.")
+    await set_setting(db, "quarantine_active", "false")
+    await set_setting(db, "quarantine_reason", "")
+    await set_setting(db, "quarantine_source", "")
+    await set_setting(db, "maintenance_mode", "false")
+    db.add(SecurityEvent(
+        source="admin",
+        kind="feloldas",
+        severity="info",
+        label="karantén feloldva",
+        detail=_sanitize_log_line(body.reason)[:400],
+        quarantined=False,
+    ))
+    await db.commit()
+    _invalidate_maintenance_cache()
+    await _admin_audit(db, admin, request, "admin.security.release", _sanitize_log_line(body.reason)[:200])
+    return {"ok": True, "quarantine_active": False, "maintenance_mode": False}
+
+
+@api.post("/admin/security/quarantine")
+async def admin_security_quarantine(
+    body: SecurityActionBody,
+    request: Request,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Kézi karantén: ugyanaz, mintha a figyelő kapcsolta volna be."""
+    if not verify_password(body.current_password, admin.password_hash):
+        await _admin_audit(db, admin, request, "admin.security.quarantine.denied", "reason=bad_password")
+        raise HTTPException(status_code=400, detail="Hibás jelszó.")
+    reason = _sanitize_log_line(body.reason)[:200] or "kézi karantén"
+    await set_setting(db, "quarantine_active", "true")
+    await set_setting(db, "quarantine_reason", reason)
+    await set_setting(db, "quarantine_at", _now().strftime("%Y-%m-%d %H:%M:%S"))
+    await set_setting(db, "quarantine_source", "admin")
+    await set_setting(db, "maintenance_mode", "true")
+    db.add(SecurityEvent(
+        source="admin",
+        kind="karanten",
+        severity="critical",
+        label=f"kézi karantén: {reason}",
+        detail="",
+        quarantined=True,
+    ))
+    await db.commit()
+    _invalidate_maintenance_cache()
+    await _admin_audit(db, admin, request, "admin.security.quarantine", reason)
+    return {"ok": True, "quarantine_active": True, "maintenance_mode": True}
+
+
+@api.post("/admin/security/events/clear")
+async def admin_security_clear_events(
+    body: SecurityActionBody,
+    request: Request,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Eseménylista ürítése. A karantén állapotát nem érinti."""
+    if not verify_password(body.current_password, admin.password_hash):
+        await _admin_audit(db, admin, request, "admin.security.events.clear.denied", "reason=bad_password")
+        raise HTTPException(status_code=400, detail="Hibás jelszó.")
+    await db.execute(delete(SecurityEvent))
+    await db.commit()
+    await _admin_audit(db, admin, request, "admin.security.events.clear", "")
+    return {"ok": True}
 
 @api.post("/admin/force-logout-all")
 async def admin_force_logout_all(body: EmergencyAdminActionBody, request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
@@ -5705,6 +6434,40 @@ async def admin_download_sessions(user_id: int, _: User = Depends(require_admin)
     )
 
 
+@api.get("/admin/users/{user_id}/profile")
+async def admin_get_user_profile(user_id: int, _: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    profile = await _get_user_profile(db, user_id)
+    return {
+        "enabled": PROFILE_ENABLED,
+        "profile": ({
+            "content": profile.content,
+            "generated_at": profile.generated_at.isoformat() if profile.generated_at else None,
+            "model_name": profile.model_name,
+            "source_messages": profile.source_messages,
+            "source_sessions": profile.source_sessions,
+        } if profile else None),
+    }
+
+
+@api.post("/admin/users/{user_id}/profile/regenerate")
+async def admin_regenerate_user_profile(user_id: int, request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    """Kezi ujrageneralas. Szandekosan szinkron: az admin itt latni akarja az
+    eredmenyt, nem csak azt, hogy elindult."""
+    await _admin_audit(db, admin, request, "user.profile.regenerate", f"user {user_id}")
+    await db.commit()
+    content = await _regenerate_user_profile(user_id)
+    if content is None:
+        raise HTTPException(status_code=400, detail="Nincs elég adat a profilhoz, vagy nincs LLM kulcs beállítva.")
+    return {"ok": True, "content": content}
+
+
+@api.delete("/admin/users/{user_id}/profile")
+async def admin_delete_user_profile(user_id: int, request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    await _admin_audit(db, admin, request, "user.profile.delete", f"user {user_id}")
+    await db.execute(delete(UserProfile).where(UserProfile.user_id == user_id))
+    return {"ok": True}
+
+
 @api.put("/admin/users/{user_id}/suspend")
 async def admin_suspend_user(user_id: int, request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     res = await db.execute(select(User).where(User.id == user_id))
@@ -5732,14 +6495,46 @@ async def admin_delete_user(user_id: int, request: Request, admin: User = Depend
     return {"ok": True}
 
 
+# Postgres/Supabase eseten a szerveren orankent futo pg_dump (myra-backup.sh) mentesei
+# csak olvashato koteten erkeznek ide; a gomb a legfrissebb "userdata" mentest adja ki.
+# Ez a teljes adatbazis a knowledge_chunks tabla TARTALMA nelkul (a tudasbazis a PDF-ekbol
+# ujraindexelheto), igy belefer a Vercel proxy 4,5 MB-os valaszkorlatjaba. Uj dumpot nem
+# keszit, es a napi tar.gz-t (abban az .env is benne van) szandekosan nem szolgalja ki.
+BACKUP_DIR = Path(os.environ.get("BACKUP_DIR", "/app/backups"))
+# A Vercel proxy valasza legfeljebb 4,5 MB lehet; e folott a mentest a szerverrol kell levenni.
+BACKUP_MAX_BYTES = int(os.environ.get("BACKUP_MAX_BYTES", "4400000"))
+
+
 @api.get("/admin/backup")
 async def admin_backup_db(request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     if DB_DIALECT != "sqlite":
-        await _admin_audit(db, admin, request, "admin.backup.denied", f"db_dialect={DB_DIALECT}")
+        try:
+            candidates = sorted(
+                (p for p in BACKUP_DIR.glob("userdata-*.sql.gz") if p.is_file()),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        except OSError:
+            candidates = []
+        if not candidates:
+            await _admin_audit(db, admin, request, "admin.backup.missing", f"dir={BACKUP_DIR}")
+            await db.commit()
+            raise HTTPException(status_code=404, detail="Nem található mentés a szerveren. Fut az óránkénti mentés?")
+        latest = candidates[0]
+        size = latest.stat().st_size
+        if size > BACKUP_MAX_BYTES:
+            await _admin_audit(db, admin, request, "admin.backup.too_large", f"{latest.name} {size} bajt")
+            await db.commit()
+            raise HTTPException(
+                status_code=413,
+                detail=f"A legfrissebb mentés ({latest.name}, {size // 1024} KB) túl nagy a böngészős letöltéshez. A szerver ~/myra-backups mappájából töltsd le.",
+            )
+        await _admin_audit(db, admin, request, "admin.backup.download", latest.name)
         await db.commit()
-        raise HTTPException(
-            status_code=501,
-            detail="Postgres/Supabase adatbázisnál a backupot pg_dump vagy Supabase backup kezeli.",
+        return FileResponse(
+            path=str(latest),
+            media_type="application/gzip",
+            filename=f"myra_backup_{latest.name.removeprefix('userdata-')}",
         )
     db_path = str(DATABASE_URL).replace("sqlite+aiosqlite:///", "")
     if not os.path.exists(db_path):
@@ -6058,9 +6853,13 @@ async def post_feedback(
 
 @api.get("/config")
 async def public_config(db: AsyncSession = Depends(get_db)):
+    s = await get_settings(db, {"global_notice_text": "", "maintenance_mode": "false"})
     return {
         "app_name": "Myra-project",
-        "global_notice_text": await get_setting(db, "global_notice_text", ""),
+        "global_notice_text": s.get("global_notice_text", ""),
+        # A frontend ebből tudja, hogy karbantartás/karantén van, és rendes
+        # képernyőt tud mutatni a 503-as hibák helyett.
+        "maintenance_mode": s.get("maintenance_mode") == "true",
     }
 
 

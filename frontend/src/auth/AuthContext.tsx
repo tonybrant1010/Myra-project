@@ -164,8 +164,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         name,
         password,
         accepted_terms: acceptedTerms,
-        accepted_terms_version: "2026-09-13",
-        accepted_privacy_version: "2026-09-13",
+        accepted_terms_version: "2026-10-04",
+        accepted_privacy_version: "2026-10-04",
       }),
     });
     return handleAuthResult(r);

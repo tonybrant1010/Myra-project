@@ -4,8 +4,9 @@
 
 | | |
 |---|---|
-| **Verzió** | 1.0 |
+| **Verzió** | 1.1 |
 | **Készült** | 2026. augusztus 17. |
+| **Módosítva** | 2026. október 4. — a backend saját szerverre költözött (Google Cloud megszűnt), biztonsági mentések, „Myra memóriája” (2.9), Supabase-régió pontosítva |
 | **Következő felülvizsgálat** | 2027. augusztus 17., vagy bármely lényeges változás esetén |
 
 ---
@@ -46,7 +47,7 @@ teljesül. A nyilvántartás vezetése kötelező, és kérésre a NAIH rendelke
 | **Jogalap** | GDPR 6. cikk (1) a) — hozzájárulás |
 | **Érintettek** | regisztrált felhasználók (kizárólag 18 éven felüliek) |
 | **Adatkategóriák** | név, e-mail cím, jelszó egyirányú hash formában, regisztráció és bejelentkezés időpontja, kétlépcsős azonosítás adatai, megbízható eszköz azonosítója |
-| **Címzettek** | Supabase (adatbázis), Google Cloud (alkalmazásszerver), Vercel (frontend) |
+| **Címzettek** | Supabase (adatbázis), Vercel (frontend és API-proxy), Cloudflare (titkosított átjáró); az alkalmazásszervert az adatkezelő maga üzemelteti |
 | **Harmadik ország** | lásd 4. pont |
 | **Törlési határidő** | a fiók törléséig; törléskor azonnali és végleges |
 
@@ -112,8 +113,8 @@ teljesül. A nyilvántartás vezetése kötelező, és kérésre a NAIH rendelke
 | **Cél** | jogosulatlan hozzáférés és túlterhelés megelőzése, hibakeresés, üzemeltetés |
 | **Jogalap** | GDPR 6. cikk (1) f) — az adatkezelő jogos érdeke a szolgáltatás biztonságos működtetéséhez |
 | **Adatkategóriák** | IP-cím, eszköz- és böngészőinformáció, hozzáférési kísérletek, hibanaplók, sebességkorlát-események |
-| **Címzettek** | a VM üzemeltetési környezete (Google Cloud), riasztási e-mail (Gmail) |
-| **Törlési határidő** | a konténer naplója a konténer élettartamáig; riasztási e-mailek a postafiók szabályai szerint |
+| **Címzettek** | az adatkezelő saját szervere (nem kerül harmadik félhez), riasztási e-mail (Gmail) |
+| **Törlési határidő** | a konténer naplója a konténer élettartamáig; a biztonsági események az admin felületen törölhetők; riasztási e-mailek a postafiók szabályai szerint |
 | **Megjegyzés** | **Nem terjed ki a szükséges mértéken túlmutató tartalomelemzésre.** |
 
 ### 2.8 Mérési összefoglaló (PDF)
@@ -126,16 +127,40 @@ teljesül. A nyilvántartás vezetése kötelező, és kérésre a NAIH rendelke
 | **Címzettek** | kizárólag a felhasználó; a megosztásról ő dönt |
 | **Törlési határidő** | szerveroldalon nem tárolódik, kérésre generálódik |
 
+### 2.9 „Myra memóriája” (felhasználói profil-kivonat)
+
+| | |
+|---|---|
+| **Cél** | a korábbi mérésekből és beszélgetésekből képzett rövid kivonat, amelyet Myra a válaszadásnál figyelembe vesz; korábbi beszélgetésrészletek visszakeresése, ha a felhasználó a múltra utal |
+| **Jogalap** | 6. cikk (1) a) + **9. cikk (2) a) — külön, önálló kifejezett hozzájárulás** (alapból kikapcsolva, a felhasználó kapcsolja be a Beállításokban) |
+| **Adatkategóriák** | AI által képzett, leíró jellegű kivonat a mérésekről és a beszélgetésekről — **különleges adat: mentális állapotra utaló információ**; forrás-üzenetszám, mérésszám, készítés ideje |
+| **Címzettek** | Supabase (tárolás), Google (Gemini API — a kivonat elkészítéséhez és a válaszadáshoz); az adatkezelő az admin felületen megtekintheti, újraképezheti, törölheti |
+| **Törlési határidő** | a hozzájárulás visszavonásakor (kikapcsolás) azonnal; a fiók törlésekor azonnal; biztonsági mentésekből legkésőbb 30 napon belül |
+| **Megjegyzés** | a bekapcsoláskor azonnal elkészül a korábbi adatokból, ezután új mérés vagy 30 új üzenet után frissül; nem diagnózis, nem szolgál automatizált döntés alapjául |
+
+### 2.10 Biztonsági mentés
+
+| | |
+|---|---|
+| **Cél** | adatvesztés elleni védelem, a rendszer helyreállíthatósága |
+| **Jogalap** | GDPR 6. cikk (1) f) — jogos érdek; a különleges adatokra a 9. cikk (2) a) szerinti hozzájárulás kiterjed |
+| **Adatkategóriák** | a teljes felhasználói adatbázis tartalma |
+| **Címzettek** | nincs — az adatkezelő saját, Magyarországon elhelyezett szerverén, korlátozott hozzáféréssel |
+| **Törlési határidő** | óránkénti mentés 48 óra, napi mentés 30 nap, utána automatikus törlés |
+| **Megjegyzés** | a mentésekhez kizárólag adatvesztés esetén, helyreállítás céljából nyúl az adatkezelő; az admin felületről letölthető mentés a tudásanyag-index nélküli, felhasználói adatokat tartalmazó változat |
+
 ---
 
 ## 3. Adatfeldolgozók
 
 | Feldolgozó | Szerep | Tárolás helye |
 |---|---|---|
-| Supabase | felhasználói adatbázis (PostgreSQL, pgvector) | **EU — Frankfurt (eu-west-1 régió)** |
-| Google Cloud | alkalmazásszerver (Compute Engine VM, Docker) | USA-régió (a szabad csomag miatt) — tartós adat nem tárolódik rajta |
+| Supabase | felhasználói adatbázis (PostgreSQL, pgvector) | **EU — Írország (eu-west-1 régió)** |
 | Vercel | frontend kiszolgálás és API-proxy | globális CDN — tartós adat nem tárolódik |
-| Cloudflare | alagút (Tunnel) a backendhez, WAF | globális — átmenő forgalom |
+| Cloudflare | titkosított alagút (Tunnel) a backendhez, DNS, WAF | globális — átmenő forgalom, tartós adat nem tárolódik |
+
+Az alkalmazásszerver (backend) 2026. október 4. óta az adatkezelő saját, Magyarországon
+elhelyezett szerverén fut; ez nem adatfeldolgozó, hanem az adatkezelő saját eszköze.
 | Google (Gemini API) | AI-válasz és felolvasás generálása | lásd 4. pont |
 | Google (Gmail SMTP) | rendszerriasztások küldése | — |
 
@@ -148,12 +173,12 @@ szerződéses feltételei kizárják a beküldött adatok modelltanításra val�
 
 | | |
 |---|---|
-| **Érintett feldolgozók** | Google (Gemini API, Cloud), Vercel |
+| **Érintett feldolgozók** | Google (Gemini API), Vercel, Cloudflare |
 | **Célország** | Amerikai Egyesült Államok |
 | **Garancia** | EU–USA adatvédelmi keret (Data Privacy Framework) megfelelőségi határozat a keret tanúsított résztvevőinél; egyébként az Európai Bizottság általános szerződési feltételei (GDPR 46. cikk (2) c)) |
 | **Kockázati megjegyzés** | a megfelelőségi határozat 2026 augusztusában érvényes, de a Törvényszék *Latombe* (T-553/23) ítélete ellen fellebbezés van folyamatban a Bíróság előtt. **Felülvizsgálandó, ha az ügyben döntés születik.** |
 
-A tartós felhasználói adatbázis szándékosan az EU-ban (Frankfurt) marad.
+A tartós felhasználói adatbázis szándékosan az EU-ban (Írország) marad, a biztonsági mentések Magyarországon.
 
 ---
 
@@ -169,7 +194,8 @@ A tartós felhasználói adatbázis szándékosan az EU-ban (Frankfurt) marad.
 - A backend **nem publikál portot** az interneten (2026-08-13 óta). Kizárólag Cloudflare Tunnelen keresztül érhető el, amely kifelé épít kapcsolatot.
 - A tunnel útvonalszűrője csak az `^/api/.*` mintát engedi tovább, minden más 404.
 - A Vercel-proxy és a backend közös titkot használ (`X-Myra-Proxy-Secret`); enélkül a kérés elutasításra kerül.
-- A GCP tűzfal a bejövő irányban zárt; az adminisztratív hozzáférés a Google Identity-Aware Proxy-n keresztül történik, publikus SSH-port nélkül.
+- A szerver tűzfala (UFW) a bejövő irányban zárt; SSH kizárólag a helyi hálózatról érhető el, publikus port nincs.
+- A backend csak a szerveren belül (`127.0.0.1`) figyel; az adatbázis IP-alapú hozzáférés-korlátozása kizárólag a szerver címét engedi.
 
 **Adatbázis**
 - Kizárólag TLS-en keresztüli kapcsolat (`DATABASE_SSL_MODE=require`).
@@ -183,9 +209,11 @@ A tartós felhasználói adatbázis szándékosan az EU-ban (Frankfurt) marad.
 **Felügyelet és helyreállítás**
 - Futásidejű figyelő szolgáltatás (`ops/myra-watch.py`), amely OOM-, hiba- és jogosulatlan hozzáférési eseményekre e-mailben riaszt.
 - Telepítés utáni füstteszt automatikus visszaállással (`ops/myra-deploy.py`): ha egy végpont eltűnik, a rendszer visszaáll az előző működő verzióra.
+- A védett fájlok (`server.py`, `.env`, compose) ujjlenyomatának figyelése; eltérés esetén automatikus karantén (karbantartási oldal a felhasználóknak).
+- Óránkénti adatbázis-mentés (`ops/myra-backup.sh`), 48 órás / 30 napos megőrzéssel, második lemezre tükrözve.
 
 **Adatminimalizálás**
-- A Gemininek küldött kontextus korlátos: legfeljebb 120 üzenet / 45 000 karakter előzmény, és legfeljebb 5 tudásanyag-részlet, relevanciaszűréssel.
+- A Gemininek küldött kontextus korlátos: legfeljebb 120 üzenet / 45 000 karakter előzmény, és legfeljebb 6 tudásanyag-részlet, relevanciaszűréssel és újrarangsorolással; a tudásanyag-keresés (embedding és újrarangsorolás) helyben, a saját szerveren fut, nem külső szolgáltatónál.
 - A TTS hangfájl átmeneti, kiszolgálás után törlődik.
 
 ---
@@ -196,11 +224,11 @@ A tartós felhasználói adatbázis szándékosan az EU-ban (Frankfurt) marad.
 |---|---|
 | Hozzáférés (15. cikk) | Beállítások → Adatok letöltése |
 | Helyesbítés (16. cikk) | Beállítások, illetve e-mailben |
-| Törlés (17. cikk) | Beállítások → Fiók törlése — azonnali és végleges |
+| Törlés (17. cikk) | Beállítások → Fiók törlése — azonnali és végleges; a mentésekből legkésőbb 30 napon belül |
 | Korlátozás (18. cikk) | e-mailben |
 | Hordozhatóság (20. cikk) | Beállítások → Adatok letöltése, gépileg olvasható JSON |
 | Tiltakozás (21. cikk) | e-mailben, a jogos érdeken alapuló kezelés ellen |
-| Hozzájárulás visszavonása | a fiók törlésével |
+| Hozzájárulás visszavonása | a fiók törlésével; a „Myra memóriája” esetén a Beállításokban a kapcsoló kikapcsolásával (a kivonat azonnal törlődik) |
 
 ---
 

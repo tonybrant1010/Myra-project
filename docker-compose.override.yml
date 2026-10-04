@@ -1,0 +1,34 @@
+# 2026-10-04 – atallas: a backend a Supabase-t hasznalja (DATABASE_URL a .env-bol),
+# helyi adatbazis NINCS. A korabbi "db" szolgaltatas, a myra-db-data kotet, a
+# depends_on: db, valamint a DATABASE_URL / DATABASE_SSL felulirasa kikerult.
+# ENVIRONMENT=production: a proxy-titok ellenorzese el, localhost CORS nincs.
+services:
+  backend:
+    environment:
+      ENVIRONMENT: "production"
+      TRUST_PROXY: "true"
+      PROFILE_ENABLED: "true"
+      TTS_ENGINE: "piper"
+      PIPER_BINARY: "/app/data/piper/piper"
+      PIPER_MODEL: "/app/data/tts/hu_HU-anna-medium.onnx"
+      ADMIN_EMAIL_ALLOWLIST: "antalodor@gmail.com,antalodor@protonmail.com"
+      FASTEMBED_CACHE_PATH: "/app/data/fastembed"
+      FASTEMBED_MODEL_NAME: "intfloat/multilingual-e5-large"
+      EMBED_DIM: "1024"
+      EMBED_QUERY_PREFIX: "query: "
+      EMBED_PASSAGE_PREFIX: "passage: "
+      RAG_RERANKER_MODEL: "BAAI/bge-reranker-base"
+      RAG_RERANK_POOL: "12"
+      RAG_RERANK_DOC_CHARS: "500"
+      RAG_RERANK_THREADS: "4"
+      RAG_RERANK_MIN_SCORE: "-100"
+      RAG_VECTOR_MAX_DISTANCE: "1.0"
+      RAG_CANDIDATE_POOL: "60"
+      RAG_CHAT_CHUNKS: "6"
+      RAG_CHUNK_MAX_CHARS: "1500"
+      RAG_CHUNK_OVERLAP: "250"
+      RAG_CHUNK_MIN_CHARS: "300"
+      BACKUP_DIR: "/app/backups"
+    volumes:
+      - ./backend/server.py:/app/server.py:ro
+      - /home/myra-admin/myra-backups/orankent:/app/backups:ro

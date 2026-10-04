@@ -4,8 +4,9 @@
 
 | | |
 |---|---|
-| **Verzió** | 1.0 |
+| **Verzió** | 1.1 |
 | **Készült** | 2026. augusztus 17. |
+| **Módosítva** | 2026. október 4. — backend saját szerveren (Google Cloud megszűnt), biztonsági mentések, K8: „Myra memóriája” |
 | **Adatkezelő** | Ódor Antal, magánszemély — odor-antal@research.hu |
 | **Következő felülvizsgálat** | 2027. augusztus 17., illetve a 7. pontban felsorolt események bármelyikekor |
 
@@ -59,8 +60,9 @@ A Myra egy magánszemély által, nem kereskedelmi célból üzemeltetett, mér�
 felhasználó böngészője
    -> Vercel (frontend + API-proxy, közös titokkal)
       -> Cloudflare Tunnel
-         -> backend (Google Cloud VM, Docker, publikált port nélkül)
-            -> Supabase PostgreSQL (EU/Frankfurt) — tartós tárolás
+         -> backend (az adatkezelő saját szervere, Magyarország, Docker, publikált port nélkül)
+            -> Supabase PostgreSQL (EU/Írország) — tartós tárolás
+            -> óránkénti biztonsági mentés a saját szerveren (48 óra / 30 nap)
             -> Google Gemini API — átmeneti feldolgozás a válaszhoz
 ```
 
@@ -94,7 +96,7 @@ A besorolás: **valószínűség × súlyosság**, három fokozatban (alacsony /
 |---|---|
 | **Hatás az érintettre** | súlyos: stigmatizáció, munkahelyi vagy magánéleti hátrány |
 | **Kezelés nélküli kockázat** | **magas** |
-| **Intézkedések** | jelszó bcrypt hash; kétlépcsős azonosítás; TLS-kényszer az adatbázis felé; publikált port nélküli backend Cloudflare Tunnelen; útvonalszűrő; proxy-titok; zárt GCP-tűzfal; IAP-alapú adminisztratív hozzáférés publikus SSH nélkül; sebességkorlátozás |
+| **Intézkedések** | jelszó bcrypt hash; kétlépcsős azonosítás; TLS-kényszer az adatbázis felé; publikált port nélküli backend Cloudflare Tunnelen; útvonalszűrő; proxy-titok; zárt szerver-tűzfal, SSH csak helyi hálózatról; az adatbázis csak a szerver IP-címéről érhető el; védett fájlok integritásfigyelése automatikus karanténnal; sebességkorlátozás |
 | **Maradék kockázat** | **alacsony–közepes** |
 
 ### K2 — Az AI-szolgáltatóhoz továbbított tartalom
@@ -149,8 +151,18 @@ A besorolás: **valószínűség × súlyosság**, három fokozatban (alacsony /
 |---|---|
 | **Hatás** | a felhasználó elveszíti az előzményeit, vagy nem éri el a szolgáltatást |
 | **Kezelés nélküli kockázat** | **közepes** |
-| **Intézkedések** | Supabase mint felügyelt adatbázis-szolgáltatás; telepítés utáni füstteszt automatikus visszaállással; futásidejű figyelő e-mailes riasztással; adathordozhatóság a felhasználó felé (JSON-export) |
+| **Intézkedések** | Supabase mint felügyelt adatbázis-szolgáltatás; óránkénti saját mentés (48 óra / 30 nap), második lemezre tükrözve; telepítés utáni füstteszt automatikus visszaállással; futásidejű figyelő e-mailes riasztással; karbantartás alatt tájékoztató oldal; adathordozhatóság a felhasználó felé (JSON-export) |
+| **Megjegyzés** | a saját szerver otthoni internetkapcsolaton és dinamikus IP-címen működik: áramszünet, hálózati hiba vagy IP-változás átmeneti kiesést okozhat |
 | **Maradék kockázat** | **alacsony** |
+
+### K8 — „Myra memóriája”: egészségi állapotra utaló profil-kivonat
+
+| | |
+|---|---|
+| **Hatás** | a mentális állapotról összesített, AI által írt kivonat jön létre; pontatlan lehet, és megismerése súlyosabb a különálló üzeneteknél |
+| **Kezelés nélküli kockázat** | **közepes–magas** |
+| **Intézkedések** | külön, önálló hozzájárulás, alapból kikapcsolva; kikapcsoláskor azonnali törlés; leíró jelleg, nem diagnózis, nem automatizált döntés; Myra nem idézheti fel nyíltan; a felhasználó a JSON-exportban látja a pontos szövegét; az admin általi újraképzés és törlés naplózott |
+| **Maradék kockázat** | **alacsony–közepes** |
 
 ---
 

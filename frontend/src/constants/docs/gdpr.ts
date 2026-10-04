@@ -1,6 +1,6 @@
 export const gdprText = `ADATKEZELÉSI TÁJÉKOZTATÓ
 
-Hatályos: 2026. szeptember 13.
+Hatályos: 2026. október 4.
 
 1. Az adatkezelő
 Név: Ódor Antal
@@ -19,7 +19,8 @@ A Myra egy mérésvezérelt, reflektív mentálhigiénés önismereti alkalmazá
 - néhány nap kihagyás után a beszélgetés Myra általi, támogató visszakérdezéssel történő újranyitása,
 - a felhasználó kérésére szakembernek szánt, letölthető mérési összefoglaló (PDF) előállítása,
 - visszaélések, túlterhelés és jogosulatlan hozzáférés megelőzése,
-- hibakeresés, biztonsági ellenőrzés és működésfenntartás.
+- hibakeresés, biztonsági ellenőrzés és működésfenntartás,
+- adatvesztés elleni biztonsági mentések készítése.
 
 3. Kezelt adatok köre
 Az alkalmazás az alábbi adatokat kezelheti:
@@ -42,7 +43,7 @@ A Myra használata során a felhasználó mentális állapotára, érzelmi terhe
 
 Az ilyen adatok kezelése a felhasználó kifejezett, önkéntes hozzájárulásán alapul a GDPR 9. cikk (2) bekeznés a) pontja szerint. A regisztrációval és a tájékoztató elfogadásával a felhasználó kifejezetten hozzájárul ahhoz, hogy a Myra az alkalmazás működéséhez szükséges mértékben ilyen adatokat kezeljen.
 
-A "Myra memóriája" funkció külön, önálló hozzájáruláson alapul. Alapértelmezés szerint ki van kapcsolva; a felhasználó a Beállítások menüben maga kapcsolja be, és ugyanott bármikor kikapcsolja. A kivonat a felhasználó saját méréseiből és beszélgetéseiből készül, és ugyanolyan különleges kategóriájú adatot tartalmazhat, mint a forrás, amelyből származik. A hozzájárulás visszavonása (kikapcsolás) esetén a már elkészült kivonat azonnal törlődik.
+A "Myra memóriája" funkció külön, önálló hozzájáruláson alapul. Alapértelmezés szerint ki van kapcsolva; a felhasználó a Beállítások menüben maga kapcsolja be, és ugyanott bármikor kikapcsolja. A kivonat a felhasználó saját méréseiből és beszélgetéseiből készül, és ugyanolyan különleges kategóriájú adatot tartalmazhat, mint a forrás, amelyből származik. A kivonat a bekapcsoláskor a felhasználó addigi méréseiből és beszélgetéseiből azonnal elkészül, majd új mérés vagy újabb beszélgetések után automatikusan frissül. Bekapcsolt memória mellett Myra – ha a felhasználó egy korábbi beszélgetésre utal – a korábbi beszélgetésekből is visszakereshet néhány releváns rövid részletet, hogy a válasz illeszkedjen az előzményekhez. Az adatkezelő a kivonatot az üzemeltetés és a minőségbiztosítás körében megtekintheti, újraképezheti vagy törölheti. A hozzájárulás visszavonása (kikapcsolás) esetén a már elkészült kivonat azonnal törlődik, és a korábbi beszélgetésekből történő visszakeresés is megszűnik.
 
 5. Az adatkezelés jogalapja
 Az adatkezelés fő jogalapja a felhasználó önkéntes hozzájárulása:
@@ -52,7 +53,13 @@ Az adatkezelés fő jogalapja a felhasználó önkéntes hozzájárulása:
 Biztonsági, visszaélés-megelőzési és működésfenntartási célú technikai adatkezelés esetén az adatkezelő jogos érdeke is felmerülhet a GDPR 6. cikk (1) bekezdés f) pontja alapján. Ez nem terjed ki a szükséges mértéken túlmutató mentálhigiénés tartalomelemzésre.
 
 6. Adattárolás helye és adatbiztonság
-A felhasználói adatbázis (Supabase) európai uniós régióban (Frankfurt) működő adatbázis-szolgáltatáson keresztül, titkosítva kerül tárolásra. A webalkalmazás kiszolgáló és futtató környezetei (Vercel, Google Cloud) az Egyesült Államokban működhetnek, azonban ezeken a szervereken semmilyen állandó adat (adatbázis) nem tárolódik, kizárólag a kérések átmeneti feldolgozása történik a memóriában (in-memory).
+A felhasználói adatbázis (Supabase) az Európai Unió területén (Írország, eu-west-1 régió) működő adatbázis-szolgáltatáson keresztül, titkosítva kerül tárolásra.
+
+Az alkalmazás szerveroldali része (backend) az adatkezelő által üzemeltetett, Magyarországon elhelyezett szerveren fut. A szerver kívülről közvetlenül nem érhető el: a forgalom a Cloudflare titkosított átjáróján (Cloudflare Tunnel) keresztül érkezik hozzá, és csak az alkalmazás saját, védett közvetítő rétegétől fogad kéréseket. Az adatbázishoz kizárólag ez a szerver kapcsolódhat.
+
+A webes felület és a kéréseket továbbító közvetítő réteg a Vercel szolgáltatásán fut, amely az Egyesült Államokban is működhet; ezen semmilyen állandó adat (adatbázis) nem tárolódik, kizárólag a kérések átmeneti feldolgozása történik a memóriában (in-memory). A Cloudflare a forgalmat titkosított formában, átmenetileg kezeli, adatot tartósan nem tárol.
+
+Biztonsági mentések. Az adatkezelő a felhasználói adatbázisról óránként biztonsági mentést készít, amelyet a saját, Magyarországon elhelyezett szerverén, korlátozott hozzáféréssel tárol. Az óránkénti mentések 48 óráig, a napi mentések 30 napig maradnak meg, ezt követően automatikusan törlődnek.
 
 A rendszer kialakítása törekszik arra, hogy a backend és az adatbázis elkülönítetten működjön, és a kliensoldali felület ne tartalmazzon AI API-kulcsot vagy közvetlen adatbázis-hozzáférést. A jelszavak egyirányú hash formában kerülnek tárolásra. Az adatkezelő törekszik a hozzáférések korlátozására, az érzékeny adatok védelmére, a technikai naplók és admin funkciók ésszerű korlátozására, valamint arra, hogy az adatokhoz csak indokolt esetben legyen hozzáférés.
 
@@ -68,7 +75,8 @@ A chatbot-válasz generálásakor az aktuális üzenet mellett a beszélgetés k
 Ez az adattovábbítás kizárólag a szolgáltatás működéséhez szükséges mértékben történik. A továbbítás az adott szolgáltatók hivatalos fejlesztői (Enterprise/API) felületein keresztül zajlik, amelyek szerződéses feltételei kifejezetten garantálják, hogy a Myra által beküldött adatokat és üzeneteket a szolgáltatók bizalmasan kezelik, és nem használják fel saját modelljeik tanítására vagy fejlesztésére.
 
 A szolgáltatás működéséhez igényve vett külső szolgáltatók lehetnek különösen:
-- tárhely-, frontend- vagy backend-szolgáltatók (Vercel, Google Cloud),
+- tárhely- és frontend-szolgáltató (Vercel),
+- hálózati és biztonsági szolgáltató, titkosított átjáró (Cloudflare),
 - adatbázis-szolgáltató (Supabase),
 - mesterséges intelligencia szolgáltatók (Google, OpenAI, Anthropic),
 - biztonsági, naplózási vagy üzemeltetési szolgáltatások.
@@ -80,7 +88,7 @@ Az adatok a felhasználói fiók aktív fennállásáig kerülnek megőrzésre. 
 
 A "Myra memóriája" kivonat a funkció kikapcsolásakor azonnal és véglegesen törlődik, a fiók megszüntetése nélkül is. A kivonat mindig teljes egészében újraképződik a forrásadatokból, nem őrzi meg a korábbi változatait.
 
-A felhasználó bármikor kezdeményezheti fiókja és kapcsolódó adatainak azonnali és végleges törlését a Beállítások menüben a "Fiók törlése" gombbal, vagy e-mailben: odor-antal@research.hu. A törlés során a felhasználói profil, a mérési eredmények (kérdőívek), a vállalt mikro-célok, a megbízható eszközök és az összes chat beszélgetés előzménye véglegesen törlődik a futó adatbázisból. A hozzájárulás visszavonása a fiók és az adatok törlésének kérésével történhet. A hozzájárulás visszavonása nem érinti a visszavonás előtti adatkezelés jogszerűségét.
+A felhasználó bármikor kezdeményezheti fiókja és kapcsolódó adatainak azonnali és végleges törlését a Beállítások menüben a "Fiók törlése" gombbal, vagy e-mailben: odor-antal@research.hu. A törlés során a felhasználói profil, a mérési eredmények (kérdőívek), a vállalt mikro-célok, a "Myra memóriája" kivonat, a megbízható eszközök és az összes chat beszélgetés előzménye véglegesen törlődik a futó adatbázisból. A törölt adatok a biztonsági mentésekből a mentések megőrzési idejének lejártával, legkésőbb 30 napon belül kerülnek ki; addig a mentésekhez kizárólag adatvesztés esetén, a rendszer helyreállítása céljából nyúl az adatkezelő. A hozzájárulás visszavonása a fiók és az adatok törlésének kérésével történhet. A hozzájárulás visszavonása nem érinti a visszavonás előtti adatkezelés jogszerűségét.
 
 9. A felhasználó jogai
 A felhasználó a GDPR alapján jogosult:

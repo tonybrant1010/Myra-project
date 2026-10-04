@@ -26,6 +26,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: myra-backend
+    ports:
+      # Csak a szerverről érhető el (teszteléshez). A külvilág felé csak a tunnel.
+      - "127.0.0.1:8001:8001"
     restart: unless-stopped
     depends_on:
       - docker-socket-proxy
@@ -103,7 +106,9 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: myra-cloudflared
-    restart: unless-stopped
+    # Csak kifejezett kérésre indul: docker compose --profile tunnel up -d cloudflared
+    profiles: ["tunnel"]
+    restart: "no"
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?set in .env}
     depends_on:
       - backend

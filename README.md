@@ -16,26 +16,34 @@ Vercel frontend
   - X-Myra-Proxy-Secret header hozzáadása
   |
   v
-Cloudflare Tunnel  (api.myra-project.hu)
-  - a VM-en nincs nyitott port
+Cloudflare Tunnel  (api.myra-project.hu, tunnel: myra-szerver)
+  - a szerveren nincs nyitott port az internet felé
   - cloudflared kifelé épít kapcsolatot
   - útvonalszűrő: csak a ^/api/.*$ megy tovább, minden más 404 az élen
   |
   v
-Google Cloud VM backend
-  - Docker Compose
-  - FastAPI / Uvicorn
-  - PDF fájlok: /app/data/kb_pdfs
+Saját szerver (Ubuntu, hostnév: backend, Magyarország)
+  - Docker Compose, projekt: myra (myra-backend, myra-cloudflared, myra-docker-socket-proxy)
+  - FastAPI / Uvicorn, csak 127.0.0.1:8001-en figyel
+  - helyi RAG: multilingual-e5-large (1024 dim) + bge-reranker-base
+  - myra-watch: integritás- és eseményfigyelő, automatikus karanténnal
+  - óránkénti pg_dump mentés (~/myra-backups)
   |
   v
-Supabase EU Postgres
-  - felhasználók
-  - mérési adatok
-  - chat előzmények
-  - knowledge_chunks + pgvector embedding_384
+Supabase EU Postgres (Írország, eu-west-1)
+  - felhasználók, mérési adatok, chat előzmények, profil-kivonatok
+  - knowledge_chunks + pgvector embedding_1024
+  - IP-korlátozás: csak a szerver publikus IP-je
 ```
 
-A frontend Vercelen fut. A backend Google Cloud VM-en fut Docker konténerben, Cloudflare Tunnel mögött: a VM-nek nincs publikusan nyitott portja. Az adatbázis helye Supabase/Postgres. A VM-en nem fut frontend konténer.
+**2026-10-04 óta** a backend nem a Google Cloud VM-en, hanem a saját, otthoni Ubuntu
+szerveren fut Docker konténerben, Cloudflare Tunnel mögött. A Google Cloud VM kiürítve,
+az ottani tunnel törölve. Helyi adatbázis a szerveren **nincs és nem is lehet**: minden adat
+a Supabase-ben van. A frontend továbbra is Vercelen fut, a Vercel CLI-vel telepítve
+(nem GitHub-integrációval, lásd *Frontend Deploy*).
+
+> A README további részeiben előforduló „VM” a backend szervert jelenti. A Google Cloud-
+> specifikus részek (GCP tűzfal, IAP, e2-micro mérések) történeti feljegyzések.
 
 ## Fő Funkciók
 
@@ -63,7 +71,11 @@ A frontend Vercelen fut. A backend Google Cloud VM-en fut Docker konténerben, C
 - admin rendszerbeállítások, karbantartási mód és SOS eszközök;
 - biztonsági adminisztrátori audit naplózás és megerősített brute-force védelem;
 - 30 napos mérési érvényességi ciklus és archivált, olvasható beszélgetések;
-- Vercel frontend, VM backend, Supabase adatbázis.
+- „Myra memóriája”: külön hozzájárulással, a korábbi mérésekből és beszélgetésekből képzett profil-kivonat (bekapcsoláskor azonnal, visszamenőleg elkészül), valamint korábbi beszélgetésrészletek felidézése, ha a felhasználó a múltra utal;
+- admin felületen felhasználónkénti profilnézet (megtekintés, újraképzés, törlés);
+- admin adatbázis-mentés letöltés: a legfrissebb óránkénti, tudásanyag-index nélküli felhasználói mentés (`userdata-*.sql.gz`);
+- karbantartás / karantén alatt a felhasználók tájékoztató oldalt látnak (`MaintenanceGate`), a karbantartás végén az oldal magától újratöltődik;
+- Vercel frontend, saját szerveren futó backend, Supabase adatbázis.
 
 ## Stack
 
@@ -75,7 +87,7 @@ A frontend Vercelen fut. A backend Google Cloud VM-en fut Docker konténerben, C
 - asyncpg
 - Supabase/Postgres
 - pgvector
-- FastEmbed 384 dimenziós lokális embedding és in-memory caching
+- FastEmbed 0.8.0 (rögzítve): `intfloat/multilingual-e5-large`, 1024 dimenziós lokális embedding, `BAAI/bge-reranker-base` újrarangsoroló, in-memory caching
 - pypdf PDF szövegkinyerés
 - JWT auth
 - Gmail SMTP MFA kódokhoz
@@ -185,7 +197,7 @@ A proxy-titok a **harmadik** védelmi réteg. A teljes lánc kívülről befelé
 
 | réteg | mit csinál | hol van beállítva |
 |---|---|---|
-| 1. Cloudflare Tunnel | a VM-en nincs publikált port, a `cloudflared` kifelé épít kapcsolatot | `docker-compose.yml`, GCP tűzfal |
+| 1. Cloudflare Tunnel | a szerveren nincs publikált port, a `cloudflared` kifelé épít kapcsolatot | `docker-compose.yml`, UFW tűzfal |
 | 2. útvonalszűrő | csak a `^/api/.*$` megy le az alagúton, minden más 404 | Cloudflare Zero Trust → Tunnels → Published application routes → **Path** |
 | 3. proxy-titok | `/api/*` alatt is csak a saját Vercel proxynkat engedi be | `MYRA_PROXY_SECRET` a VM `.env`-ben és a Vercelen |
 
@@ -204,14 +216,30 @@ Ellenőrzés kívülről:
 ```bash
 curl -i https://api.myra-project.hu/             # 404, a cloudflared útvonalszűrője
 curl -i https://api.myra-project.hu/api/config   # 403, "Direct access to origin is forbidden."
-curl -m 5 http://<VM_EXTERNAL_IP>:8001/api/config  # timeout
+curl -m 5 http://<SZERVER_PUBLIKUS_IP>:8001/api/config  # timeout
 ```
 
 A két válasz különbsége mutatja, melyik réteg állította meg a kérést: a 404-nek nincs
 `Content-Type` fejléce és chunked, mert a cloudflared adja; a 403 JSON törzzsel jön,
 mert az már a FastAPI middleware.
 
-### GCP tűzfal állapota (2026-08-14 óta)
+### Szerver tűzfal (2026-10-04 óta)
+
+| szabály | forrás | port | állapot |
+|---|---|---|---|
+| SSH | `192.168.1.0/24` | tcp:22 | aktív — csak a helyi hálózatról |
+| minden más bejövő | — | — | tiltva (UFW alapértelmezés) |
+
+A backend a compose-ban `127.0.0.1:8001:8001`-re van kötve, tehát a helyi hálózatról sem
+érhető el, csak a szerveren belülről és a `cloudflared`-en át. A `myra-cloudflared`
+szolgáltatás a compose-ban a `tunnel` profil mögött van. Ellenőrzés:
+
+```bash
+sudo ufw status numbered
+ss -tln | grep -vE '127\.0\.0|::1'   # csak a 22-es port maradhat
+```
+
+### GCP tűzfal állapota (történeti, 2026-08-14 – 2026-10-04)
 
 | szabály | forrás | port | állapot |
 |---|---|---|---|
@@ -232,15 +260,25 @@ gcloud compute firewall-rules update default-allow-ssh --no-disabled
 
 ### Supabase IP allowlist
 
-Ha a Google VM külső IP-je megváltozik, a Supabase Database Network Restrictions / allowlist alatt frissíteni kell az IP-t:
+A Supabase Database → Settings → Network Restrictions alatt **csak a szerver publikus IP-je**
+van engedélyezve (`<SZERVER_PUBLIKUS_IP>/32`). A régi Google VM címe 2026-10-04-én kikerült.
 
-```text
-<VM_EXTERNAL_IP>/32
-```
+**Az otthoni internet IP-címe nem fix.** Ha a szolgáltató megváltoztatja, a backend nem éri
+el az adatbázist (`EADDRNOTALLOWED`), és a Myra leáll. Ilyenkor az új IP-t kell felvenni az
+allowlistre. Az aktuális cím: `curl -s ifconfig.me` a szerveren.
 
-A Vercel IP változása ezt nem érinti, mert a Supabase adatbázishoz a backend VM csatlakozik.
+A Vercel IP változása ezt nem érinti, mert a Supabase adatbázishoz csak a backend csatlakozik.
 
 ## RAG / Tudásanyag
+
+> **2026-10-04 óta** az éles kereső a saját szerveren fut: `intfloat/multilingual-e5-large`
+> (1024 dim, `query: ` / `passage: ` előtaggal), `BAAI/bge-reranker-base` újrarangsoroló,
+> darabolás 1500 / 250 / 300 karakter, 60 jelölt, 6 részlet a válaszhoz. A vektorok a
+> `knowledge_chunks.embedding_1024` oszlopban vannak (924 részlet / 69 forrás az első
+> újraindexelés után). Az `embedding_384`-re és a MiniLM modellre vonatkozó leírások lentebb
+> történetiek; az ellenőrző lekérdezésekben `embedding_384` helyett `embedding_1024` értendő.
+> A beállítások a `docker-compose.override.yml`-ben vannak (`FASTEMBED_MODEL_NAME`,
+> `EMBED_DIM`, `RAG_*`). Újraindexelés: admin felület → Tudásanyag → újraindexelés.
 
 A tudásanyag PDF-ekből épül:
 
@@ -608,17 +646,41 @@ frontend/
   package.json
 
 ops/
-  myra-watch.py
+  myra-watch.py        # integritás- és eseményfigyelő, karanténnal (Supabase mód)
   myra-watch.service
+  myra-deploy.py       # backend telepítés füstteszttel és visszaállással
+  myra-backup.sh       # óránkénti pg_dump mentés (a szerveren: ~/myra-backup.sh)
 
 publication/
 docker-compose.yml
 README.md
 ```
 
-## Backend Üzemeltetés VM-en
+## Backend Üzemeltetés (saját szerver)
 
-Frissítés tipikus menete, ha `.tgz` csomag kerül fel a VM home mappájába:
+A szerveren csak az éles rendszer van: `~/myra` alatt `.env`, `docker-compose.yml`,
+`docker-compose.override.yml`, `backend/`, `ops/`. Git-klón, frontend és teszt nincs rajta.
+A `backend/server.py` a konténerbe csak olvasható volume-ként van csatolva, így egy
+`server.py`-csere nem igényel image-újraépítést.
+
+**`server.py` vagy compose cseréje (a karantén-figyelő miatt kötelező sorrend):**
+
+```bash
+python3 ~/myra/ops/myra-watch.py --szunet 15          # figyelő szüneteltetése
+cp ~/myra/backend/server.py ~/myra-backups/server.py.elotte-<datum>
+cp ~/uj_server.py ~/myra/backend/server.py             # csere
+cd ~/myra && docker compose restart backend            # compose-változásnál: docker compose up -d backend
+python3 ~/myra/ops/myra-watch.py --alapvonal          # új ujjlenyomat rögzítése
+sudo systemctl restart myra-watch                      # a futó figyelő is olvassa be!
+python3 ~/myra/ops/myra-watch.py --szunet 0           # szünet vége
+```
+
+A `systemctl restart myra-watch` lépés **nem hagyható ki**: a futó figyelő a memóriájában
+tartja az alapvonalat, és újraindítás nélkül a szünet végén a régi ujjlenyomattal hasonlít,
+majd karanténba zár (2026-10-04-én pontosan ez történt). Karantén feloldása: admin felület →
+Biztonság & karantén → admin jelszó.
+
+Régebbi, `.tgz`-alapú frissítés (image-újraépítéssel):
 
 ```bash
 mv ~/backend-update.tgz ~/myra/
@@ -679,9 +741,18 @@ Két dolog, amit érdemes tudni előre:
 
 ## Futásidejű Figyelés
 
-Az `ops/myra-watch.py` egy önálló, standard könyvtárból írt figyelő, ami a VM hosztján fut
+Az `ops/myra-watch.py` egy önálló, standard könyvtárból írt figyelő, ami a szerver hosztján fut
 systemd szolgáltatásként (`ops/myra-watch.service`), és **emailben riaszt**. Memóriaigénye
 15-20 MB.
+
+> **2026-10 óta a figyelő be is avatkozik:** a védett fájlok (`backend/server.py`, `.env`,
+> `docker-compose.yml`, `docker-compose.override.yml`) ujjlenyomatának változásakor, illetve
+> nem engedélyezett `docker exec` esetén **karanténba zár** (`maintenance_mode` és
+> `quarantine_active` = true a Supabase `app_settings`-ben), az eseményeket a
+> `security_events` táblába írja. Supabase módban fut (`DB_MOD=supabase`), helyi
+> adatbázis nélkül. Karbantartás előtt `--szunet N`, védett fájl cseréje után `--alapvonal`
+> **és a szolgáltatás újraindítása**, a végén `--szunet 0` (lásd *Backend Üzemeltetés*).
+> Az alábbi „csak riaszt” leírás a korábbi változatra vonatkozik.
 
 Mit néz:
 
@@ -722,6 +793,21 @@ A `docker events` a kernel-szint helyett a Docker daemon eseményfolyamát olvas
 lát, de gyakorlatilag ingyen van.
 
 ## Frontend Deploy
+
+**Fontos (2026-10-04):** a Vercel projekt **nincs a GitHubhoz kötve**: a `git push` nem
+telepít. Az élesítés a Vercel CLI-vel történik (`npm run deploy`), a Vercel projekt a
+`tonybrant-s-projects` csapat `frontend` projektje. Első alkalommal egy gépen:
+
+```cmd
+npx vercel login
+npx vercel link --yes --project frontend --scope tonybrant-s-projects
+```
+
+**Csak tiszta git-klónból telepíts** (pl. `C:\Users\User\myra-github\frontend`), ahol nincs
+`frontend/.env`. A fejlesztői munkamappa `.env`-je az `EXPO_PUBLIC_BACKEND_URL`-t a helyi
+hálózati címre állítja, és ez a buildbe beégve élesben minden API-hívást elrontana. Üres
+`EXPO_PUBLIC_BACKEND_URL` mellett a frontend relatív `/api` útvonalat használ, ami a Vercel
+proxyn megy a backendhez.
 
 A frontend deploy a `frontend` mappából történik:
 
@@ -883,9 +969,10 @@ backend/rag/
 
 ## Biztonsági Megjegyzések
 
-- A backend nem érhető el közvetlenül az internetről: Cloudflare Tunnel mögött fut, a VM-en nincs publikált port, a GCP tűzfalban a 8001-es szabály letiltva. Fölötte az alagút útvonalszűrője (csak `^/api/.*$`), alatta a proxy-titok — három réteg, lásd a *Backend origin védelem* szakaszt.
-- A VM-en **egyetlen TCP-port sem nyitott** az internet felé (2026-08-14 óta). Az SSH forrása `35.235.240.0/20`-ra szűkítve, ami a Google IAP tartománya; az RDP-szabály letiltva. Ha valaha kizárnád magad, a **Cloud Shell a mentőöv** — az nem a VM SSH-ján megy be.
-- Futásidejű felügyelet: az `ops/myra-watch.py` systemd szolgáltatás emailben riaszt konténeren belüli parancsindításra, OOM-ra, hibás leállásra és a backend log biztonsági mintáira. Csak jelent, nem avatkozik be.
+- A backend nem érhető el közvetlenül az internetről: Cloudflare Tunnel mögött fut, a szerveren nincs publikált port, a backend csak `127.0.0.1`-en figyel. Fölötte az alagút útvonalszűrője (csak `^/api/.*$`), alatta a proxy-titok — három réteg, lásd a *Backend origin védelem* szakaszt.
+- A szerveren **egyetlen TCP-port sem nyitott** az internet felé. Az SSH kizárólag a helyi hálózatról (`192.168.1.0/24`) érhető el (UFW). A routeren nem lehet porttovábbítás a szerver felé.
+- Futásidejű felügyelet: az `ops/myra-watch.py` systemd szolgáltatás emailben riaszt, és védett fájl módosulásakor vagy nem engedélyezett konténeren belüli parancsindításkor karanténba zárja a platformot. Karbantartási sorrend: *Backend Üzemeltetés*.
+- A `~/myra` mappák „other” írási joga 2026-10-04-én megszűnt (`chmod -R o-w`); a `.env` `600`-as.
 - A `cloudflared` képe `:latest`-re van állítva, tehát minden `docker compose pull` a legfrissebbet hozza, verziórögzítés nélkül. Frissítés után ellenőrizd az útvonalszűrőt is (`curl -i https://api.myra-project.hu/` → 404).
 - A Supabase publikus REST API-ja zárt: minden táblán be van kapcsolva az RLS, policy nélkül — ez Postgresben teljes tiltást jelent. Az `anon` kulccsal semmilyen sor nem olvasható. Ezt ne kapcsold ki: a backend közvetlen Postgres-kapcsolattal, tábla-tulajdonosként dolgozik, nem a REST API-n keresztül.
 - API kulcsot és `.env` fájlt ne commitolj.
@@ -912,4 +999,5 @@ backend/rag/
 - Az admin log nézet maszkolja az URL-ben vagy headerben megjelenő API kulcsokat és bearer tokeneket.
 - Az admin audit log `detail` és `user_agent` mezői mentés előtt is maszkolva vannak, és felhasználótörlésnél csak a belső `user_id` kerül naplózásra, email cím nem.
 - A személyes vagy admin jellegű API válaszok `Cache-Control: no-store` fejléccel mennek ki.
-- Supabase/Postgres környezetben az adatbázis backup nem az alkalmazásból készül; a tiltott backup-kérés admin audit logba kerül.
+- Adatbázis-mentés: az `ops/myra-backup.sh` óránként (cron) két dumpot készít a `~/myra-backups/orankent` alá: teljes (`db-*.sql.gz`) és a `knowledge_chunks` tartalma nélküli felhasználói mentést (`userdata-*.sql.gz`). Megőrzés: óránkénti 48 óra, napi 30 nap; tükrözés a második lemezre (`/mnt/win`), ha csatolva van. A napi `tar.gz` az `.env`-et is tartalmazza, ezért azt az alkalmazás nem szolgálja ki.
+- Az admin „Adatbázis mentés letöltése” gomb a legfrissebb `userdata-*.sql.gz`-t adja ki (a mappa csak olvasható volume-ként van a konténerben: `/app/backups`). A Vercel proxy 4,5 MB-os válaszkorlátja miatt a teljes, tudásanyag-indexet is tartalmazó mentés (~6 MB) innen nem tölthető le, azt a szerverről kell levenni. A letöltés admin audit logba kerül.

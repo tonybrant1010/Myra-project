@@ -1,6 +1,6 @@
 export const termsText = `FELHASZNÁLÁSI FELTÉTELEK
 
-Hatályos: 2026. szeptember 13.
+Hatályos: 2026. október 4.
 
 1. A szolgáltatás jellege
 A Myra egy magánszemély által, nem kereskedelmi célból fejlesztett, mérésvezérelt, reflektív mentálhigiénés önismereti alkalmazás. A rendszer az ESV-modell (Érzelem-Stressz-Viselkedés) alapján működik: önkitöltős állapotfelmérést, belső állapotkódot és mesterséges intelligenciával támogatott beszélgetési keretet biztosít.
@@ -28,7 +28,7 @@ A Myra válaszait részben mesterséges intelligencia alapú rendszer állítja 
 
 A válaszadás során a rendszer az aktuális üzenet mellett a beszélgetés korábbi részleteit, a mérési állapotkódhoz kapcsolódó kontextust, a felhasználó által vállalt mikro-célokat és a PDF alapú tudásanyagból visszakeresett releváns részleteket is felhasználhatja. Ez a beszélgetés folytonosságát szolgálja, de nem jelent diagnózist, szakvéleményt vagy terápiás döntést.
 
-A felhasználó külön kapcsolóval engedélyezheti a "Myra memóriája" funkciót. Bekapcsolt állapotban a rendszer a felhasználó korábbi méréseiből és beszélgetéseiből rövid, pontokba szedett kivonatot tart magánál, és azt a válaszadásnál figyelembe veszi. A funkció alapértelmezés szerint ki van kapcsolva, a Beállítások menüben bármikor be- és kikapcsolható, kikapcsoláskor pedig a kivonat törlődik. A kivonat leíró jellegű, nem diagnózis és nem szakvélemény; a mesterséges intelligencia korlátai rá is érvényesek, tehát tartalmazhat pontatlanságot.
+A felhasználó külön kapcsolóval engedélyezheti a "Myra memóriája" funkciót. Bekapcsolt állapotban a rendszer a felhasználó korábbi méréseiből és beszélgetéseiből rövid, pontokba szedett kivonatot tart magánál, és azt a válaszadásnál figyelembe veszi. A kivonat a bekapcsoláskor a korábbi adatokból azonnal elkészül, és később automatikusan frissül. Bekapcsolt memória mellett, ha a felhasználó egy korábbi beszélgetésre utal, Myra a korábbi beszélgetésekből is visszakereshet néhány rövid, releváns részletet. A funkció alapértelmezés szerint ki van kapcsolva, a Beállítások menüben bármikor be- és kikapcsolható, kikapcsoláskor pedig a kivonat törlődik. A kivonat leíró jellegű, nem diagnózis és nem szakvélemény; a mesterséges intelligencia korlátai rá is érvényesek, tehát tartalmazhat pontatlanságot.
 
 A rendszer néhány nap kihagyás után a beszélgetést egy rövid, támogató visszakérdezéssel magától is újranyithatja. Ez ugyanazon beszélgetési kontextus alapján történik, tájékoztató és önismereti célú, és szintén nem minősül diagnózisnak vagy szakvéleménynek.
 
@@ -63,7 +63,7 @@ Kapcsolattartás. Felhasználói kérdésekben, moderálási ügyekben és bejel
 Jogszabályi háttér: az Európai Parlament és a Tanács (EU) 2022/2065 rendelete (a digitális szolgáltatásokról szóló rendelet) 11., 12., 14., 16., 17. és 18. cikke. A digitális szolgáltatási koordinátor Magyarországon a Nemzeti Média- és Hírközlési Hatóság elnöke.
 
 9. Elérhetőség, módosítás és megszüntetés
-Az adatkezelő nem garantálja a szolgáltatás folyamatos, hibamentes vagy megszakítás nélküli elérhetőségét. A szolgáltatás karbantartás, technikai ok, adatvédelmi vagy biztonsági megfontolás, fejlesztés, külső szolgáltató hibája vagy egyéb ok miatt előzetes értesítés nélkül szünetelhet, módosulhat vagy megszűnhet.
+Az adatkezelő nem garantálja a szolgáltatás folyamatos, hibamentes vagy megszakítás nélküli elérhetőségét. Tervezett karbantartás vagy biztonsági intézkedés idején az alkalmazás erről tájékoztató oldalt jelenít meg; a felhasználó adatai ilyenkor is megmaradnak. A szolgáltatás karbantartás, technikai ok, adatvédelmi vagy biztonsági megfontolás, fejlesztés, külső szolgáltató hibája vagy egyéb ok miatt előzetes értesítés nélkül szünetelhet, módosulhat vagy megszűnhet.
 
 10. Felelősség korlátozása
 Az adatkezelő a jogszabály által megengedett mértékben nem vállal felelősséget az alkalmazás használatából, elérhetetlenségéből, hibájából, a chatbot-válaszok tartalmából, AI-rendszer pontatlanságából, külső szolgáltató hibájából vagy a felhasználó saját döntéseiből eredő közvetlen, közvetett vagy következményes károkért.
