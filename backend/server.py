@@ -1552,7 +1552,7 @@ async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> 
                 WHERE vec.id IS NOT NULL OR txt.id IS NOT NULL
                 ORDER BY rrf DESC, kc.id ASC
                 LIMIT :pool
-            """)
+            """)  # nosec B608 - EMBED_COL egesz szambol kepzett oszlopnev, a felhasznaloi adat parameterkent megy
             res = await db.execute(stmt, {
                 "query_vector": query_vector_str,
                 "ts_query": _build_ts_query(expanded_query),
