@@ -347,15 +347,15 @@ RECALL_SNIPPET_CHARS = _env_int("RECALL_SNIPPET_CHARS", 320, 80, 1200)
 # memoria kikapcsolasakor a vektorok torlodnek.
 RECALL_VECTOR_ENABLED = os.environ.get("RECALL_VECTOR_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 RECALL_EMBED_CHARS = _env_int("RECALL_EMBED_CHARS", 1500, 100, 4000)
-RECALL_MIN_MESSAGE_CHARS = _env_int("RECALL_MIN_MESSAGE_CHARS", 20, 1, 500)
+RECALL_MIN_MESSAGE_CHARS = _env_int("RECALL_MIN_MESSAGE_CHARS", 12, 1, 500)
 RECALL_BACKFILL_BATCH = _env_int("RECALL_BACKFILL_BATCH", 32, 1, 256)
 # Az ujrarangsorolo (bge-reranker) pontszamanak kuszobe. Ha a felhasznalo maga utal a
 # multra, lazabb; ha Myra magatol hozna elo egy korabbi helyzetet, szigorubb, hogy ne
 # zokkentse ki a beszelgetest egy alig kapcsolodo emlek.
 try:
-    RECALL_EXPLICIT_MIN_SCORE = float(os.environ.get("RECALL_EXPLICIT_MIN_SCORE", "-4.0"))
+    RECALL_EXPLICIT_MIN_SCORE = float(os.environ.get("RECALL_EXPLICIT_MIN_SCORE", "0.0"))
 except ValueError:
-    RECALL_EXPLICIT_MIN_SCORE = -4.0
+    RECALL_EXPLICIT_MIN_SCORE = 0.0
 try:
     RECALL_PROACTIVE_MIN_SCORE = float(os.environ.get("RECALL_PROACTIVE_MIN_SCORE", "2.0"))
 except ValueError:
@@ -4162,7 +4162,8 @@ _PAST_REFERENCE_RE = re.compile(
     r"(m[úu]ltkor|kor[áa]bban|legut[óo]bb|eml[ée]ksz|r[ée]gebben|annak idej[ée]n"
     r"|m[úu]lt h[ée]ten|m[úu]lt h[óo]napban|tavaly|tegnap|el[őo]z[őo]leg"
     r"|ahogy mondtam|mondtam m[áa]r|eml[íi]tettem|mes[ée]ltem|besz[ée]lt[üu]nk"
-    r"|arr[óo]l besz[ée]l|korábbi besz[ée]lget)",
+    r"|arr[óo]l besz[ée]l|korábbi besz[ée]lget"
+    r"|id[ée]z|eml[ée]kez|mikor (is )?volt)",
     re.IGNORECASE,
 )
 
@@ -4372,11 +4373,22 @@ async def _recall_past_exchanges(
 
 def _build_recall_block(rows: list[dict], explicit: bool = True) -> str:
     if not rows:
+        if explicit:
+            return (
+                "[KORÁBBI BESZÉLGETÉSEKBŐL]\n"
+                "Ha a felhasználó most egy korábbi beszélgetésre kérdez rá: erről nem található "
+                "megbízható korábbi részlet. Ne állítsd, hogy emlékszel, és ne találj ki "
+                "részletet (időpontot, helyet, nevet, körülményt). Mondd el őszintén, hogy most "
+                "nem találod, és kérd meg, hogy idézze fel ő."
+            )
         return ""
     if explicit:
         intro = (
-            "A felhasználó a múltra utalt, ezért ide bekerült néhány korábbi részlet. Csak akkor "
-            "használd, ha tényleg arról van szó; ne olvasd fel és ne sorold fel őket."
+            "A felhasználó a múltra utalt, ezért ide bekerült néhány korábbi részlet, az eredeti "
+            "dátumával. Csak azt állítsd, ami ezekben benne van: időpontot, helyet, nevet vagy "
+            "körülményt ne tegyél hozzá, a dátum az itt szereplő. Ha a részletek nem arról "
+            "szólnak, amire a felhasználó utal, mondd meg őszintén, hogy erre most nem találsz "
+            "rá. Ne olvasd fel és ne sorold fel őket."
         )
     else:
         intro = (
@@ -5640,20 +5652,33 @@ async def chat_send(
     recall_rows = []
     recall_explicit = False
     if RECALL_ENABLED and bool(user.profile_memory_enabled):
-        recall_explicit = _is_past_reference(text)
         clean_text = (text or "").strip()
+        prev_user_texts = [m.text for m in db_history if m.role == "user"][-2:]
+        # Ha az elozo forduloban a multra kerdezett, a ravezeto kerdesek ("es az mikor
+        # volt?", "idezz belole") is felidezesnek szamitanak.
+        recall_explicit = _is_past_reference(clean_text) or any(
+            _is_past_reference(t) for t in prev_user_texts[-1:]
+        )
+        # Rovid, elliptikus kerdesnel a keresest az elozo felhasznaloi uzenetek adjak.
+        recall_query = clean_text
+        if recall_explicit and len(clean_text) < RECALL_MIN_MESSAGE_CHARS * 4 and prev_user_texts:
+            recall_query = "\n".join(prev_user_texts + [clean_text])
         query_emb = None
+        recall_emb = None
         if RECALL_VECTOR_ENABLED and DB_DIALECT != "sqlite":
             try:
                 query_emb = await _get_fastembed_embedding(_message_embed_text(clean_text))
+                recall_emb = query_emb if recall_query == clean_text else (
+                    await _get_fastembed_embedding(_message_embed_text(recall_query))
+                )
             except Exception as _e:
                 logger.warning(f"uzenet-vektor hiba: {_e}")
         # Rovid, tartalom nelkuli uzenetnel ("igen", "koszi") Myra magatol nem keres emleket.
-        if recall_explicit or len(clean_text) >= RECALL_MIN_MESSAGE_CHARS * 2:
+        if recall_explicit or len(clean_text) >= RECALL_MIN_MESSAGE_CHARS * 3:
             try:
                 async with db.begin_nested():
                     recall_rows = await _recall_past_exchanges(
-                        db, user.id, active_session_id, text, query_emb, recall_explicit,
+                        db, user.id, active_session_id, recall_query, recall_emb, recall_explicit,
                     )
             except Exception as _e:
                 logger.warning(f"felidezesi hiba: {_e}")
