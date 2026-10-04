@@ -975,7 +975,10 @@ function downloadBackup(token: string | null, setErr: (message: string) => void)
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `myra_backup_${new Date().toISOString().slice(0, 10)}.db`;
+      // A szerver adja a fájlnevet (pl. myra_backup_20261004_1700.sql.gz); ha nincs, saját nevet adunk.
+      const cd = r.headers.get("Content-Disposition") || "";
+      const m = cd.match(/filename="?([^";]+)"?/i);
+      a.download = m?.[1] || `myra_backup_${new Date().toISOString().slice(0, 10)}.sql.gz`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);

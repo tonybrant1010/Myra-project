@@ -36,6 +36,14 @@ type UserItem = {
   created_at: string | null;
 };
 
+type UserProfileData = {
+  content: string;
+  generated_at: string | null;
+  model_name: string | null;
+  source_messages: number | null;
+  source_sessions: number | null;
+};
+
 type SessionItem = {
   id: string;
   code: string;
@@ -271,6 +279,12 @@ export default function AdminUsersScreen() {
   const [suspendBusy, setSuspendBusy] = useState<number | null>(null);
   const [deleteBusy, setDeleteBusy] = useState<number | null>(null);
   const [downloadBusy, setDownloadBusy] = useState(false);
+  const [profileUser, setProfileUser] = useState<UserItem | null>(null);
+  const [profileData, setProfileData] = useState<UserProfileData | null>(null);
+  const [profileEnabled, setProfileEnabled] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileBusy, setProfileBusy] = useState<"" | "regenerate" | "delete">("");
+  const [profileError, setProfileError] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -346,6 +360,81 @@ export default function AdminUsersScreen() {
       if (r.ok) setUsers((prev) => prev.filter((x) => x.id !== u.id));
     } finally {
       setDeleteBusy(null);
+    }
+  };
+
+  const readError = async (r: Response, fallback: string) => {
+    try {
+      const d = await r.json();
+      if (typeof d?.detail === "string") return d.detail;
+    } catch {}
+    return fallback;
+  };
+
+  const openProfile = async (u: UserItem) => {
+    setProfileUser(u);
+    setProfileData(null);
+    setProfileError("");
+    setProfileLoading(true);
+    try {
+      const r = await authedFetch(token, `/api/admin/users/${u.id}/profile`);
+      if (!r.ok) {
+        setProfileError(await readError(r, "A profil nem tölthető be."));
+        return;
+      }
+      const data = await r.json();
+      setProfileEnabled(data?.enabled !== false);
+      setProfileData(data?.profile || null);
+    } catch {
+      setProfileError("A profil nem tölthető be.");
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const regenerateProfile = async () => {
+    if (!profileUser) return;
+    setProfileBusy("regenerate");
+    setProfileError("");
+    try {
+      const r = await authedFetch(token, `/api/admin/users/${profileUser.id}/profile/regenerate`, { method: "POST" });
+      if (!r.ok) {
+        setProfileError(await readError(r, "Az újragenerálás nem sikerült."));
+        return;
+      }
+      await openProfile(profileUser);
+    } catch {
+      setProfileError("Az újragenerálás nem sikerült.");
+    } finally {
+      setProfileBusy("");
+    }
+  };
+
+  const deleteProfile = async () => {
+    if (!profileUser) return;
+    const question = `Biztosan törlöd ${profileUser.name} profilját? A fiók és a beszélgetések megmaradnak, csak az összefoglaló profil törlődik.`;
+    const confirmed = Platform.OS === "web"
+      ? window.confirm(question)
+      : await new Promise<boolean>((resolve) =>
+          Alert.alert("Profil törlése", question, [
+            { text: "Mégse", onPress: () => resolve(false), style: "cancel" },
+            { text: "Törlés", onPress: () => resolve(true), style: "destructive" },
+          ])
+        );
+    if (!confirmed) return;
+    setProfileBusy("delete");
+    setProfileError("");
+    try {
+      const r = await authedFetch(token, `/api/admin/users/${profileUser.id}/profile`, { method: "DELETE" });
+      if (!r.ok) {
+        setProfileError(await readError(r, "A törlés nem sikerült."));
+        return;
+      }
+      setProfileData(null);
+    } catch {
+      setProfileError("A törlés nem sikerült.");
+    } finally {
+      setProfileBusy("");
     }
   };
 
@@ -461,6 +550,12 @@ export default function AdminUsersScreen() {
                       >
                         <T variant="small" color={theme.accent}>CSV ↓</T>
                       </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.actionBtn}
+                        onPress={() => openProfile(item)}
+                      >
+                        <T variant="small" color={theme.accent}>Profil</T>
+                      </TouchableOpacity>
                       {!item.is_admin && (
                         <>
                           <TouchableOpacity
@@ -559,6 +654,83 @@ export default function AdminUsersScreen() {
                     )}
                   </View>
                 ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={!!profileUser}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setProfileUser(null)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <T variant="h2" color={theme.textOnDark} style={{ flex: 1 }}>{profileUser?.name} – Profil</T>
+              <TouchableOpacity onPress={() => setProfileUser(null)}>
+                <T variant="label" color={theme.accent}>Bezár</T>
+              </TouchableOpacity>
+            </View>
+            {profileLoading ? (
+              <View style={styles.center}>
+                <ActivityIndicator color={theme.primary} />
+              </View>
+            ) : (
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {!profileEnabled && (
+                  <T variant="small" color={theme.danger} style={{ marginBottom: 10 }}>
+                    A profil funkció a szerveren ki van kapcsolva (PROFILE_ENABLED).
+                  </T>
+                )}
+                {profileData ? (
+                  <View style={styles.sessionRow}>
+                    <T variant="small" color="rgba(247,251,255,0.62)" style={{ marginBottom: 8 }}>
+                      Készült: {profileData.generated_at ? new Date(profileData.generated_at).toLocaleString("hu-HU") : "ismeretlen"}
+                      {profileData.source_messages != null ? ` · ${profileData.source_messages} üzenet` : ""}
+                      {profileData.source_sessions != null ? ` · ${profileData.source_sessions} beszélgetés` : ""}
+                      {profileData.model_name ? ` · ${profileData.model_name}` : ""}
+                    </T>
+                    <T variant="body" color={theme.textOnDark} style={{ lineHeight: 22 }} selectable>
+                      {profileData.content}
+                    </T>
+                  </View>
+                ) : (
+                  <T variant="body" color="rgba(247,251,255,0.72)" align="center" style={{ padding: 24 }}>
+                    Ennek a felhasználónak még nincs profilja.
+                  </T>
+                )}
+                {!!profileError && (
+                  <T variant="small" color={theme.danger} style={{ marginTop: 10 }}>{profileError}</T>
+                )}
+                <View style={[styles.actionRow, { marginTop: 14 }]}>
+                  <TouchableOpacity
+                    style={styles.actionBtn}
+                    onPress={regenerateProfile}
+                    disabled={!!profileBusy}
+                  >
+                    {profileBusy === "regenerate" ? (
+                      <ActivityIndicator size="small" color={theme.accent} />
+                    ) : (
+                      <T variant="small" color={theme.accent}>{profileData ? "Újragenerálás" : "Profil készítése"}</T>
+                    )}
+                  </TouchableOpacity>
+                  {profileData && (
+                    <TouchableOpacity
+                      style={[styles.actionBtn, styles.actionBtnDelete]}
+                      onPress={deleteProfile}
+                      disabled={!!profileBusy}
+                    >
+                      {profileBusy === "delete" ? (
+                        <ActivityIndicator size="small" color={theme.white} />
+                      ) : (
+                        <T variant="small" color={theme.white}>Profil törlése</T>
+                      )}
+                    </TouchableOpacity>
+                  )}
+                </View>
               </ScrollView>
             )}
           </View>
