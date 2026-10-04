@@ -1,6 +1,6 @@
 export const gdprText = `ADATKEZELÉSI TÁJÉKOZTATÓ
 
-Hatályos: 2026. augusztus 17.
+Hatályos: 2026. szeptember 13.
 
 1. Az adatkezelő
 Név: Ódor Antal
@@ -31,6 +31,7 @@ Az alkalmazás az alábbi adatokat kezelheti:
 - belső állapotkód és mérési eredmények,
 - a felhasználó által vállalt mikro-célok szövege és állapota (aktív/teljesített),
 - chat üzenetek tartalma,
+- a felhasználó külön, önkéntes hozzájárulása esetén a korábbi méréseiből és beszélgetéseiből képzett rövid, pontokba szedett kivonat ("Myra memóriája"),
 - chatbot-válaszok,
 - a beszélgetéshez kapcsolódó, az alkalmazás által visszakeresett tudásanyag-részletek technikai felhasználása,
 - felhasználói aktivitási adatok az alkalmazás működtetéséhez szükséges mértékben,
@@ -40,6 +41,8 @@ Az alkalmazás az alábbi adatokat kezelheti:
 A Myra használata során a felhasználó mentális állapotára, érzelmi terhelésére, stressz-szintjére vagy egészségi állapotára utaló információk is megjelenhetnek. Ezek az adatok a GDPR 9. cikke alapján különleges kategóriájú személyes adatnak minősülhetnek.
 
 Az ilyen adatok kezelése a felhasználó kifejezett, önkéntes hozzájárulásán alapul a GDPR 9. cikk (2) bekeznés a) pontja szerint. A regisztrációval és a tájékoztató elfogadásával a felhasználó kifejezetten hozzájárul ahhoz, hogy a Myra az alkalmazás működéséhez szükséges mértékben ilyen adatokat kezeljen.
+
+A "Myra memóriája" funkció külön, önálló hozzájáruláson alapul. Alapértelmezés szerint ki van kapcsolva; a felhasználó a Beállítások menüben maga kapcsolja be, és ugyanott bármikor kikapcsolja. A kivonat a felhasználó saját méréseiből és beszélgetéseiből készül, és ugyanolyan különleges kategóriájú adatot tartalmazhat, mint a forrás, amelyből származik. A hozzájárulás visszavonása (kikapcsolás) esetén a már elkészült kivonat azonnal törlődik.
 
 5. Az adatkezelés jogalapja
 Az adatkezelés fő jogalapja a felhasználó önkéntes hozzájárulása:
@@ -75,6 +78,8 @@ Harmadik országba történő adattovábbítás. A felsorolt szolgáltatók egy 
 8. Adatmegőrzési idő
 Az adatok a felhasználói fiók aktív fennállásáig kerülnek megőrzésre. Mivel a Myra egy nonprofit kutatási és önismereti projekt, jogszabály nem írja elő az adatok kötelező megőrzési idejét.
 
+A "Myra memóriája" kivonat a funkció kikapcsolásakor azonnal és véglegesen törlődik, a fiók megszüntetése nélkül is. A kivonat mindig teljes egészében újraképződik a forrásadatokból, nem őrzi meg a korábbi változatait.
+
 A felhasználó bármikor kezdeményezheti fiókja és kapcsolódó adatainak azonnali és végleges törlését a Beállítások menüben a "Fiók törlése" gombbal, vagy e-mailben: odor-antal@research.hu. A törlés során a felhasználói profil, a mérési eredmények (kérdőívek), a vállalt mikro-célok, a megbízható eszközök és az összes chat beszélgetés előzménye véglegesen törlődik a futó adatbázisból. A hozzájárulás visszavonása a fiók és az adatok törlésének kérésével történhet. A hozzájárulás visszavonása nem érinti a visszavonás előtti adatkezelés jogszerűségét.
 
 9. A felhasználó jogai
@@ -95,6 +100,8 @@ Web: https://www.naih.hu
 
 10. Automatizált döntéshozatal és mesterséges intelligencia
 A felhasználó a chatben mesterséges intelligencia rendszerrel áll kapcsolatban, nem emberi beszélgetőpartnerrel; erről az alkalmazás a beszélgetési felületen is tájékoztat (az (EU) 2024/1689 rendelet 50. cikk (1) bekezdése).
+
+A "Myra memóriája" kivonatot szintén mesterséges intelligencia állítja elő, kizárólag a felhasználó saját adataiból. A kivonat leíró jellegű, nem diagnózis, nem minősítés, és nem szolgál automatizált döntés alapjául. A felhasználó a adatexportban (GDPR 20. cikk) megtekintheti a róla tárolt kivonat pontos szövegét.
 
 A Myra nem hoz hivatalos joghatással járó vagy a felhasználót hasonlóan jelentős mértékben érintő automatizált döntést. Az állapotkódok, kategóriák és chatbot-válaszok tájékoztató, önismereti és reflektív célú visszajelzések, nem hivatalos diagnózisok és nem egészségügyi döntések.
 

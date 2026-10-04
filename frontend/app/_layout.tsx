@@ -19,6 +19,7 @@ import {
 import * as SplashScreen from "expo-splash-screen";
 
 import { AuthProvider } from "@/src/auth/AuthContext";
+import MaintenanceGate from "@/src/components/MaintenanceGate";
 import { theme } from "@/src/theme";
 
 SplashScreen.preventAutoHideAsync();
@@ -100,13 +101,15 @@ export default function RootLayout() {
               }
             ` }} />
           )}
-          <Stack
-            screenOptions={{
-              headerShown: false,
-              contentStyle: { backgroundColor: theme.bg },
-              animation: "fade",
-            }}
-          />
+          <MaintenanceGate>
+            <Stack
+              screenOptions={{
+                headerShown: false,
+                contentStyle: { backgroundColor: theme.bg },
+                animation: "fade",
+              }}
+            />
+          </MaintenanceGate>
         </AuthProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>

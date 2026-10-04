@@ -19,6 +19,8 @@ export type AppUser = {
   mfa_forced?: boolean;
   is_code_expired?: boolean;
   code_days_remaining?: number;
+  profile_memory_enabled?: boolean;
+  profile_memory_available?: boolean;
 };
 
 type AuthState = { loading: boolean; user: AppUser | null; token: string | null };
@@ -75,13 +77,17 @@ async function writeDeviceToken(t: string | null) {
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = useState<AuthState>({ loading: true, user: null, token: null });
 
-  const fetchMe = useCallback(async (token: string): Promise<AppUser | null> => {
+  const fetchMe = useCallback(async (token: string): Promise<AppUser | null | "maintenance"> => {
     try {
       const r = await fetch(apiUrl("/api/auth/me"), {
         cache: "no-store",
         credentials: "omit",
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (r.status === 503) {
+        notifyMaintenance();
+        return "maintenance";
+      }
       if (!r.ok) return null;
       const data = await r.json();
       return data.user as AppUser;
@@ -158,8 +164,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         name,
         password,
         accepted_terms: acceptedTerms,
-        accepted_terms_version: "2026-07-22",
-        accepted_privacy_version: "2026-07-22",
+        accepted_terms_version: "2026-09-13",
+        accepted_privacy_version: "2026-09-13",
       }),
     });
     return handleAuthResult(r);
@@ -183,7 +189,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const refreshUser = useCallback(async () => {
     if (!state.token) return;
     const u = await fetchMe(state.token);
-    if (u) setState((s) => ({ ...s, user: u }));
+    if (u && u !== "maintenance") setState((s) => ({ ...s, user: u }));
   }, [state.token, fetchMe]);
 
   const setUserLocal = useCallback((updater: (u: AppUser | null) => AppUser | null) => {
@@ -199,6 +205,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
       const u = await fetchMe(token);
+      if (u === "maintenance") {
+        // Karbantartás alatt nem léptetjük ki: a token megmarad, a kapu tájékoztató oldalt mutat.
+        if (mounted) setState({ loading: false, user: null, token });
+        return;
+      }
       if (!u) {
         await writeToken(null);
         if (mounted) setState({ loading: false, user: null, token: null });
@@ -248,6 +259,20 @@ function notifyUnauthorized() {
   unauthorizedListeners.forEach((cb) => cb());
 }
 
+const maintenanceListeners: (() => void)[] = [];
+
+export function registerMaintenanceListener(cb: () => void) {
+  maintenanceListeners.push(cb);
+  return () => {
+    const idx = maintenanceListeners.indexOf(cb);
+    if (idx !== -1) maintenanceListeners.splice(idx, 1);
+  };
+}
+
+function notifyMaintenance() {
+  maintenanceListeners.forEach((cb) => cb());
+}
+
 export async function authedFetch(token: string | null, path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers || {});
   if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -257,6 +282,8 @@ export async function authedFetch(token: string | null, path: string, init: Requ
   const r = await fetch(apiUrl(path), { ...init, cache: init.cache ?? "no-store", credentials: init.credentials ?? "omit", headers });
   if (r.status === 401) {
     notifyUnauthorized();
+  } else if (r.status === 503) {
+    notifyMaintenance();
   }
   return r;
 }

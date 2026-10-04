@@ -27,11 +27,34 @@ const OUTPUT_GAIN = 2.2;
 
 type LivePhase = "idle" | "connecting" | "listening" | "thinking" | "speaking" | "error";
 
-type LiveTokenResponse = {
-  token: string;
-  model: string;
-  websocket_url: string;
-};
+type LiveTokenResponse =
+  | { mode?: undefined; token: string; model: string; websocket_url: string }
+  | { mode: "avatar"; ws_path: string };
+
+// Avatar mód: a backend WebSocket-proxyján megy (Gemini Live + Live Avatar, Vertex).
+function liveWsUrl(path: string): string {
+  const base = (process.env.EXPO_PUBLIC_BACKEND_URL || "").trim().replace(/\/+$/, "");
+  if (base) return base.replace(/^http/i, "ws") + path;
+  const loc = globalThis.location;
+  return `${loc.protocol === "https:" ? "wss" : "ws"}://${loc.host}${path}`;
+}
+
+// Az MP4 init szegmensből kiolvassa a H.264 profilt (avcC doboz), hogy a
+// MediaSource pontos codec-sztringet kapjon.
+function detectMp4Codecs(bytes: Uint8Array): string {
+  const limit = Math.min(bytes.length - 8, 65536);
+  const hex = (n: number) => n.toString(16).padStart(2, "0").toUpperCase();
+  let video = "avc1.42E01F";
+  let hasAudio = false;
+  for (let i = 4; i < limit; i += 1) {
+    if (bytes[i] === 0x61 && bytes[i + 1] === 0x76 && bytes[i + 2] === 0x63 && bytes[i + 3] === 0x43) {
+      video = `avc1.${hex(bytes[i + 5])}${hex(bytes[i + 6])}${hex(bytes[i + 7])}`;
+    } else if (bytes[i] === 0x6d && bytes[i + 1] === 0x70 && bytes[i + 2] === 0x34 && bytes[i + 3] === 0x61) {
+      hasAudio = true;
+    }
+  }
+  return `video/mp4; codecs="${video}${hasAudio ? ", mp4a.40.2" : ""}"`;
+}
 
 function floatTo16BitPCM(input: Float32Array): Int16Array {
   const output = new Int16Array(input.length);
@@ -99,6 +122,15 @@ export default function MyraLiveScreen() {
   const closingRef = useRef(false);
   const startingRef = useRef(false);
   const wakeLockRef = useRef<any>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const videoElRef = useRef<HTMLVideoElement | null>(null);
+  const mediaSourceRef = useRef<MediaSource | null>(null);
+  const sourceBufferRef = useRef<SourceBuffer | null>(null);
+  const videoQueueRef = useRef<Uint8Array[]>([]);
+  const videoUrlRef = useRef<string | null>(null);
+  const gotVideoRef = useRef(false);
+  const [avatarMode, setAvatarMode] = useState(false);
+  const [videoStarted, setVideoStarted] = useState(false);
 
   const isActive = phase !== "idle" && phase !== "error";
   const isSpeaking = phase === "speaking";
@@ -134,6 +166,29 @@ export default function MyraLiveScreen() {
     } catch {}
   }, []);
 
+  const teardownVideo = useCallback(() => {
+    const mediaSource = mediaSourceRef.current;
+    if (mediaSource && mediaSource.readyState === "open") {
+      try {
+        mediaSource.endOfStream();
+      } catch {}
+    }
+    const video = videoElRef.current;
+    if (video) {
+      try {
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+      } catch {}
+    }
+    if (videoUrlRef.current) URL.revokeObjectURL(videoUrlRef.current);
+    videoUrlRef.current = null;
+    mediaSourceRef.current = null;
+    sourceBufferRef.current = null;
+    videoQueueRef.current = [];
+    gotVideoRef.current = false;
+  }, []);
+
   const closeSession = useCallback(() => {
     closingRef.current = true;
     startingRef.current = false;
@@ -149,6 +204,12 @@ export default function MyraLiveScreen() {
     safely(() => streamRef.current?.getTracks().forEach((track) => track.stop()));
     safely(() => sessionRef.current?.sendRealtimeInput({ audioStreamEnd: true }));
     safely(() => sessionRef.current?.close());
+    safely(() => {
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "end" }));
+      ws?.close();
+    });
+    safely(teardownVideo);
     safely(() => void inputContextRef.current?.close());
     safely(() => void outputContextRef.current?.close());
     stopPlayback();
@@ -158,14 +219,16 @@ export default function MyraLiveScreen() {
     sourceRef.current = null;
     streamRef.current = null;
     sessionRef.current = null;
+    wsRef.current = null;
     inputContextRef.current = null;
     outputContextRef.current = null;
     outputGainRef.current = null;
     if (mountedRef.current) {
       setPhase("idle");
       setStatus("Érintsd meg a mikrofont a beszélgetéshez.");
+      setVideoStarted(false);
     }
-  }, [releaseWakeLock, stopPlayback]);
+  }, [releaseWakeLock, stopPlayback, teardownVideo]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -292,7 +355,7 @@ export default function MyraLiveScreen() {
     }
   }, [playAudioChunk, stopPlayback]);
 
-  const startMicrophone = useCallback(async (session: Session) => {
+  const startMicrophone = useCallback(async (sendAudio: (base64Pcm: string) => void) => {
     const mediaDevices = globalThis.navigator?.mediaDevices;
     if (!mediaDevices?.getUserMedia) throw new Error("A böngésző nem támogatja a mikrofon használatát.");
 
@@ -313,12 +376,7 @@ export default function MyraLiveScreen() {
     processor.onaudioprocess = (event) => {
       const input = event.inputBuffer.getChannelData(0);
       const pcm = floatTo16BitPCM(resampleTo16k(input, context.sampleRate));
-      session.sendRealtimeInput({
-        audio: {
-          data: bytesToBase64(new Uint8Array(pcm.buffer)),
-          mimeType: `audio/pcm;rate=${INPUT_RATE}`,
-        },
-      });
+      sendAudio(bytesToBase64(new Uint8Array(pcm.buffer)));
     };
 
     source.connect(processor);
@@ -328,6 +386,197 @@ export default function MyraLiveScreen() {
     sourceRef.current = source;
     processorRef.current = processor;
   }, []);
+
+  const pumpVideo = useCallback(() => {
+    const sourceBuffer = sourceBufferRef.current;
+    const video = videoElRef.current;
+    if (!sourceBuffer || sourceBuffer.updating || !video) return;
+    // a már lejátszott részt eldobjuk, hogy a puffer ne nőjön a végtelenségig
+    if (sourceBuffer.buffered.length && video.currentTime - sourceBuffer.buffered.start(0) > 30) {
+      try {
+        sourceBuffer.remove(sourceBuffer.buffered.start(0), video.currentTime - 10);
+        return;
+      } catch {}
+    }
+    const next = videoQueueRef.current.shift();
+    if (!next) return;
+    try {
+      sourceBuffer.appendBuffer(next as unknown as BufferSource);
+    } catch (error) {
+      console.warn("Myra Live avatar: videórész nem fűzhető hozzá", error);
+    }
+  }, []);
+
+  const ensureSourceBuffer = useCallback(() => {
+    const mediaSource = mediaSourceRef.current;
+    const first = videoQueueRef.current[0];
+    if (!mediaSource || mediaSource.readyState !== "open" || sourceBufferRef.current || !first) return;
+    const MediaSourceCtor = (globalThis as any).ManagedMediaSource || (globalThis as any).MediaSource;
+    let type = detectMp4Codecs(first);
+    if (!MediaSourceCtor?.isTypeSupported?.(type)) type = 'video/mp4; codecs="avc1.42E01F, mp4a.40.2"';
+    const sourceBuffer = mediaSource.addSourceBuffer(type);
+    // minden válasz-szakasz a saját időbélyegével jön; sorban fűzzük egymás után
+    sourceBuffer.mode = "sequence";
+    sourceBuffer.addEventListener("updateend", pumpVideo);
+    sourceBufferRef.current = sourceBuffer;
+  }, [pumpVideo]);
+
+  const setupVideo = useCallback(() => {
+    const video = videoElRef.current;
+    const MediaSourceCtor = (globalThis as any).ManagedMediaSource || (globalThis as any).MediaSource;
+    if (!video || !MediaSourceCtor) throw new Error("Ez a böngésző nem tudja lejátszani Myra avatarját.");
+    const mediaSource: MediaSource = new MediaSourceCtor();
+    mediaSourceRef.current = mediaSource;
+    videoUrlRef.current = URL.createObjectURL(mediaSource);
+    video.disableRemotePlayback = true;
+    video.src = videoUrlRef.current;
+    mediaSource.addEventListener(
+      "sourceopen",
+      () => {
+        ensureSourceBuffer();
+        pumpVideo();
+      },
+      { once: true }
+    );
+  }, [ensureSourceBuffer, pumpVideo]);
+
+  const playVideo = useCallback(() => {
+    const video = videoElRef.current;
+    if (!video || !video.paused) return;
+    void video.play().catch(() => {
+      if (mountedRef.current) setStatus("Érintsd meg Myra képét a hang indításához.");
+    });
+  }, []);
+
+  const handleAvatarMessage = useCallback((message: any) => {
+    switch (message?.t) {
+      case "video": {
+        gotVideoRef.current = true;
+        setVideoStarted(true);
+        setPhase("speaking");
+        setStatus("Myra beszél.");
+        videoQueueRef.current.push(base64ToBytes(String(message.d || "")));
+        ensureSourceBuffer();
+        pumpVideo();
+        playVideo();
+        break;
+      }
+      case "audio": {
+        // csak ha nincs videó: a videóban már benne van a hang (AAC)
+        if (!gotVideoRef.current && String(message.m || "").startsWith("audio/pcm") && message.d) {
+          setPhase("speaking");
+          setStatus("Myra beszél.");
+          void playAudioChunk(message.d);
+        }
+        break;
+      }
+      case "heard":
+        setPhase("thinking");
+        setStatus("Myra figyel.");
+        break;
+      case "interrupted": {
+        stopPlayback();
+        videoQueueRef.current = [];
+        const video = videoElRef.current;
+        const sourceBuffer = sourceBufferRef.current;
+        if (video && sourceBuffer && sourceBuffer.buffered.length) {
+          try {
+            video.currentTime = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
+          } catch {}
+        }
+        setPhase("listening");
+        setStatus("Hallgatlak.");
+        break;
+      }
+      case "turn": {
+        const video = videoElRef.current;
+        const sourceBuffer = sourceBufferRef.current;
+        let remainingMs = 0;
+        if (video && sourceBuffer && sourceBuffer.buffered.length) {
+          remainingMs = Math.max(0, (sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1) - video.currentTime) * 1000);
+        } else if (outputContextRef.current) {
+          remainingMs = Math.max(0, (nextPlaybackTimeRef.current - outputContextRef.current.currentTime) * 1000);
+        }
+        globalThis.setTimeout(() => {
+          if (!mountedRef.current || !wsRef.current) return;
+          setPhase("listening");
+          setStatus("Hallgatlak.");
+        }, remainingMs + 80);
+        break;
+      }
+      case "goaway":
+        setStatus("A kapcsolat hamarosan lezárul. Indítsd újra, ha folytatnád.");
+        break;
+      default:
+        break;
+    }
+  }, [ensureSourceBuffer, playAudioChunk, playVideo, pumpVideo, stopPlayback]);
+
+  const startSessionAvatar = useCallback(async (wsPath: string) => {
+    setAvatarMode(true);
+    setupVideo();
+    const ws = new WebSocket(liveWsUrl(wsPath));
+    wsRef.current = ws;
+    let ready = false;
+    let lastError = "";
+    let connectTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+
+    await new Promise<void>((resolve, reject) => {
+      connectTimer = globalThis.setTimeout(
+        () => reject(new Error("A Myra Live kapcsolat nem jött létre 20 másodpercen belül.")),
+        20000
+      );
+      ws.onopen = () => ws.send(JSON.stringify({ t: "auth", token }));
+      ws.onmessage = (event) => {
+        let message: any;
+        try {
+          message = JSON.parse(String(event.data));
+        } catch {
+          return;
+        }
+        if (message.t === "ready") {
+          ready = true;
+          if (connectTimer) globalThis.clearTimeout(connectTimer);
+          resolve();
+          return;
+        }
+        if (message.t === "error") {
+          lastError = String(message.detail || "A Myra Live kapcsolat hibát jelzett.");
+          if (!ready) reject(new Error(lastError));
+          return;
+        }
+        handleAvatarMessage(message);
+      };
+      ws.onerror = () => {
+        if (!ready) reject(new Error(lastError || "A Myra Live kapcsolat hibát jelzett."));
+      };
+      ws.onclose = (event) => {
+        if (!ready) {
+          reject(new Error(lastError || `A Myra Live kapcsolat lezárult (${event.code}).`));
+          return;
+        }
+        if (!mountedRef.current || closingRef.current) return;
+        closeSession();
+        setPhase(lastError ? "error" : "idle");
+        setStatus(lastError || "A Myra Live kapcsolat lezárult.");
+      };
+    }).finally(() => {
+      if (connectTimer) globalThis.clearTimeout(connectTimer);
+    });
+
+    setStatus("Mikrofon engedélyezése...");
+    try {
+      await startMicrophone((data) => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "audio", d: data }));
+      });
+    } catch (error) {
+      throw new Error(microphoneErrorMessage(error));
+    }
+    if (mountedRef.current) {
+      setPhase("listening");
+      setStatus("Hallgatlak.");
+    }
+  }, [closeSession, handleAvatarMessage, setupVideo, startMicrophone, token]);
 
   const startSessionSdk = useCallback(async () => {
     if (startingRef.current) return;
@@ -352,6 +601,10 @@ export default function MyraLiveScreen() {
       }
 
       const live = data as LiveTokenResponse;
+      if (live.mode === "avatar") {
+        await startSessionAvatar(live.ws_path);
+        return;
+      }
       const ai = new GoogleGenAI({
         apiKey: live.token,
         httpOptions: { apiVersion: "v1alpha" },
@@ -364,7 +617,10 @@ export default function MyraLiveScreen() {
         microphoneStarted = true;
         setStatus("Mikrofon engedélyezése...");
         try {
-          await startMicrophone(connectedSession);
+          const liveSession = connectedSession;
+          await startMicrophone((data) =>
+            liveSession.sendRealtimeInput({ audio: { data, mimeType: `audio/pcm;rate=${INPUT_RATE}` } })
+          );
           if (mountedRef.current) {
             setPhase("listening");
             setStatus("Hallgatlak.");
@@ -442,11 +698,14 @@ export default function MyraLiveScreen() {
     } finally {
       startingRef.current = false;
     }
-  }, [closeSession, handleServerMessage, startMicrophone, token]);
+  }, [closeSession, handleServerMessage, startMicrophone, startSessionAvatar, token]);
 
   const toggleSession = useCallback(() => {
     if (isActive) closeSession();
-    else void startSessionSdk();
+    else {
+      void videoElRef.current?.play().catch(() => {});
+      void startSessionSdk();
+    }
   }, [closeSession, isActive, startSessionSdk]);
 
   const pulseScale = pulse.interpolate({
@@ -464,7 +723,22 @@ export default function MyraLiveScreen() {
         <TopBar title="Myra Live" showBack rightLabel="BÉTA" />
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
           <View style={styles.stage}>
-            <View style={styles.avatarStage}>
+            {Platform.OS === "web" ? (
+              <View style={[styles.videoFrame, shadow.glow, !avatarMode && styles.hidden]}>
+                <video
+                  ref={videoElRef}
+                  playsInline
+                  autoPlay
+                  onClick={() => void videoElRef.current?.play().catch(() => {})}
+                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", background: "#000" }}
+                />
+                {!videoStarted ? (
+                  <Image source={MYRA_AVATAR} style={styles.videoPoster} resizeMode="cover" />
+                ) : null}
+              </View>
+            ) : null}
+
+            <View style={[styles.avatarStage, avatarMode && styles.hidden]}>
               <Animated.View
                 style={[
                   styles.pulseRing,
@@ -522,6 +796,18 @@ export default function MyraLiveScreen() {
 
 const styles = StyleSheet.create({
   noPointer: { pointerEvents: "none" },
+  hidden: { display: "none" },
+  videoFrame: {
+    width: 270,
+    height: 480,
+    borderRadius: 22,
+    overflow: "hidden",
+    marginBottom: 22,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.30)",
+    backgroundColor: "#000",
+  },
+  videoPoster: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%" },
   safe: { flex: 1, backgroundColor: theme.primaryDark },
   scroll: { flexGrow: 1, paddingHorizontal: 18, paddingTop: 24, paddingBottom: 42 },
   stage: { alignItems: "center", justifyContent: "center", minHeight: 430 },

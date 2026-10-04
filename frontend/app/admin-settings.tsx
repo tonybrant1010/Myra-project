@@ -6,6 +6,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   TextInput,
   TouchableOpacity,
   View,
@@ -32,7 +33,36 @@ type Settings = {
   live_model: string;
   live_api_key_set: boolean;
   live_api_key_preview: string;
+  profile_memory_enabled: boolean;
 };
+
+/** A `GET /api/admin/security` valasza. A figyelo (ops/myra-watch.py) es a
+ *  backend is ide ir; ez a kepernyo csak megjeleniti. */
+type SecurityEvent = {
+  id: number;
+  created_at: string | null;
+  source: string;
+  kind: string;
+  severity: "info" | "warn" | "critical" | string;
+  label: string;
+  detail: string;
+  quarantined: boolean;
+};
+
+type SecurityState = {
+  quarantine_active: boolean;
+  quarantine_reason: string;
+  quarantine_at: string;
+  quarantine_source: string;
+  maintenance_mode: boolean;
+  watch_heartbeat: string;
+  watch_age_seconds: number | null;
+  counts_24h: { critical: number; warn: number; info: number };
+  events: SecurityEvent[];
+};
+
+/** Ennyi masodperc utan tekintjuk halottnak a figyelot (5 perces koteg + tartalek). */
+const WATCH_STALE_SECONDS = 600;
 
 const PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "groq", "cerebras", "mistral", "ollama"];
 const MODEL_MAX_CHARS = 160;
@@ -71,6 +101,13 @@ export default function AdminSettingsScreen() {
   const [downBusy, setDownBusy] = useState(false);
   const [emergencyPassword, setEmergencyPassword] = useState("");
 
+  const [memoryOn, setMemoryOn] = useState(true);
+  const [sec, setSec] = useState<SecurityState | null>(null);
+  const [secLoading, setSecLoading] = useState(false);
+  const [secBusy, setSecBusy] = useState(false);
+  const [secPassword, setSecPassword] = useState("");
+  const [showEvents, setShowEvents] = useState(false);
+
   const requireEmergencyPassword = () => {
     if (!emergencyPassword.trim()) {
       setErr("Az SOS muvelethez add meg az admin jelszavadat.");
@@ -91,6 +128,7 @@ export default function AdminSettingsScreen() {
         setNotice(d.global_notice_text || "");
         setPrompt(d.system_prompt);
         setLiveModel(d.live_model || "gemini-3.1-flash-live-preview");
+        setMemoryOn(d.profile_memory_enabled !== false);
       }
 
 
@@ -118,6 +156,7 @@ export default function AdminSettingsScreen() {
         global_notice_text: notice,
         system_prompt: prompt,
         live_model: liveModel,
+        profile_memory_enabled: memoryOn,
       };
       if (apiKey) body.llm_api_key = apiKey;
       if (liveApiKey) body.live_api_key = liveApiKey;
@@ -141,6 +180,72 @@ export default function AdminSettingsScreen() {
       setSaving(false);
     }
   };
+
+  const loadSecurity = useCallback(async () => {
+    setSecLoading(true);
+    try {
+      const r = await authedFetch(token, "/api/admin/security");
+      if (r.ok) setSec(await r.json());
+    } catch {
+      /* a biztonsagi panel sosem torheti el a kepernyot */
+    } finally {
+      setSecLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => { loadSecurity(); }, [loadSecurity]);
+
+  /** Kozos vaz a harom karanten-muvelethez: jelszo -> POST -> ujratoltes. */
+  const securityAction = async (path: string, body: Record<string, unknown>, okMsg: string) => {
+    if (!secPassword.trim()) {
+      setErr("A muvelethez add meg az admin jelszavadat.");
+      return;
+    }
+    setSecBusy(true);
+    setMsg(null);
+    setErr(null);
+    try {
+      const r = await authedFetch(token, path, {
+        method: "POST",
+        body: JSON.stringify({ ...body, current_password: secPassword }),
+      });
+      if (r.ok) {
+        setSecPassword("");
+        setMsg(okMsg);
+        await loadSecurity();
+        const mr = await authedFetch(token, "/api/admin/maintenance");
+        if (mr.ok) setMaintenance((await mr.json()).maintenance_mode);
+      } else {
+        const d = await r.json().catch(() => ({}));
+        setErr(d?.detail || "A muvelet nem sikerult.");
+      }
+    } catch (e: any) {
+      setErr(e?.message || "Halozati hiba.");
+    } finally {
+      setSecBusy(false);
+    }
+  };
+
+  const releaseQuarantine = () =>
+    securityAction("/api/admin/security/release", { reason: "" }, "Karanten feloldva, a platform ujra elerheto.");
+
+  const manualQuarantine = () =>
+    Alert.alert(
+      "Karantén bekapcsolása",
+      "A platform minden nem-admin kérésre 503-at fog adni, amíg fel nem oldod. Te admin jogon továbbra is be tudsz lépni.",
+      [
+        { text: "Mégse", style: "cancel" },
+        {
+          text: "KARANTÉN",
+          style: "destructive",
+          onPress: () =>
+            securityAction("/api/admin/security/quarantine", { reason: "kézi karantén" }, "Karantén bekapcsolva."),
+        },
+      ],
+    );
+
+  const clearEvents = () =>
+    securityAction("/api/admin/security/events/clear", {}, "Eseménylista ürítve.");
 
   const toggleMaintenance = async () => {
     const currentPassword = requireEmergencyPassword();
@@ -429,6 +534,23 @@ export default function AdminSettingsScreen() {
                   testID="global-notice-input"
                 />
 
+                <View style={styles.toggleRow}>
+                  <View style={{ flex: 1, paddingRight: 12 }}>
+                    <T variant="label" color={theme.textOnDark}>Myra memóriája (globális kapcsoló)</T>
+                    <T variant="small" color="rgba(247,251,255,0.6)" style={{ marginTop: 2, lineHeight: 18 }}>
+                      Ha kikapcsolod, senkinél nem készül és nem használódik profil, akkor sem, ha a
+                      felhasználó a saját beállításaiban bekapcsolta. A meglévő profilok nem törlődnek.
+                    </T>
+                  </View>
+                  <Switch
+                    value={memoryOn}
+                    onValueChange={setMemoryOn}
+                    trackColor={{ false: "rgba(255,255,255,0.22)", true: theme.accentDeep }}
+                    thumbColor={theme.white}
+                    testID="admin-memory-switch"
+                  />
+                </View>
+
                 {msg ? <T variant="small" color={theme.success} style={styles.feedback}>{msg}</T> : null}
                 {err ? <T variant="small" color={theme.danger} style={styles.feedback}>{err}</T> : null}
 
@@ -439,6 +561,177 @@ export default function AdminSettingsScreen() {
                 <TouchableOpacity style={styles.outlineBtn} onPress={() => downloadBackup(token, setErr)} testID="backup-button">
                   <Ionicons name="download-outline" size={16} color={theme.accent} style={{ marginRight: 6 }} />
                   <T variant="label" color={theme.accent}>Adatbázis mentés letöltése</T>
+                </TouchableOpacity>
+              </Section>
+
+
+              <Section title="Biztonság & Karantén" icon="shield-checkmark-outline">
+                <T variant="small" color="rgba(247,251,255,0.66)" style={styles.sectionHelp}>
+                  A szerveren futó figyelő (myra-watch) jelzései. Karantén alatt a platform minden
+                  nem-admin kérésre 503-at ad, te admin jogon be tudsz lépni és fel tudod oldani.
+                </T>
+
+                <View
+                  style={[
+                    styles.secBanner,
+                    sec?.quarantine_active ? styles.secBannerAlarm : styles.secBannerCalm,
+                  ]}
+                >
+                  <Ionicons
+                    name={sec?.quarantine_active ? "lock-closed" : "shield-checkmark"}
+                    size={20}
+                    color={sec?.quarantine_active ? "#ef5350" : theme.success}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <T variant="label" color={sec?.quarantine_active ? "#ef5350" : theme.success}>
+                      {sec?.quarantine_active ? "KARANTÉN AKTÍV" : "Nincs karantén"}
+                    </T>
+                    {sec?.quarantine_active ? (
+                      <T variant="small" color="rgba(247,251,255,0.78)" style={{ marginTop: 2 }}>
+                        {sec.quarantine_reason || "ismeretlen ok"}
+                        {sec.quarantine_at ? ` · ${sec.quarantine_at}` : ""}
+                        {sec.quarantine_source ? ` · forrás: ${sec.quarantine_source}` : ""}
+                      </T>
+                    ) : (
+                      <T variant="small" color="rgba(247,251,255,0.6)" style={{ marginTop: 2 }}>
+                        A platform normálisan kiszolgálja a felhasználókat.
+                      </T>
+                    )}
+                  </View>
+                  <TouchableOpacity onPress={loadSecurity} disabled={secLoading} testID="security-refresh">
+                    {secLoading ? (
+                      <ActivityIndicator size="small" color={theme.accent} />
+                    ) : (
+                      <Ionicons name="refresh-outline" size={18} color={theme.accent} />
+                    )}
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.diagLine}>
+                  <T variant="small" color="rgba(247,251,255,0.7)">Figyelő állapota:</T>
+                  <T
+                    variant="small"
+                    color={
+                      sec?.watch_age_seconds == null
+                        ? theme.warm
+                        : sec.watch_age_seconds > WATCH_STALE_SECONDS
+                          ? theme.danger
+                          : theme.success
+                    }
+                  >
+                    {sec?.watch_age_seconds == null
+                      ? "nem jelentkezett"
+                      : sec.watch_age_seconds > WATCH_STALE_SECONDS
+                        ? `nem fut (${Math.round(sec.watch_age_seconds / 60)} perce néma)`
+                        : "fut"}
+                  </T>
+                </View>
+
+                <View style={styles.diagLine}>
+                  <T variant="small" color="rgba(247,251,255,0.7)">Utolsó 24 óra:</T>
+                  <T variant="small" color="rgba(247,251,255,0.86)">
+                    {(sec?.counts_24h?.critical ?? 0)} súlyos · {(sec?.counts_24h?.warn ?? 0)} figyelmeztetés · {(sec?.counts_24h?.info ?? 0)} egyéb
+                  </T>
+                </View>
+
+                <View style={styles.emergencyCard}>
+                  <TouchableOpacity
+                    style={styles.emergencyRowHeader}
+                    onPress={() => setShowEvents((v) => !v)}
+                    testID="security-events-header"
+                  >
+                    <T variant="label" color={theme.accent}>
+                      Események ({sec?.events?.length ?? 0})
+                    </T>
+                    <Ionicons name={showEvents ? "chevron-up" : "chevron-down"} size={18} color={theme.accent} />
+                  </TouchableOpacity>
+                  {showEvents ? (
+                    <ScrollView style={styles.logScroll} nestedScrollEnabled showsVerticalScrollIndicator>
+                      {!sec?.events?.length ? (
+                        <T variant="small" color="rgba(247,251,255,0.4)">Nincs rögzített esemény.</T>
+                      ) : (
+                        sec.events.map((e) => (
+                          <View key={e.id} style={styles.eventRow}>
+                            <View style={[styles.severityDot, { backgroundColor: severityColor(e.severity) }]} />
+                            <View style={{ flex: 1 }}>
+                              <T variant="small" color={theme.textOnDark}>
+                                {e.quarantined ? "🔒 " : ""}{e.label}
+                              </T>
+                              <T variant="caption" color="rgba(247,251,255,0.45)" style={{ marginTop: 1 }}>
+                                {formatEventTime(e.created_at)} · {e.kind} · {e.source}
+                              </T>
+                              {e.detail ? (
+                                <T
+                                  variant="caption"
+                                  color="#cfd8dc"
+                                  style={{ fontFamily: "monospace", fontSize: 10, marginTop: 3 }}
+                                >
+                                  {e.detail}
+                                </T>
+                              ) : null}
+                            </View>
+                          </View>
+                        ))
+                      )}
+                    </ScrollView>
+                  ) : null}
+                </View>
+
+                <T variant="caption" color="rgba(247,251,255,0.72)" style={styles.lbl}>
+                  Admin jelszó a karantén műveletekhez
+                </T>
+                <TextInput
+                  value={secPassword}
+                  onChangeText={setSecPassword}
+                  placeholder="Jelenlegi admin jelszó"
+                  placeholderTextColor="rgba(247,251,255,0.45)"
+                  secureTextEntry
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  textContentType="password"
+                  maxLength={PASSWORD_MAX_CHARS}
+                  style={styles.input}
+                  testID="security-password"
+                />
+
+                {msg ? <T variant="small" color={theme.success} style={styles.feedback}>{msg}</T> : null}
+                {err ? <T variant="small" color={theme.danger} style={styles.feedback}>{err}</T> : null}
+
+                {sec?.quarantine_active ? (
+                  <TouchableOpacity
+                    style={[styles.emergencyActionBtn, { backgroundColor: theme.accentDeep }]}
+                    onPress={releaseQuarantine}
+                    disabled={secBusy}
+                    testID="security-release-button"
+                  >
+                    {secBusy ? (
+                      <ActivityIndicator color={theme.white} />
+                    ) : (
+                      <T variant="label" color={theme.white}>Karantén feloldása</T>
+                    )}
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={[styles.emergencyActionBtn, { backgroundColor: theme.warm }]}
+                    onPress={manualQuarantine}
+                    disabled={secBusy}
+                    testID="security-quarantine-button"
+                  >
+                    {secBusy ? (
+                      <ActivityIndicator color={theme.white} />
+                    ) : (
+                      <T variant="label" color={theme.white}>Karantén bekapcsolása (kézzel)</T>
+                    )}
+                  </TouchableOpacity>
+                )}
+
+                <TouchableOpacity
+                  style={styles.emergencyOutlineBtn}
+                  onPress={clearEvents}
+                  disabled={secBusy}
+                  testID="security-clear-button"
+                >
+                  <T variant="label" color={theme.accent}>Eseménylista ürítése</T>
                 </TouchableOpacity>
               </Section>
 
@@ -624,6 +917,25 @@ function Section({ title, icon, children }: { title: string; icon: keyof typeof 
   );
 }
 
+function severityColor(severity: string) {
+  if (severity === "critical") return "#ef5350";
+  if (severity === "warn") return theme.warm;
+  return theme.accent;
+}
+
+/** A figyelo helyi ido szerinti "YYYY-MM-DD HH:MM:SS"-t ir, a backend ISO-t.
+ *  Mindkettonel a ma torteneteknel csak az orat mutatjuk. */
+function formatEventTime(raw: string | null) {
+  if (!raw) return "";
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  const ma = new Date();
+  const azonosNap =
+    d.getFullYear() === ma.getFullYear() && d.getMonth() === ma.getMonth() && d.getDate() === ma.getDate();
+  const ora = d.toLocaleTimeString("hu-HU", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return azonosNap ? ora : `${d.toLocaleDateString("hu-HU")} ${ora}`;
+}
+
 function FieldLabel({ text }: { text: string }) {
   return <T variant="label" color="rgba(247,251,255,0.68)" style={styles.lbl}>{text}</T>;
 }
@@ -749,6 +1061,33 @@ const styles = StyleSheet.create({
     flexDirection: "row",
   },
   feedback: { marginBottom: 10, marginTop: 10 },
+  toggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 16,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255,255,255,0.10)",
+  },
+  secBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 12,
+    marginBottom: 10,
+  },
+  secBannerAlarm: { borderColor: "rgba(239,83,80,0.45)", backgroundColor: "rgba(239,83,80,0.10)" },
+  secBannerCalm: { borderColor: "rgba(255,255,255,0.14)", backgroundColor: "rgba(255,255,255,0.05)" },
+  eventRow: {
+    flexDirection: "row",
+    gap: 8,
+    paddingVertical: 7,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.07)",
+  },
+  severityDot: { width: 8, height: 8, borderRadius: 4, marginTop: 5 },
 
 
   sosCard: {

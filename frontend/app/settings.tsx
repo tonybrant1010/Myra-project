@@ -49,6 +49,8 @@ export default function SettingsScreen() {
   const [securityPassword, setSecurityPassword] = useState("");
   const [mfaEnabled, setMfaEnabled] = useState(false);
   const [mfaForced, setMfaForced] = useState(false);
+  const [memoryEnabled, setMemoryEnabled] = useState(false);
+  const [memoryBusy, setMemoryBusy] = useState(false);
   const [trustedDevices, setTrustedDevices] = useState<TrustedDevice[]>([]);
   const [busy, setBusy] = useState(false);
   const [securityBusy, setSecurityBusy] = useState(false);
@@ -59,6 +61,36 @@ export default function SettingsScreen() {
   const [docModal, setDocModal] = useState<DocModal>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMemoryEnabled(!!user?.profile_memory_enabled);
+  }, [user?.profile_memory_enabled]);
+
+  const saveMemory = async (nextEnabled: boolean) => {
+    setMemoryBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const r = await authedFetch(token, "/api/user/memory", {
+        method: "PUT",
+        body: JSON.stringify({ enabled: nextEnabled }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) {
+        setMemoryEnabled(!!d.enabled);
+        setMessage(nextEnabled
+          ? "Memória bekapcsolva. Myra a következő beszélgetésektől veszi figyelembe a korábbiakat."
+          : "Memória kikapcsolva, a korábbi kivonat törölve.");
+        await refreshUser();
+      } else {
+        setError(d?.detail || "Nem sikerült módosítani a memória beállítást.");
+      }
+    } catch {
+      setError("Hálózati hiba a memória beállítás mentésekor.");
+    } finally {
+      setMemoryBusy(false);
+    }
+  };
 
   const loadSecurity = async () => {
     try {
@@ -363,6 +395,44 @@ export default function SettingsScreen() {
                 {busy ? <ActivityIndicator color={theme.white} /> : <T variant="title" color={theme.white}>Jelszó mentése</T>}
               </TouchableOpacity>
             </View>
+
+            {user?.profile_memory_available ? (
+              <View style={[styles.sectionCard, shadow.card]}>
+                <View style={styles.sectionHead}>
+                  <View style={styles.sectionIcon}>
+                    <Ionicons name="bookmark-outline" size={18} color={theme.accentSoft} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <T variant="caption" color={theme.accentSoft}>MYRA MEMÓRIÁJA</T>
+                    <T variant="small" color="rgba(247,251,255,0.64)" style={{ marginTop: 2 }}>
+                      Ha bekapcsolod, Myra a korábbi méréseidből és beszélgetéseidből rövid,
+                      pontokba szedett kivonatot tart magánál, és azt figyelembe veszi. Alapból ki van kapcsolva.
+                      Kikapcsoláskor a kivonat törlődik.
+                    </T>
+                  </View>
+                </View>
+                <View style={styles.statusPill}>
+                  <Ionicons
+                    name={memoryEnabled ? "bookmark" : "bookmark-outline"}
+                    size={16}
+                    color={memoryEnabled ? theme.success : theme.warm}
+                  />
+                  <T variant="small" color={theme.textOnDark}>{memoryEnabled ? "Bekapcsolva" : "Kikapcsolva"}</T>
+                </View>
+                <TouchableOpacity
+                  style={styles.saveBtn}
+                  onPress={() => saveMemory(!memoryEnabled)}
+                  disabled={memoryBusy}
+                  activeOpacity={0.86}
+                >
+                  {memoryBusy ? <ActivityIndicator color={theme.white} /> : (
+                    <T variant="title" color={theme.white}>
+                      {memoryEnabled ? "Memória kikapcsolása" : "Memória bekapcsolása"}
+                    </T>
+                  )}
+                </TouchableOpacity>
+              </View>
+            ) : null}
 
             <View style={[styles.dangerCard, shadow.card]}>
               <View style={styles.sectionHead}>

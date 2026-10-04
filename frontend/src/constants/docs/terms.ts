@@ -1,6 +1,6 @@
 export const termsText = `FELHASZNÁLÁSI FELTÉTELEK
 
-Hatályos: 2026. augusztus 17.
+Hatályos: 2026. szeptember 13.
 
 1. A szolgáltatás jellege
 A Myra egy magánszemély által, nem kereskedelmi célból fejlesztett, mérésvezérelt, reflektív mentálhigiénés önismereti alkalmazás. A rendszer az ESV-modell (Érzelem-Stressz-Viselkedés) alapján működik: önkitöltős állapotfelmérést, belső állapotkódot és mesterséges intelligenciával támogatott beszélgetési keretet biztosít.
@@ -27,6 +27,8 @@ A felhasználó a Myrával folytatott beszélgetés során mesterséges intellig
 A Myra válaszait részben mesterséges intelligencia alapú rendszer állítja elő. Az AI-válaszok pontossága, teljessége, időszerűsége vagy megfelelősége nem garantálható. Előfordulhat téves, hiányos, félreérthető vagy a felhasználó helyzetéhez nem megfelelő válasz.
 
 A válaszadás során a rendszer az aktuális üzenet mellett a beszélgetés korábbi részleteit, a mérési állapotkódhoz kapcsolódó kontextust, a felhasználó által vállalt mikro-célokat és a PDF alapú tudásanyagból visszakeresett releváns részleteket is felhasználhatja. Ez a beszélgetés folytonosságát szolgálja, de nem jelent diagnózist, szakvéleményt vagy terápiás döntést.
+
+A felhasználó külön kapcsolóval engedélyezheti a "Myra memóriája" funkciót. Bekapcsolt állapotban a rendszer a felhasználó korábbi méréseiből és beszélgetéseiből rövid, pontokba szedett kivonatot tart magánál, és azt a válaszadásnál figyelembe veszi. A funkció alapértelmezés szerint ki van kapcsolva, a Beállítások menüben bármikor be- és kikapcsolható, kikapcsoláskor pedig a kivonat törlődik. A kivonat leíró jellegű, nem diagnózis és nem szakvélemény; a mesterséges intelligencia korlátai rá is érvényesek, tehát tartalmazhat pontatlanságot.
 
 A rendszer néhány nap kihagyás után a beszélgetést egy rövid, támogató visszakérdezéssel magától is újranyithatja. Ez ugyanazon beszélgetési kontextus alapján történik, tájékoztató és önismereti célú, és szintén nem minősül diagnózisnak vagy szakvéleménynek.
 

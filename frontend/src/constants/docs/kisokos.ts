@@ -9,6 +9,9 @@ Amikor először nyitod meg az appot, egy rövid kérdőívet töltesz ki. Ennek
 MIT CSINÁL MYRA A CHATBEN?
 Myra ismeri az állapotkódodat, és ennek alapján veled együtt gondolkodik. A beszélgetésen belül a korábbi üzenetekből is kap kontextust, hogy jobban tudja követni a folyamatot. Nem kell mindent újra elmagyarázni, egyszerűen csak írj neki, ahogy egy ismerősnek írnál. Egy "szia" is elég a kezdéshez.
 
+EMLÉKEZZEN MYRA A KORÁBBIAKRA?
+Alapból nem. Minden beszélgetés az aktuális mérésedhez tartozik, és Myra csak azon belül lát vissza. Ha szeretnéd, a Beállítások menüben bekapcsolhatod a "Myra memóriája" kapcsolót: ettől kezdve Myra a korábbi méréseidből és beszélgetéseidből egy rövid, pontokba szedett kivonatot tart magánál — például hogy milyen témák térnek vissza nálad, és mi az, ami korábban segített lenyugodni. Ez nem a teljes beszélgetéseid tárolása, hanem néhány soros összegzés, és bármikor kikapcsolhatod. Kikapcsoláskor a kivonat törlődik. A pontos szövegét meg is nézheted az "Adatok letöltése" gombbal.
+
 MIKOR ÉRDEMES ÚJ MÉRÉST CSINÁLNI?
 Az állapotkód egy adott pillanatot tükröz. Ha úgy érzed, hogy sokat változott az állapotod — jobb vagy rosszabb lett —, érdemes új mérést végezni. Ezt a Menüből tudod elindítani az "Új mérés" gombbal. A korábbi mérések és a hozzájuk tartozó beszélgetések megmaradnak, visszanézheted őket.
 
