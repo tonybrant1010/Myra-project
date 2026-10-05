@@ -4272,6 +4272,80 @@ async def _backfill_message_embeddings(user_id: Optional[int] = None) -> None:
             logger.info("recall_backfill messages=%d took=%.1fs", total, time.perf_counter() - started)
 
 
+_HU_MONTHS = {
+    "január": 1, "február": 2, "március": 3, "április": 4, "május": 5, "június": 6,
+    "július": 7, "augusztus": 8, "szeptember": 9, "október": 10, "november": 11, "december": 12,
+}
+_HU_MONTH_RE = re.compile(r"\b(" + "|".join(_HU_MONTHS) + r")\w*", re.IGNORECASE)
+# Evszak -> (elso honap, honapok szama). Az "ősz" kizarja az "őszinte" szot, a "tél" a "telefon"-t.
+_HU_SEASON_RE = re.compile(
+    r"\b(tavasz\w*|tavasszal|nyár\w*|nyar\w*|ősszel|ősz(?!int)\w*|télen|tél\b|téli\w*)",
+    re.IGNORECASE,
+)
+_HU_SEASONS = {"tavasz": (3, 3), "nyar": (6, 3), "osz": (9, 3), "tel": (12, 3)}
+RECALL_TIME_PAD_DAYS = _env_int("RECALL_TIME_PAD_DAYS", 10, 0, 60)
+
+
+def _season_key(word: str) -> str:
+    w = word.lower()
+    if w.startswith("tavas"):
+        return "tavasz"
+    if w.startswith(("nyár", "nyar")):
+        return "nyar"
+    if w.startswith("ős"):
+        return "osz"
+    return "tel"
+
+
+def _parse_time_window(text: str, now: Optional[datetime] = None) -> Optional[tuple[datetime, datetime, str]]:
+    """Egyszeru magyar idohatarozo-felismeres a felidezeshez ("nyár elején",
+    "júniusban", "tavaly ősszel"). A legutobbi elmult elofordulast veszi, es
+    RECALL_TIME_PAD_DAYS nappal mindket iranyba kitagitja. Ha nincs ilyen, None."""
+    if not text:
+        return None
+    now = _to_local(now or _now())
+    low = text.lower()
+    last_year = "tavaly" in low
+    start_month = None
+    n_months = 1
+    label = ""
+    m = _HU_MONTH_RE.search(low)
+    if m:
+        start_month = _HU_MONTHS[m.group(1).lower()]
+        label = m.group(1).lower()
+    else:
+        sm = _HU_SEASON_RE.search(low)
+        if sm:
+            key = _season_key(sm.group(1))
+            start_month, n_months = _HU_SEASONS[key]
+            label = sm.group(1).lower()
+            tail = low[sm.end():sm.end() + 12]
+            if "elej" in tail:
+                n_months = 1
+                label += " eleje"
+            elif "vég" in tail or "veg" in tail:
+                start_month = (start_month + n_months - 2) % 12 + 1
+                n_months = 1
+                label += " vége"
+            elif "közep" in tail or "kozep" in tail:
+                start_month = start_month % 12 + 1
+                n_months = 1
+                label += " közepe"
+    if start_month is None:
+        return None
+    year = now.year
+    # A legutobbi, mar elkezdodott elofordulas; "tavaly" eseten egy evvel korabbi.
+    if (start_month, 1) > (now.month, now.day):
+        year -= 1
+    if last_year and year == now.year:
+        year -= 1
+    start = datetime(year, start_month, 1, tzinfo=now.tzinfo)
+    end_month_index = start_month - 1 + n_months
+    end = datetime(year + end_month_index // 12, end_month_index % 12 + 1, 1, tzinfo=now.tzinfo)
+    pad = timedelta(days=RECALL_TIME_PAD_DAYS)
+    return start - pad, end + pad, label
+
+
 async def _recall_past_exchanges(
     db: AsyncSession,
     user_id: int,
@@ -4279,6 +4353,7 @@ async def _recall_past_exchanges(
     query: str,
     query_emb: Optional[list[float]] = None,
     explicit: bool = True,
+    time_window: Optional[tuple[datetime, datetime, str]] = None,
 ) -> list[dict]:
     """A felhasznalo KORABBI uleseibol keres sajat mondatokat, es mindegyikhez
     odaveszi a ra kovetkezo Myra-valaszt. Az aktualis ules kimarad: az amugy is
@@ -4298,6 +4373,11 @@ async def _recall_past_exchanges(
     candidates: dict = {}
     vec_hits = 0
     txt_hits = 0
+    time_sql = ""
+    time_params: dict = {}
+    if time_window is not None:
+        time_sql = "AND u.created_at >= :t0 AND u.created_at < :t1"
+        time_params = {"t0": time_window[0], "t1": time_window[1]}
     if query_emb is not None and RECALL_VECTOR_ENABLED:
         stmt = sql_text(f"""
             SELECT u.id, u.created_at, u.text AS user_text, u.session_id, {myra_sub},
@@ -4308,11 +4388,13 @@ async def _recall_past_exchanges(
               AND u.role = 'user'
               AND u.session_id IS DISTINCT FROM :sid
               AND e.{EMBED_COL} IS NOT NULL
+              {time_sql}
             ORDER BY dist ASC
             LIMIT :pool
         """)  # nosec B608 - EMBED_COL egesz szambol kepzett oszlopnev, a tobbi parameter
         res = await db.execute(stmt, {
             "uid": user_id, "sid": session_id, "qv": _vec_literal(query_emb), "pool": RECALL_CANDIDATES,
+            **time_params,
         })
         for r in res.mappings().all():
             candidates[r["id"]] = dict(r)
@@ -4326,6 +4408,7 @@ async def _recall_past_exchanges(
               AND u.role = 'user'
               AND u.session_id IS DISTINCT FROM :sid
               AND length(u.text) >= :min_len
+              {time_sql}
               AND to_tsvector('hungarian', u.text) @@ to_tsquery('hungarian', :ts_query)
             ORDER BY ts_rank_cd(to_tsvector('hungarian', u.text), to_tsquery('hungarian', :ts_query)) DESC,
                      u.created_at DESC
@@ -4334,12 +4417,18 @@ async def _recall_past_exchanges(
         res = await db.execute(stmt, {
             "uid": user_id, "sid": session_id, "ts_query": ts_query,
             "min_len": RECALL_MIN_MESSAGE_CHARS, "pool": max(5, RECALL_CANDIDATES // 2),
+            **time_params,
         })
         for r in res.mappings().all():
             txt_hits += 1
             candidates.setdefault(r["id"], dict(r))
     rows = [r for r in candidates.values() if len((r.get("user_text") or "").strip()) >= RECALL_MIN_MESSAGE_CHARS]
     if not rows:
+        if time_window is not None:
+            # Az idoszakban nincs talalat: ujraprobalas idoszuro nelkul, hogy egy
+            # rosszul becsult idopont miatt ne vesszen el a tema.
+            logger.info("recall_search time_window=%s miss", time_window[2])
+            return await _recall_past_exchanges(db, user_id, session_id, query, query_emb, explicit, None)
         return []
 
     max_items = RECALL_MAX_ITEMS if explicit else RECALL_PROACTIVE_MAX_ITEMS
@@ -4364,8 +4453,8 @@ async def _recall_past_exchanges(
         rows = []
     kept = rows[:max_items]
     logger.info(
-        "recall_search explicit=%s vec=%d txt=%d kept=%d best_score=%s",
-        explicit, vec_hits, txt_hits, len(kept),
+        "recall_search explicit=%s window=%s vec=%d txt=%d kept=%d best_score=%s",
+        explicit, time_window[2] if time_window else "-", vec_hits, txt_hits, len(kept),
         f"{best_score:.3f}" if best_score is not None else "-",
     )
     return kept
@@ -5692,8 +5781,12 @@ async def chat_send(
         if recall_explicit or len(clean_text) >= RECALL_MIN_MESSAGE_CHARS * 3:
             try:
                 async with db.begin_nested():
+                    time_window = _parse_time_window(clean_text) or (
+                        _parse_time_window(recall_query) if recall_query != clean_text else None
+                    )
                     recall_rows = await _recall_past_exchanges(
                         db, user.id, active_session_id, recall_query, recall_emb, recall_explicit,
+                        time_window,
                     )
             except Exception as _e:
                 logger.warning(f"felidezesi hiba: {_e}")
