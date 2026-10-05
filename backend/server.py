@@ -4388,7 +4388,8 @@ def _build_recall_block(rows: list[dict], explicit: bool = True) -> str:
             "dátumával. Csak azt állítsd, ami ezekben benne van: időpontot, helyet, nevet vagy "
             "körülményt ne tegyél hozzá, a dátum az itt szereplő. Ha a részletek nem arról "
             "szólnak, amire a felhasználó utal, mondd meg őszintén, hogy erre most nem találsz "
-            "rá. Ne olvasd fel és ne sorold fel őket."
+            "rá. Magadtól ne sorold fel őket; ha a felhasználó idézést kér, a saját mondatait "
+            "szó szerint idézheted."
         )
     else:
         intro = (
@@ -5218,7 +5219,8 @@ def _build_system_prompt(
     sc: StateCode,
     user_name: str = "",
     code_verified_at: Optional[datetime] = None,
-    extra_context: str = ""
+    extra_context: str = "",
+    final_note: str = "",
 ) -> str:
     state_block = _build_state_block(sc, user_name)
     
@@ -5271,6 +5273,11 @@ def _build_system_prompt(
     if extra_context.strip():
         parts += ["", extra_context]
     parts += ["", system_prompt]
+    # Csak egy-egy fordulora szolo, szukre szabott kiegeszites (pl. a felhasznalo
+    # kifejezett felidezesi kerese). Szandekosan a rendszerprompt UTAN all, mert
+    # kulonben a rendszerprompt altalanos szabalyai elnyomjak.
+    if final_note.strip():
+        parts += ["", final_note]
     return "\n".join(parts)
 
 
@@ -5662,7 +5669,15 @@ async def chat_send(
         # Rovid, elliptikus kerdesnel a keresest az elozo felhasznaloi uzenetek adjak.
         recall_query = clean_text
         if recall_explicit and len(clean_text) < RECALL_MIN_MESSAGE_CHARS * 4 and prev_user_texts:
-            recall_query = "\n".join(prev_user_texts + [clean_text])
+            # Rovid ravezeto kerdesnel ("Csinald, amit kertem!", "Ez mikor volt?") a
+            # legutobbi erdemi felhasznaloi uzenet hordozza a temat; a rovid kerdes
+            # hozzaadasa csak zajt vinne az ujrarangsorolasba.
+            parts_q: list[str] = []
+            for prev in reversed(prev_user_texts):
+                parts_q.insert(0, prev.strip())
+                if sum(len(x) for x in parts_q) >= RECALL_MIN_MESSAGE_CHARS * 4:
+                    break
+            recall_query = "\n".join(parts_q)
         query_emb = None
         recall_emb = None
         if RECALL_VECTOR_ENABLED and DB_DIALECT != "sqlite":
@@ -5690,6 +5705,26 @@ async def chat_send(
             except Exception as _e:
                 logger.warning(f"uzenet-vektor mentesi hiba: {_e}")
     recall_block = _build_recall_block(recall_rows, recall_explicit)
+    recall_note = ""
+    if recall_explicit and recall_rows:
+        recall_note = (
+            "[FELIDÉZÉSI KÉRÉS – ERRE A FORDULÓRA]\n"
+            "A felhasználó a saját korábbi beszélgetéseire kérdezett rá. A [KORÁBBI BESZÉLGETÉSEKBŐL] "
+            "blokk az ő saját szavait tartalmazza, az eredeti dátummal. Ha felidézést vagy idézést "
+            "kér, idézd szó szerint a mondatait (legfeljebb 2-3 rövid idézet, dátummal), majd "
+            "kapcsolódj ahhoz, ami most van benne. A „ne idézd” szabályok a tudásanyagra és a belső "
+            "kontextusra vonatkoznak, a felhasználó saját szavaira nem. Ezt a kérést ne tagadd meg, "
+            "és ne magyarázd, miért nem idézel; ha korábban elhárítottad, most tedd meg. Csak azt "
+            "állítsd, ami a részletekben benne van."
+        )
+    elif recall_explicit:
+        recall_note = (
+            "[FELIDÉZÉSI KÉRÉS – ERRE A FORDULÓRA]\n"
+            "Ha a felhasználó most egy korábbi beszélgetésre kérdez rá, arról nincs megbízható "
+            "részlet. Ne állítsd, hogy emlékszel, ne találj ki részletet, és ne hárítsd el azzal, "
+            "hogy nem akarod felidézni: mondd el őszintén, hogy most nem találod, és kérd meg, "
+            "hogy idézze fel ő."
+        )
 
     profile_on = PROFILE_ENABLED and bool(user.profile_memory_enabled)
     user_profile = await _get_user_profile(db, user.id) if profile_on else None
@@ -5702,6 +5737,7 @@ async def chat_send(
     sys_prompt = _build_system_prompt(
         sys_prompt_base, effective_kb, sc, user.name, user.code_verified_at,
         extra_context="\n\n".join(part for part in [goals_block, profile_block, recall_block] if part.strip()),
+        final_note=recall_note,
     )
     mark_timing("prompt", phase_started)
     try:
