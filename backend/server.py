@@ -361,6 +361,22 @@ try:
 except ValueError:
     RECALL_PROACTIVE_MIN_SCORE = 2.0
 RECALL_PROACTIVE_MAX_ITEMS = _env_int("RECALL_PROACTIVE_MAX_ITEMS", 2, 1, 10)
+# Felidezeskor ennyi korabbi felhasznaloi uzenet kerul az ulesbol a keresesbe,
+# uzenetenkent legfeljebb ennyi karakterrel (az ujrarangsorolo 512 tokenes).
+RECALL_CONTEXT_MESSAGES = _env_int("RECALL_CONTEXT_MESSAGES", 4, 1, 10)
+RECALL_CONTEXT_CHARS = _env_int("RECALL_CONTEXT_CHARS", 200, 50, 1000)
+# A bge-reranker-base magyarul gyenge: egyertelmu talalatra is adhat negativ
+# pontot. Felidezeskor ezert a nagyon kozeli uzenet-vektor (e5 koszinusz-tavolsag)
+# onmagaban is elfogadott.
+try:
+    RECALL_EXPLICIT_MAX_DIST = float(os.environ.get("RECALL_EXPLICIT_MAX_DIST", "0.10"))
+except ValueError:
+    RECALL_EXPLICIT_MAX_DIST = 0.10
+# Felidezeskor a legjobb talalat utani nehany felhasznaloi uzenet is bekerul
+# ugyanabbol az ulesbol: a "ki akarom beszelni a rajztanart" utan jon a tortenet.
+RECALL_EXPLICIT_FOLLOWUPS = _env_int("RECALL_EXPLICIT_FOLLOWUPS", 2, 0, 5)
+RECALL_EXPLICIT_SNIPPET_CHARS = _env_int("RECALL_EXPLICIT_SNIPPET_CHARS", 600, 80, 2000)
+RECALL_EXPLICIT_MAX_CHARS = _env_int("RECALL_EXPLICIT_MAX_CHARS", 2400, 200, 8000)
 try:
     RAG_VECTOR_MAX_DISTANCE = float(os.environ.get("RAG_VECTOR_MAX_DISTANCE", "0.62"))
 except ValueError:
@@ -4449,6 +4465,7 @@ async def _recall_past_exchanges(
     query_emb: Optional[list[float]] = None,
     explicit: bool = True,
     time_window: Optional[tuple[datetime, datetime, str]] = None,
+    context_message_ids: Optional[list[str]] = None,
 ) -> list[dict]:
     """A felhasznalo KORABBI uleseibol keres sajat mondatokat, es mindegyikhez
     odaveszi a ra kovetkezo Myra-valaszt. Az aktualis ules kimarad: az amugy is
@@ -4473,10 +4490,24 @@ async def _recall_past_exchanges(
     if time_window is not None:
         time_sql = "AND u.created_at >= :t0 AND u.created_at < :t1"
         time_params = {"t0": time_window[0], "t1": time_window[1]}
+    ctx_ids = [str(x) for x in (context_message_ids or []) if x]
     if query_emb is not None and RECALL_VECTOR_ENABLED:
+        # Felidezeskor a tema gyakran nem a mostani kerdesben van ("emlekszel a
+        # multkorira?"), hanem az ules korabbi uzeneteiben ("a rajztanaros esetrol").
+        # Ezek mar tarolt vektorait is lekerdezesnek hasznaljuk: a tavolsag a
+        # legkozelebbi lekerdezeshez mert ertek.
+        if ctx_ids:
+            dist_sql = f"""LEAST(
+                       (e.{EMBED_COL} <=> CAST(:qv AS vector)),
+                       COALESCE((SELECT MIN(e.{EMBED_COL} <=> c.{EMBED_COL})
+                                   FROM chat_message_embeddings c
+                                  WHERE c.user_id = :uid AND c.message_id = ANY(:ctx_ids)
+                                    AND c.{EMBED_COL} IS NOT NULL), 2.0))"""  # nosec B608 - EMBED_COL egesz szambol kepzett oszlopnev
+        else:
+            dist_sql = f"(e.{EMBED_COL} <=> CAST(:qv AS vector))"
         stmt = sql_text(f"""
             SELECT u.id, u.created_at, u.text AS user_text, u.session_id, {myra_sub},
-                   (e.{EMBED_COL} <=> CAST(:qv AS vector)) AS dist
+                   {dist_sql} AS dist
             FROM chat_message_embeddings e
             JOIN chat_messages u ON u.id = e.message_id
             WHERE e.user_id = :uid
@@ -4489,6 +4520,7 @@ async def _recall_past_exchanges(
         """)  # nosec B608 - EMBED_COL egesz szambol kepzett oszlopnev, a tobbi parameter
         res = await db.execute(stmt, {
             "uid": user_id, "sid": session_id, "qv": _vec_literal(query_emb), "pool": RECALL_CANDIDATES,
+            **({"ctx_ids": ctx_ids} if ctx_ids else {}),
             **time_params,
         })
         for r in res.mappings().all():
@@ -4523,7 +4555,9 @@ async def _recall_past_exchanges(
             # Az idoszakban nincs talalat: ujraprobalas idoszuro nelkul, hogy egy
             # rosszul becsult idopont miatt ne vesszen el a tema.
             logger.info("recall_search time_window=%s miss", time_window[2])
-            return await _recall_past_exchanges(db, user_id, session_id, query, query_emb, explicit, None)
+            return await _recall_past_exchanges(
+                db, user_id, session_id, query, query_emb, explicit, None, context_message_ids,
+            )
         return []
 
     max_items = RECALL_MAX_ITEMS if explicit else RECALL_PROACTIVE_MAX_ITEMS
@@ -4536,7 +4570,18 @@ async def _recall_past_exchanges(
                 r["score"] = sc
             rows.sort(key=lambda r: r["score"], reverse=True)
             best_score = rows[0]["score"]
-            rows = [r for r in rows if r["score"] >= min_score]
+            passed = [r for r in rows if r["score"] >= min_score]
+            if explicit:
+                # A nagyon kozeli vektortalalat elore kerul, akkor is, ha az
+                # ujrarangsorolo (magyarul gyenge) nem adott ra pozitiv pontot.
+                vec_strong = sorted(
+                    (r for r in rows if r.get("dist") is not None
+                     and r["dist"] <= RECALL_EXPLICIT_MAX_DIST),
+                    key=lambda r: r["dist"],
+                )
+                vec_ids = {r["id"] for r in vec_strong}
+                passed = vec_strong + [r for r in passed if r["id"] not in vec_ids]
+            rows = passed
         except Exception as _e:
             logger.warning(f"recall rerank hiba: {_e}")
             if not explicit:
@@ -4547,10 +4592,42 @@ async def _recall_past_exchanges(
         # Ujrarangsorolo nelkul nincs megbizhato kuszob, ezert magatol nem hoz elo emleket.
         rows = []
     kept = rows[:max_items]
+    followups = 0
+    if explicit and kept and RECALL_EXPLICIT_FOLLOWUPS > 0:
+        # A legjobb talalat utani felhasznaloi uzenetek ugyanabbol az ulesbol: a
+        # bejelentes ("ki akarom beszelni...") utan altalaban ott a tortenet maga.
+        top = kept[0]
+        stmt = sql_text(f"""
+            SELECT u.id, u.created_at, u.text AS user_text, u.session_id, {myra_sub}
+            FROM chat_messages u
+            WHERE u.user_id = :uid
+              AND u.role = 'user'
+              AND u.session_id IS NOT DISTINCT FROM :tsid
+              AND u.created_at > :tts
+              AND length(u.text) >= :min_len
+            ORDER BY u.created_at ASC
+            LIMIT :n
+        """)  # nosec B608 - csak rogzitett szovegdarab kerul bele, az ertekek parameterek
+        res = await db.execute(stmt, {
+            "uid": user_id, "tsid": top.get("session_id"), "tts": top.get("created_at"),
+            "min_len": RECALL_MIN_MESSAGE_CHARS, "n": RECALL_EXPLICIT_FOLLOWUPS,
+        })
+        have = {r["id"] for r in kept}
+        for r in res.mappings().all():
+            if r["id"] not in have:
+                kept.append(dict(r))
+                have.add(r["id"])
+                followups += 1
+        # Idorendben olvasva a tortenet osszefuggo.
+        kept.sort(key=lambda r: r.get("created_at") or datetime.min.replace(tzinfo=timezone.utc))
+    vec_best = min((r["dist"] for r in candidates.values() if r.get("dist") is not None), default=None)
     logger.info(
-        "recall_search explicit=%s window=%s vec=%d txt=%d kept=%d best_score=%s",
-        explicit, time_window[2] if time_window else "-", vec_hits, txt_hits, len(kept),
+        "recall_search explicit=%s window=%s ctx=%d vec=%d txt=%d kept=%d followups=%d "
+        "best_score=%s best_dist=%s",
+        explicit, time_window[2] if time_window else "-", len(ctx_ids), vec_hits, txt_hits, len(kept),
+        followups,
         f"{best_score:.3f}" if best_score is not None else "-",
+        f"{vec_best:.3f}" if vec_best is not None else "-",
     )
     return kept
 
@@ -4584,15 +4661,18 @@ def _build_recall_block(rows: list[dict], explicit: bool = True) -> str:
         )
     lines = ["[KORÁBBI BESZÉLGETÉSEKBŐL]", intro]
     used = 0
+    snippet_chars = RECALL_EXPLICIT_SNIPPET_CHARS if explicit else RECALL_SNIPPET_CHARS
+    max_chars = RECALL_EXPLICIT_MAX_CHARS if explicit else RECALL_MAX_CHARS
     for row in rows:
         when = _to_local(row.get("created_at"))
         stamp = when.strftime("%Y.%m.%d") if when else "?"
-        user_text = (row.get("user_text") or "").strip()[:RECALL_SNIPPET_CHARS]
+        user_text = (row.get("user_text") or "").strip()[:snippet_chars]
+        # Myra valaszabol eleg rovidebb resz: a felhasznalo szavai a fontosak.
         myra_text = (row.get("myra_text") or "").strip()[:RECALL_SNIPPET_CHARS]
         block = f"- {stamp} — a felhasználó: \"{user_text}\""
         if myra_text:
             block += f"\n  Myra akkor: \"{myra_text}\""
-        if used + len(block) > RECALL_MAX_CHARS:
+        if used + len(block) > max_chars:
             break
         lines.append(block)
         used += len(block)
@@ -5850,32 +5930,39 @@ async def chat_send(
     recall_explicit = False
     if RECALL_ENABLED and bool(user.profile_memory_enabled):
         clean_text = (text or "").strip()
-        prev_user_texts = [m.text for m in db_history if m.role == "user"][-2:]
+        prev_user_msgs = [m for m in db_history if m.role == "user"][-RECALL_CONTEXT_MESSAGES:]
+        prev_user_texts = [m.text for m in prev_user_msgs]
         # Ha az elozo forduloban a multra kerdezett, a ravezeto kerdesek ("es az mikor
         # volt?", "idezz belole") is felidezesnek szamitanak.
         recall_explicit = _is_past_reference(clean_text) or any(
             _is_past_reference(t) for t in prev_user_texts[-1:]
         )
-        # Rovid, elliptikus kerdesnel a keresest az elozo felhasznaloi uzenetek adjak.
+        # Felidezeskor a "mirol is beszeltunk multkor?" tipusu kerdes onmagaban nem
+        # hordoz temat; azt az ules korabbi uzenetei adjak ("a rajztanaros esetrol").
+        # Ezert explicit felidezesnel a kereses es az ujrarangsorolas is a mostani es
+        # az ules utolso nehany felhasznaloi uzenetebol indul.
         recall_query = clean_text
-        if recall_explicit and len(clean_text) < RECALL_MIN_MESSAGE_CHARS * 4 and prev_user_texts:
-            # Rovid ravezeto kerdesnel ("Csinald, amit kertem!", "Ez mikor volt?") a
-            # legutobbi erdemi felhasznaloi uzenet hordozza a temat; a rovid kerdes
-            # hozzaadasa csak zajt vinne az ujrarangsorolasba.
-            parts_q: list[str] = []
-            for prev in reversed(prev_user_texts):
-                parts_q.insert(0, prev.strip())
-                if sum(len(x) for x in parts_q) >= RECALL_MIN_MESSAGE_CHARS * 4:
-                    break
-            recall_query = "\n".join(parts_q)
+        recall_ctx_ids: list[str] = []
+        if recall_explicit and prev_user_msgs:
+            parts_q = [
+                (m.text or "").strip()[:RECALL_CONTEXT_CHARS]
+                for m in prev_user_msgs
+                if len((m.text or "").strip()) >= RECALL_MIN_MESSAGE_CHARS
+            ]
+            if parts_q:
+                recall_query = "\n".join(parts_q + [clean_text[:RECALL_CONTEXT_CHARS * 2]])
+                recall_ctx_ids = [
+                    str(m.id) for m in prev_user_msgs
+                    if len((m.text or "").strip()) >= RECALL_MIN_MESSAGE_CHARS
+                ]
         query_emb = None
         recall_emb = None
         if RECALL_VECTOR_ENABLED and DB_DIALECT != "sqlite":
             try:
                 query_emb = await _get_fastembed_embedding(_message_embed_text(clean_text))
-                recall_emb = query_emb if recall_query == clean_text else (
-                    await _get_fastembed_embedding(_message_embed_text(recall_query))
-                )
+                # A korabbi uzenetek tarolt vektorai kulon lekerdezeskent mennek be
+                # (recall_ctx_ids), igy a mostani uzenet vektora eleg.
+                recall_emb = query_emb
             except Exception as _e:
                 logger.warning(f"uzenet-vektor hiba: {_e}")
         # Rovid, tartalom nelkuli uzenetnel ("igen", "koszi") Myra magatol nem keres emleket.
@@ -5887,7 +5974,7 @@ async def chat_send(
                     )
                     recall_rows = await _recall_past_exchanges(
                         db, user.id, active_session_id, recall_query, recall_emb, recall_explicit,
-                        time_window,
+                        time_window, recall_ctx_ids,
                     )
             except Exception as _e:
                 logger.warning(f"felidezesi hiba: {_e}")
