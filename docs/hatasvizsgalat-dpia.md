@@ -123,7 +123,7 @@ A besorolás: **valószínűség × súlyosság**, három fokozatban (alacsony /
 |---|---|
 | **Hatás** | **a legsúlyosabb lehetséges kimenet**: a felhasználó nem kap időben élő segítséget |
 | **Kezelés nélküli kockázat** | **magas** |
-| **Intézkedések** | krízisfelismerő modul, amely külön biztonsági keretet aktivál; a keret előírja a 112 és a 116-123 megjelenítését és az élő segítség felé terelést; az ÁSZF 3. pontja külön szakaszban rögzíti, hogy a rendszer nem sürgősségi szolgáltatás; a rendszerprompt tiltja a módszerismertetést és a moralizálást |
+| **Intézkedések** | krízisfelismerő modul, amely külön biztonsági keretet aktivál; a keret előírja a 112 és a 116-123 megjelenítését és az élő segítség felé terelést; az ÁSZF 3. pontja külön szakaszban rögzíti, hogy a rendszer nem sürgősségi szolgáltatás; a rendszerprompt tiltja a módszerismertetést és a moralizálást; súlyos krízisjelzés esetén az adatkezelő e-mail-értesítést kap az üzenet szövegével (felhasználónként legfeljebb 6 óránként) |
 | **Maradék kockázat** | **közepes** — nyelvi modell viselkedése nem garantálható |
 | **Nyitott** | a krízisprotokoll szövege jelenleg a „tudásanyag, soha ne idézd" fejléc alatt kerül a promptba, holott szó szerint kimondandó mondatot és segélyhívó számokat tartalmaz. **Ez ellentmondás, javítandó.** |
 

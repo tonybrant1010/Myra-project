@@ -21,6 +21,8 @@ A Myra nem sürgősségi szolgáltatás. Közvetlen veszély, öngyilkossági go
 
 Magyarországon sürgős veszély esetén hívható a 112. Lelki krízis esetén elérhető a 116-123 lelki elsősegély vonal. A Myra válaszai ilyen helyzetben sem helyettesítik az élő emberi, szakmai vagy sürgősségi segítséget.
 
+Ha egy üzenet súlyos krízisre (öngyilkossági vagy önsértési szándékra) utal, az adatkezelő erről e-mailben értesítést kap, az üzenet szövegével együtt. Ez nem folyamatos felügyelet és nem garantál azonnali beavatkozást; a részleteket az Adatkezelési tájékoztató tartalmazza.
+
 4. Mesterséges intelligencia használatából eredő korlátok
 A felhasználó a Myrával folytatott beszélgetés során mesterséges intelligencia rendszerrel áll kapcsolatban, nem emberi beszélgetőpartnerrel. Ezt a tájékoztatást az alkalmazás a beszélgetési felületen is megjeleníti. Az Európai Parlament és a Tanács (EU) 2024/1689 rendelete (AI-rendelet) 50. cikk (1) bekezdése szerinti tájékoztatás.
 

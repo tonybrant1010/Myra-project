@@ -1713,7 +1713,102 @@ def _is_crisis_message(text: str) -> bool:
         "nembíromtovább", "nembiromtovabb", "nembíromeztmárelviselni",
         "nembiromeztmarelviselni", "nemakarokélni", "nemakarokelni",
     ]
-    return any(term in normalized for term in crisis_terms) or any(term in compact for term in compact_terms)
+    # A sulyos jelzesek (pl. "végzek magammal") mindig bekapcsoljak a protokollt is.
+    return (
+        any(term in normalized for term in crisis_terms)
+        or any(term in compact for term in compact_terms)
+        or _is_severe_crisis_message(text)
+    )
+
+
+# Krizisertesites az adminnak (2026-10). Csak sulyos jelzesre: a "nem birom tovabb"
+# es a "nem tudom mit csinaljak" Myranal bekapcsolja a krizisprotokollt, de ertesitest
+# nem kuld, mert ezek gyakran hetkoznapi elakadasok. Felhasznalonkent cooldown, hogy egy
+# hosszabb krizisbeszelgetes ne arasszon el levelekkel.
+CRISIS_ALERT_ENABLED = os.environ.get("CRISIS_ALERT_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+CRISIS_ALERT_COOLDOWN_MIN = _env_int("CRISIS_ALERT_COOLDOWN_MIN", 360, 0, 10080)
+CRISIS_ALERT_EXCERPT_CHARS = _env_int("CRISIS_ALERT_EXCERPT_CHARS", 500, 50, 4000)
+CRISIS_ALERT_EMAIL = os.environ.get("MYRA_ALERT_EMAIL", "") or GMAIL_USER
+_crisis_alert_last: dict[int, float] = {}
+_SEVERE_CRISIS_TERMS = [
+    "öngyilkos", "ongyilkos", "szuicid", "megölöm magam", "megolom magam",
+    "meg akarok halni", "nem akarok élni", "nem akarok elni", "nem akarok tovább élni",
+    "nem akarok tovabb elni", "véget akarok vetni", "veget akarok vetni", "végzek magammal",
+    "vegzek magammal", "végezni magammal", "vegezni magammal", "bántani akarom magam",
+    "bantani akarom magam", "kárt tenni magamban", "kart tenni magamban",
+]
+_SEVERE_CRISIS_COMPACT = ["nemakarokélni", "nemakarokelni", "megakarokhalni"]
+
+
+def _is_severe_crisis_message(text: str) -> bool:
+    normalized = (text or "").lower()
+    compact = re.sub(r"\s+", "", normalized)
+    return any(t in normalized for t in _SEVERE_CRISIS_TERMS) or any(t in compact for t in _SEVERE_CRISIS_COMPACT)
+
+
+def _send_crisis_alert_email(user_name: str, user_email: str, user_id: int, excerpt: str, when_str: str) -> bool:
+    """Ertesites az adminnak sulyos krizisjelzesrol. A felhasznaloi szoveg csak a
+    leveltorzsbe kerul (fejlecbe soha), igy nincs header-injection kockazat."""
+    if not GMAIL_USER or not GMAIL_APP_PASSWORD or not CRISIS_ALERT_EMAIL:
+        logger.error("Krizisertesites: Gmail SMTP nincs beallitva")
+        return False
+    body = MIMEText(f"""Myra krizisjelzes - sulyos jelzes egy felhasznalonal.
+
+- Felhasznalo: {user_name} ({user_email}), id={user_id}
+- Idopont: {when_str}
+
+--- A jelzest kivalto uzenet ---
+
+{excerpt}
+
+--- vege ---
+
+Myra ebben a fordulóban a krizisprotokoll szerint valaszolt (112, 116-123, kozvetlen
+biztonsag). A teljes beszelgetes az adatbazisban erheto el. Ez az ertesites
+felhasznalonkent legfeljebb {CRISIS_ALERT_COOLDOWN_MIN} percenkent egyszer jon.""", "plain", "utf-8")
+    body["Subject"] = f"[Myra] KRIZISJELZES - felhasznalo {user_id}"
+    body["From"] = GMAIL_USER
+    body["To"] = CRISIS_ALERT_EMAIL
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+            server.sendmail(GMAIL_USER, [CRISIS_ALERT_EMAIL], body.as_string())
+        return True
+    except Exception as e:
+        logger.error(f"Krizisertesites kuldesi hiba: {e}")
+        return False
+
+
+async def _maybe_crisis_alert(db: AsyncSession, user: "User", text: str) -> None:
+    """Sulyos krizisjelzesnel e-mail az adminnak es bejegyzes a biztonsagi esemenyek
+    koze. Az esemenybe szandekosan nem kerul uzenetszoveg: annak a fiok torlese utan
+    sem szabad az adatbazisban maradnia."""
+    if not CRISIS_ALERT_ENABLED or not _is_severe_crisis_message(text):
+        return
+    now_mono = time.monotonic()
+    last = _crisis_alert_last.get(user.id)
+    if last is not None and (now_mono - last) < CRISIS_ALERT_COOLDOWN_MIN * 60:
+        return
+    _crisis_alert_last[user.id] = now_mono
+    when_str = _to_local(_now()).strftime("%Y.%m.%d %H:%M")
+    excerpt = (text or "").strip()[:CRISIS_ALERT_EXCERPT_CHARS]
+    try:
+        async with db.begin_nested():
+            db.add(SecurityEvent(
+                source="backend",
+                kind="krizis",
+                severity="warn",
+                label=f"krízisjelzés: felhasználó {user.id}",
+                detail="Súlyos krízisjelzés. A kiváltó üzenet az adminnak küldött e-mailben van.",
+                quarantined=False,
+            ))
+    except Exception as _e:
+        logger.warning(f"krizisesemeny mentesi hiba: {_e}")
+    _spawn_background_task(asyncio.to_thread(
+        _send_crisis_alert_email, user.name, user.email, user.id, excerpt, when_str,
+    ))
+    logger.warning("crisis_alert user=%s", user.id)
 
 
 def _build_crisis_safety_context() -> str:
@@ -5804,6 +5899,10 @@ async def chat_send(
             except Exception as _e:
                 logger.warning(f"uzenet-vektor mentesi hiba: {_e}")
     recall_block = _build_recall_block(recall_rows, recall_explicit)
+    try:
+        await _maybe_crisis_alert(db, user, text)
+    except Exception as _e:
+        logger.warning(f"krizisertesitesi hiba: {_e}")
     recall_note = ""
     if recall_explicit and recall_rows:
         recall_note = (

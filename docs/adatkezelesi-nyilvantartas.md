@@ -149,6 +149,17 @@ teljesül. A nyilvántartás vezetése kötelező, és kérésre a NAIH rendelke
 | **Törlési határidő** | óránkénti mentés 48 óra, napi mentés 30 nap, utána automatikus törlés |
 | **Megjegyzés** | a mentésekhez kizárólag adatvesztés esetén, helyreállítás céljából nyúl az adatkezelő; az admin felületről letölthető mentés a tudásanyag-index nélküli, felhasználói adatokat tartalmazó változat |
 
+### 2.11 Krízisjelzés az adatkezelőnek
+
+| | |
+|---|---|
+| **Cél** | súlyos krízisjelzés (öngyilkossági vagy önsértési szándék) esetén az adatkezelő értesítése, hogy szükség esetén megtehesse az ÁSZF 8. pontja szerinti lépéseket |
+| **Jogalap** | GDPR 6. cikk (1) d) és 9. cikk (2) c) — az érintett létfontosságú érdeke; emellett a 9. cikk (2) a) szerinti hozzájárulás |
+| **Adatkategóriák** | név, e-mail-cím, időpont, a jelzést kiváltó üzenet szövege (legfeljebb 500 karakter) — **különleges adat** |
+| **Címzettek** | az adatkezelő saját postafiókja (Gmail SMTP-n keresztül) |
+| **Törlési határidő** | az értesítő e-mail az ügy lezárása után, legkésőbb 30 napon belül törlendő; a biztonsági eseménynaplóban csak a felhasználó azonosítója és az időpont marad, üzenetszöveg nélkül |
+| **Megjegyzés** | csak kulcsszavas, súlyos jelzésre indul; felhasználónként legfeljebb 6 óránként egy értesítés; nem folyamatos felügyelet és nem sürgősségi szolgáltatás |
+
 ---
 
 ## 3. Adatfeldolgozók
