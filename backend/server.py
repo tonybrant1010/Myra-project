@@ -4367,7 +4367,7 @@ async def _recall_past_exchanges(
     myra_sub = """
         (SELECT a.text FROM chat_messages a
           WHERE a.user_id = u.user_id AND a.session_id IS NOT DISTINCT FROM u.session_id
-            AND a.role <> 'user' AND a.created_at > u.created_at
+            AND a.role <> 'user' AND a.created_at >= u.created_at
           ORDER BY a.created_at ASC LIMIT 1) AS myra_text
     """
     candidates: dict = {}
@@ -4561,7 +4561,8 @@ async def _collect_profile_source(db: AsyncSession, user_id: int) -> tuple[str, 
         lines.append(f"- {g_when.strftime('%Y.%m.%d') if g_when else '?'} [{state}] {goal.text}")
 
     msg_res = await db.execute(
-        select(ChatMessage).where(ChatMessage.user_id == user_id).order_by(ChatMessage.created_at.desc()).limit(2000)
+        select(ChatMessage).where(ChatMessage.user_id == user_id)
+        .order_by(ChatMessage.created_at.desc(), ChatMessage.role.asc()).limit(2000)
     )
     messages = list(reversed(msg_res.scalars().all()))
     budget = PROFILE_SOURCE_MAX_CHARS
@@ -5709,7 +5710,12 @@ async def chat_send(
     res = await db.execute(
         select(ChatMessage)
         .where(ChatMessage.user_id == user.id, ChatMessage.session_id == active_session_id)
-        .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
+        # Egy fordulo felhasznaloi es Myra-uzenete ugyanabban a tranzakcioban, AZONOS
+        # idobelyeggel kerul be. A korabbi "id desc" masodlagos rendezes (veletlen uuid)
+        # emiatt veletlenszeruen felcserelte oket, es a modell a kerdest a sajat valasza
+        # UTAN latta, ezert neha ujra megvalaszolta az elozo kerdest. Visszaforditas utan
+        # a "role asc" a felhasznalot teszi elore.
+        .order_by(ChatMessage.created_at.desc(), ChatMessage.role.asc())
         .limit(CHAT_HISTORY_MAX_MESSAGES)
     )
     db_history = list(reversed(res.scalars().all()))
@@ -5954,7 +5960,7 @@ async def chat_checkin(request: Request, user: User = Depends(get_current_user),
     res = await db.execute(
         select(ChatMessage)
         .where(ChatMessage.user_id == user.id, ChatMessage.session_id == active_session_id)
-        .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
+        .order_by(ChatMessage.created_at.desc(), ChatMessage.role.asc())
         .limit(CHAT_HISTORY_MAX_MESSAGES)
     )
     db_history = list(reversed(res.scalars().all()))
