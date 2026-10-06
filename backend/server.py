@@ -2574,7 +2574,7 @@ class StateCodeIn(BaseModel):
 
 
 class SettingsIn(BaseModel):
-    llm_provider: Optional[Literal["openai", "anthropic", "gemini", "groq", "cerebras", "mistral", "ollama"]] = None
+    llm_provider: Optional[Literal["openai", "anthropic", "gemini", "groq", "cerebras", "mistral", "openrouter", "ollama"]] = None
     llm_model: Optional[str] = Field(None, max_length=160)
     llm_api_key: Optional[str] = None
     system_prompt: Optional[str] = None
@@ -5621,19 +5621,26 @@ async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str,
     if provider != "ollama" and not api_key:
         raise HTTPException(status_code=400, detail="Nincs API kulcs beállítva. Az admin a Beállítások menüben megadhatja.")
 
-    if provider in ("openai", "groq", "cerebras", "mistral", "ollama"):
+    if provider in ("openai", "groq", "cerebras", "mistral", "openrouter", "ollama"):
         base_url = (
             "http://localhost:11434/v1/chat/completions" if provider == "ollama"
             else "https://api.openai.com/v1/chat/completions" if provider == "openai"
             else "https://api.groq.com/openai/v1/chat/completions" if provider == "groq"
             else "https://api.cerebras.ai/v1/chat/completions" if provider == "cerebras"
+            else "https://openrouter.ai/api/v1/chat/completions" if provider == "openrouter"
             else "https://api.mistral.ai/v1/chat/completions"
         )
         msgs = [{"role": "system", "content": system_prompt}]
         for m in history:
             msgs.append({"role": m["role"], "content": m["text"]})
         msgs.append({"role": "user", "content": user_message})
-        label = {"openai": "OpenAI", "groq": "Groq", "cerebras": "Cerebras", "mistral": "Mistral"}.get(provider, provider)
+        label = {"openai": "OpenAI", "groq": "Groq", "cerebras": "Cerebras", "mistral": "Mistral",
+                 "openrouter": "OpenRouter"}.get(provider, provider)
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        if provider == "openrouter":
+            # Az OpenRouter ezekbol azonositja az alkalmazast a sajat statisztikaiban.
+            headers["HTTP-Referer"] = "https://myra-project.hu"
+            headers["X-Title"] = "Myra"
         max_retries = 3
         last_error = ""
         r = None
@@ -5647,7 +5654,7 @@ async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str,
                 async with httpx.AsyncClient(timeout=attempt_timeout) as client:
                     r = await client.post(
                         base_url,
-                        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                        headers=headers,
                         json={"model": model, "messages": msgs},
                     )
             except (httpx.TimeoutException, httpx.TransportError) as exc:
@@ -5662,7 +5669,22 @@ async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str,
                     continue
                 break
             if r.status_code == 200:
-                return r.json()["choices"][0]["message"]["content"]
+                data = r.json()
+                if data.get("error"):
+                    # Az OpenRouter a tovabbitott szolgaltato hibajat 200-as valaszban is
+                    # visszaadhatja.
+                    last_error = str(data["error"])[:300]
+                    break
+                # Gondolkodo modelleknel a content lehet null vagy ures: ilyenkor ujraprobaljuk,
+                # hogy ne keruljon ures Myra-valasz a beszelgetesbe.
+                content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+                if content.strip():
+                    return content.strip()
+                last_error = "ures valasz"
+                if attempt < max_retries - 1 and _llm_remaining_budget(deadline) > LLM_RETRY_BACKOFF_S:
+                    await asyncio.sleep(LLM_RETRY_BACKOFF_S)
+                    continue
+                break
             last_error = r.text[:300]
             retryable = r.status_code == 429 or r.status_code >= 500
             if retryable and attempt < max_retries - 1 and _llm_remaining_budget(deadline) > LLM_RETRY_BACKOFF_S:
@@ -6330,31 +6352,35 @@ async def admin_delete_code(code: str, _: User = Depends(require_admin), db: Asy
 
 
 SUGGESTED_MODELS = {
+    # 2026 oktoberi allapot, a szolgaltatok sajat modellistai alapjan. A mezobe
+    # barmilyen mas modellnev is beirhato; ez csak a legordulo lista.
     "openai": [
-        "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano",
-        "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
-        "o4-mini", "o3",
+        "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
+        "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+        "gpt-5.5", "gpt-5.4-mini",
     ],
     "anthropic": [
-        "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
+        "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5",
     ],
     "gemini": [
-        "gemini-3.5-flash", "gemini-3.1-pro-preview",
-        "gemini-3.1-flash-lite", "gemini-3-flash-preview",
-        "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+        "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+        "gemini-3.5-flash", "gemini-3.5-flash-lite",
+        "gemini-3.1-pro-preview", "gemini-3.1-flash-lite",
     ],
     "groq": [
-        "llama-3.3-70b-versatile", "llama-3.1-8b-instant",
         "openai/gpt-oss-120b", "openai/gpt-oss-20b",
-        "meta-llama/llama-4-scout-17b-16e-instruct", "qwen/qwen3-32b",
+        "llama-3.3-70b-versatile", "llama-3.1-8b-instant",
+        "qwen/qwen3.8-27b",
     ],
     "cerebras": [
-        "llama3.3-70b", "llama3.1-8b",
-        "qwen-3-235b-a22b-instruct-2507", "gpt-oss-120b",
+        "gpt-oss-120b", "qwen-3.8-27b",
     ],
     "mistral": [
-        "mistral-large-latest", "mistral-medium-latest", "mistral-small-latest",
-        "open-mistral-nemo", "codestral-latest",
+        "mistral-medium-3-5-26-04", "mistral-large-3-25-12", "mistral-small-4-0-26-03",
+        "ministral-3-14b-25-12", "ministral-3-8b-25-12",
+    ],
+    "openrouter": [
+        "nvidia/nemotron-3.5-lightning:free", "openrouter/auto",
     ],
     "ollama": [
         "myra", "puli", "racka",

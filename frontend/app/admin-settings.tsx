@@ -20,7 +20,7 @@ import TopBar from "@/src/components/TopBar";
 import { T } from "@/src/components/Typography";
 import { shadow, theme } from "@/src/theme";
 
-type Provider = "openai" | "anthropic" | "gemini" | "groq" | "cerebras" | "mistral" | "ollama";
+type Provider = "openai" | "anthropic" | "gemini" | "groq" | "cerebras" | "mistral" | "openrouter" | "ollama";
 
 type Settings = {
   llm_provider: Provider;
@@ -64,7 +64,7 @@ type SecurityState = {
 /** Ennyi masodperc utan tekintjuk halottnak a figyelot (5 perces koteg + tartalek). */
 const WATCH_STALE_SECONDS = 600;
 
-const PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "groq", "cerebras", "mistral", "ollama"];
+const PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "groq", "cerebras", "mistral", "openrouter", "ollama"];
 const MODEL_MAX_CHARS = 160;
 const API_KEY_MAX_CHARS = 4096;
 const SYSTEM_PROMPT_MAX_CHARS = 50000;
@@ -946,6 +946,8 @@ function providerLabel(provider: Provider) {
   if (provider === "gemini") return "Gemini";
   if (provider === "groq") return "Groq";
   if (provider === "cerebras") return "Cerebras";
+  if (provider === "openrouter") return "OpenRouter";
+  if (provider === "ollama") return "Ollama";
   return "Mistral";
 }
 
@@ -955,6 +957,7 @@ function providerHelp(provider: Provider) {
   if (provider === "groq") return "console.groq.com/keys";
   if (provider === "cerebras") return "cloud.cerebras.ai/api-keys";
   if (provider === "mistral") return "console.mistral.ai/api-keys";
+  if (provider === "openrouter") return "openrouter.ai/settings/keys";
   return "aistudio.google.com/apikey";
 }
 
