@@ -14,8 +14,9 @@
     "audit:ci": "npm audit --omit=dev --audit-level=critical",
     "patch-dist": "node scripts/patch-dist.js",
     "export": "npx expo export --platform web",
-    "deploy": "npm run export && npm run patch-dist && npx vercel --prod --yes",
-    "deploy:upload": "npx vercel --prod --yes"
+    "deploy": "npm run vercel:auth && npm run export && npm run patch-dist && npx --yes vercel --prod --yes",
+    "deploy:upload": "npm run vercel:auth && npx --yes vercel --prod --yes",
+    "vercel:auth": "npx --yes vercel whoami || npx --yes vercel login"
   },
   "dependencies": {
     "@babel/runtime": "^7.20.6",
