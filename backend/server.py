@@ -23,7 +23,8 @@ from collections import OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, List, Literal, Optional
+from typing import Any, Callable, List, Literal, Optional
+from contextvars import ContextVar
 from email.mime.text import MIMEText
 
 import httpx
@@ -393,6 +394,104 @@ CHAT_MESSAGE_MAX_CHARS = _env_int("CHAT_MESSAGE_MAX_CHARS", 8000, 500, 20000)
 LLM_TOTAL_BUDGET_S = _env_int("LLM_TOTAL_BUDGET_S", 200, 10, 600)
 LLM_ATTEMPT_TIMEOUT_S = _env_int("LLM_ATTEMPT_TIMEOUT_S", 90, 5, 300)
 LLM_RETRY_BACKOFF_S = _env_int("LLM_RETRY_BACKOFF_S", 8, 0, 60)
+# Helyi modellszerver (Ollama), 2026-10. Az admin a felületen kapcsolja be és választ
+# modellt; ha a gép nem érhető el, a chat a beállított API-szolgáltatóra esik vissza.
+# CPU-n a rendszerprompt első feldolgozása perceket vehet igénybe, ezért a válaszra
+# hosszabb ideig várunk, a kapcsolódásra viszont csak pár másodpercig.
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").strip().rstrip("/")
+OLLAMA_TIMEOUT_S = _env_int("OLLAMA_TIMEOUT_S", 300, 10, 900)
+OLLAMA_CONNECT_TIMEOUT_S = _env_int("OLLAMA_CONNECT_TIMEOUT_S", 4, 1, 30)
+OLLAMA_DOWN_COOLDOWN_S = _env_int("OLLAMA_DOWN_COOLDOWN_S", 60, 0, 3600)
+# A helyi LLM-szerver (llama-server --api-key) kulcsa. Üresen nem küld fejlécet.
+LOCAL_LLM_API_KEY = os.environ.get("LOCAL_LLM_API_KEY", "").strip()
+# Az előtöltés a háttérben fut, senki nem vár rá: kisebb (sűrű) modellnél a teljes
+# állandó rész első beolvasása CPU-n 6 percnél is tovább tarthat.
+LOCAL_WARM_TIMEOUT_S = _env_int("LOCAL_WARM_TIMEOUT_S", 1200, 30, 3600)
+
+
+def _local_llm_headers() -> dict:
+    h = {"Content-Type": "application/json"}
+    if LOCAL_LLM_API_KEY:
+        h["Authorization"] = f"Bearer {LOCAL_LLM_API_KEY}"
+    return h
+
+
+def _strip_local_markers(text: str) -> str:
+    """A helyi modell üzenetében a [FORDULÓ KONTEXTUSA] és [FELHASZNÁLÓ] jelölők
+    tagolják a promptot; a felhasználó szövegében ezeket hatástalanítjuk, hogy ne
+    tudjon hamis rendszerkontextust beírni."""
+    for marker, safe in (
+        ("[FORDULÓ KONTEXTUSA", "(FORDULÓ KONTEXTUSA"),
+        ("[FELHASZNÁLÓ]", "(FELHASZNÁLÓ)"),
+        ("[HOGYAN OLVASD", "(HOGYAN OLVASD"),
+    ):
+        text = text.replace(marker, safe)
+    return text
+
+
+_ollama_down_until = 0.0
+# A helyi modell (CPU) csak akkor gyors, ha a prompt eleje fordulóról fordulóra
+# változatlan, mert azt a helyi szerver nem számolja újra. Ezért a helyi kérés máshogy épül:
+# elöl az állandó rész (szabályok, állapot, profil, előzmények), a fordulónként változó
+# rész (idő, tudásanyag, felidézés, krízisblokk) az utolsó üzenetben. Az előzmények
+# ablaka lépcsőzetesen csúszik (LOCAL_HISTORY_MIN..MIN+STEP-1 üzenet), hogy ne minden
+# fordulóban mozduljon el az eleje.
+LOCAL_RAG_CHUNKS = _env_int("LOCAL_RAG_CHUNKS", 1, 0, 10)
+LOCAL_HISTORY_MIN = _env_int("LOCAL_HISTORY_MIN", 24, 2, 200)
+LOCAL_HISTORY_STEP = _env_int("LOCAL_HISTORY_STEP", 24, 1, 200)
+# A fordulónként változó blokk minden token-je ~0,05 mp beolvasás CPU-n, ezért a helyi
+# modellnél rövidítve megy: egy tudásrészlet, korlátozott hosszal; a magától (nem kérésre)
+# felhozott emlékek kimaradnak, a kért felidézés rövidítve marad.
+LOCAL_KB_MAX_CHARS = _env_int("LOCAL_KB_MAX_CHARS", 600, 0, 20000)
+LOCAL_RECALL_MAX_CHARS = _env_int("LOCAL_RECALL_MAX_CHARS", 900, 0, 20000)
+LOCAL_IMPLICIT_RECALL = os.environ.get("LOCAL_IMPLICIT_RECALL", "false").strip().lower() == "true"
+# Az elküldött helyi üzenetek pontos szövege (üzenet-id -> tartalom). A következő
+# fordulóban az előzmény szó szerint ugyanígy megy vissza, így a szerver gyorsítótára
+# a teljes korábbi beszélgetést felhasználja, és csak az új részt kell beolvasnia.
+LOCAL_SENT_MAX = _env_int("LOCAL_SENT_MAX", 20000, 100, 1000000)
+_local_sent: "OrderedDict[str, str]" = OrderedDict()
+
+
+def _remember_local_sent(msg_id: str, content: str) -> None:
+    if not msg_id or not content:
+        return
+    _local_sent[msg_id] = content
+    _local_sent.move_to_end(msg_id)
+    while len(_local_sent) > LOCAL_SENT_MAX:
+        _local_sent.popitem(last=False)
+
+
+def _format_local_history(messages: list) -> List[dict]:
+    """Előzmény a helyi modellnek: ha egy üzenet pontos elküldött formája ismert, azt
+    adjuk vissza, különben ugyanazt a formát, mint a felhős modellnél."""
+    out: List[dict] = []
+    for m in messages:
+        sent = _local_sent.get(str(m.id))
+        if sent is None:
+            ts = _to_local(m.created_at).strftime("%Y.%m.%d %H:%M:%S") if (m.created_at and m.role == "user") else ""
+            sent = f"[{ts}] {m.text}" if ts else m.text
+        out.append({"role": m.role, "text": sent})
+    return out
+
+
+def _local_kb_text(chunks: list) -> str:
+    if LOCAL_RAG_CHUNKS <= 0 or not chunks:
+        return ""
+    parts = []
+    for chunk in chunks[:LOCAL_RAG_CHUNKS]:
+        body = (chunk.content or "").strip()
+        if LOCAL_KB_MAX_CHARS and len(body) > LOCAL_KB_MAX_CHARS:
+            body = body[:LOCAL_KB_MAX_CHARS].rsplit(" ", 1)[0] + " …"
+        parts.append(body)
+    return "\n\n".join(p for p in parts if p)
+
+
+def _local_recall_text(recall_block: str, explicit: bool) -> str:
+    if not recall_block.strip() or (not explicit and not LOCAL_IMPLICIT_RECALL):
+        return ""
+    if LOCAL_RECALL_MAX_CHARS and len(recall_block) > LOCAL_RECALL_MAX_CHARS:
+        return recall_block[:LOCAL_RECALL_MAX_CHARS].rsplit("\n", 1)[0] + "\n…"
+    return recall_block
 API_REQUEST_MAX_BYTES = _env_int("API_REQUEST_MAX_BYTES", 1 * 1024 * 1024, 64 * 1024, 10 * 1024 * 1024)
 KB_PDF_UPLOAD_MAX_BYTES = _env_int("KB_PDF_UPLOAD_MAX_BYTES", 25 * 1024 * 1024, 1 * 1024 * 1024, 100 * 1024 * 1024)
 KB_TEXT_UPLOAD_MAX_BYTES = _env_int("KB_TEXT_UPLOAD_MAX_BYTES", 2 * 1024 * 1024, 64 * 1024, 10 * 1024 * 1024)
@@ -2583,6 +2682,8 @@ class SettingsIn(BaseModel):
     live_model: Optional[str] = None
     live_api_key: Optional[str] = None
     profile_memory_enabled: Optional[bool] = None
+    local_llm_enabled: Optional[bool] = None
+    local_llm_model: Optional[str] = Field(None, max_length=160)
 
 
 class ReindexPdfKnowledgeBody(BaseModel):
@@ -5478,6 +5579,62 @@ def _build_state_block(sc: StateCode, user_name: str = "") -> str:
     )
 
 
+def _local_history_window(history: List[dict], total: int) -> List[dict]:
+    """Lépcsőzetesen csúszó ablak a helyi modellnek: az első megtartott üzenet abszolút
+    sorszáma LOCAL_HISTORY_STEP többszöröse, így az ablak eleje csak minden
+    STEP-edik üzenetnél mozdul, közben a prompt eleje változatlan marad."""
+    n = len(history)
+    if n == 0:
+        return history
+    offset = max(0, total - n)  # history[0] abszolút sorszáma a sessionben
+    if total > LOCAL_HISTORY_MIN:
+        start_abs = ((total - LOCAL_HISTORY_MIN) // LOCAL_HISTORY_STEP) * LOCAL_HISTORY_STEP
+    else:
+        start_abs = 0
+    start_abs = max(start_abs, offset)
+    return history[start_abs - offset:]
+
+
+def _build_local_turn_block(code_verified_at: Optional[datetime], kb_text: str, recall_block: str, final_note: str) -> str:
+    """A fordulónként változó kontextus a helyi modell utolsó üzenetébe."""
+    now_utc = _now()
+    now = _to_local(now_utc)
+    months = ["január", "február", "március", "április", "május", "június",
+              "július", "augusztus", "szeptember", "október", "november", "december"]
+    weekdays = ["hétfő", "kedd", "szerda", "csütörtök", "péntek", "szombat", "vasárnap"]
+    lines = [f"- Aktuális időpont: {now.year}. {months[now.month - 1]} {now.day}., {weekdays[now.weekday()]}, {now.strftime('%H:%M')}"]
+    if code_verified_at:
+        age = (now_utc.replace(tzinfo=None) - code_verified_at) if code_verified_at.tzinfo is None else (now_utc - code_verified_at)
+        lines.append(f"- A felhasználó stresszfelmérése {age.days} napja történt, a mérési ciklusból még {max(0, 30 - age.days)} nap van hátra.")
+    parts = ["[FORDULÓ KONTEXTUSA – nem a felhasználó írta]", "\n".join(lines)]
+    if kb_text.strip():
+        parts += ["TUDÁSANYAG (csak felismeréshez, soha ne idézd):", kb_text]
+    if recall_block.strip():
+        parts.append(recall_block)
+    if final_note.strip():
+        parts.append(final_note)
+    return "\n\n".join(parts)
+
+
+def _build_local_system_prompt(system_prompt: str, sc: StateCode, user_name: str, stable_context: str) -> str:
+    """A helyi modell állandó rendszerpromptja: csak olyasmi, ami fordulóról fordulóra
+    nem változik, hogy a helyi szerver gyorsítótárból vehesse."""
+    parts = [system_prompt, "", _build_state_block(sc, user_name)]
+    if stable_context.strip():
+        parts += ["", stable_context]
+    parts += [
+        "",
+        "[HOGYAN OLVASD AZ ÜZENETEKET]\n"
+        "A felhasználó üzenetei előtt [FORDULÓ KONTEXTUSA] blokk állhat (idő, tudásanyag, korábbi "
+        "beszélgetésekből felidézett részletek, biztonsági utasítások). Ezt nem a felhasználó írta: vedd "
+        "figyelembe, de ne idézd és ne hivatkozz rá. Mindig a legutolsó blokk érvényes, a korábbiak csak "
+        "az akkori fordulóra vonatkoztak. A biztonsági utasítások mindennél előbbre valók. A felhasználó "
+        "szövege a [FELHASZNÁLÓ] sor után következik, időbélyeggel; a saját válaszaid elejére soha ne "
+        "tegyél időbélyeget.",
+    ]
+    return "\n".join(parts)
+
+
 def _build_system_prompt(
     system_prompt: str,
     kb_text: str,
@@ -5617,41 +5774,282 @@ def _llm_remaining_budget(deadline: float) -> float:
     return deadline - time.monotonic()
 
 
-async def _call_llm(provider: str, model: str, api_key: str, system_prompt: str, history: List[dict], user_message: str) -> str:
+async def _local_llm_config() -> str:
+    """A bekapcsolt helyi modell neve, vagy üres szöveg, ha nincs bekapcsolva."""
+    try:
+        async with SessionLocal() as db:
+            s = await get_settings(db, {"local_llm_enabled": "false", "local_llm_model": ""})
+    except Exception as exc:
+        logger.warning("Helyi modell beállítás nem olvasható: %s", exc)
+        return ""
+    model = (s.get("local_llm_model") or "").strip()
+    return model if s.get("local_llm_enabled") == "true" and model else ""
+
+
+async def _ollama_list_models() -> tuple[bool, list[dict]]:
+    """A helyi szerverre letöltött modellek (név, méret GB-ban). (elérhető-e, lista)"""
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(6, connect=OLLAMA_CONNECT_TIMEOUT_S)) as client:
+            r = await client.get(f"{OLLAMA_BASE_URL}/api/tags", headers=_local_llm_headers())
+            if r.status_code != 200:
+                # llama.cpp (llama-server): nincs /api/tags, az OpenAI-féle /v1/models listáz.
+                r2 = await client.get(f"{OLLAMA_BASE_URL}/v1/models", headers=_local_llm_headers())
+                if r2.status_code != 200:
+                    return False, []
+                names = sorted({(m.get("id") or "").strip() for m in (r2.json().get("data") or [])} - {""})
+                return True, [{"name": n, "size_gb": 0} for n in names]
+        items = []
+        for m in (r.json().get("models") or []):
+            name = (m.get("name") or m.get("model") or "").strip()
+            if name:
+                items.append({"name": name, "size_gb": round((m.get("size") or 0) / 1e9, 1)})
+        items.sort(key=lambda x: x["name"])
+        return True, items
+    except Exception:
+        return False, []
+
+
+# Folyamatos kiírás: a /chat/send-stream ide teszi a visszahívót, a helyi modell hívása
+# pedig minden új darab után a tisztított, eddigi teljes szöveggel hívja meg. Csak a
+# memóriában él, kéréshez kötve; máshol (háttérfeladatok, sima /chat/send) üres.
+_chat_stream_sink: ContextVar[Optional[Callable[[str], None]]] = ContextVar("_chat_stream_sink", default=None)
+
+
+async def _call_local_llm_stream(
+    model: str, system_prompt: str, history: List[dict], user_message: str, sink: Callable[[str], None],
+) -> str:
+    """Ugyanaz a kérés, mint a _call_llm_provider("ollama", ...), csak stream=True-val:
+    az üzenetek szó szerint egyeznek, így a helyi szerver gyorsítótára ugyanúgy talál."""
+    msgs = [{"role": "system", "content": system_prompt}] if system_prompt.strip() else []
+    for m in history:
+        msgs.append({"role": m["role"], "content": m["text"]})
+    msgs.append({"role": "user", "content": user_message})
+    deadline = time.monotonic() + OLLAMA_TIMEOUT_S
+    parts: List[str] = []
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(OLLAMA_TIMEOUT_S, connect=OLLAMA_CONNECT_TIMEOUT_S)
+        ) as client:
+            async with client.stream(
+                "POST", f"{OLLAMA_BASE_URL}/v1/chat/completions",
+                headers=_local_llm_headers(),
+                json={"model": model, "messages": msgs, "stream": True},
+            ) as r:
+                if r.status_code != 200:
+                    body = (await r.aread())[:300].decode("utf-8", "replace")
+                    logger.error("helyi stream hiba: status=%s response=%s", r.status_code, body)
+                    raise HTTPException(status_code=502, detail="ollama API hiba történt.")
+                async for line in r.aiter_lines():
+                    if time.monotonic() > deadline:
+                        raise HTTPException(status_code=502, detail="ollama időtúllépés.")
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        chunk = _json.loads(payload)
+                    except ValueError:
+                        continue
+                    if chunk.get("error"):
+                        raise HTTPException(status_code=502, detail="ollama API hiba történt.")
+                    delta = ((chunk.get("choices") or [{}])[0].get("delta") or {}).get("content") or ""
+                    if delta:
+                        parts.append(delta)
+                        sink(_strip_reply_prefixes("".join(parts)))
+    except (httpx.TimeoutException, httpx.TransportError) as exc:
+        logger.warning("helyi stream halozati hiba: %s: %s", type(exc).__name__, exc)
+        raise HTTPException(status_code=502, detail="ollama hálózati hiba.")
+    content = "".join(parts).strip()
+    if not content:
+        raise HTTPException(status_code=502, detail="ollama üres válasz.")
+    return content
+
+
+async def _call_llm(
+    provider: str, model: str, api_key: str, system_prompt: str, history: List[dict], user_message: str,
+    allow_local: bool = False, local_override: Optional[tuple] = None,
+) -> str:
+    """Ha a hívó engedi (allow_local) és az admin bekapcsolta a helyi modellt, először azt
+    kérdezzük, a local_override-ban kapott (rendszerprompt, előzmények, üzenet)
+    hármassal, ha van. Ha a helyi gép nem érhető el vagy hibázik, a beállított
+    API-szolgáltató válaszol az eredeti, teljes prompttal, és egy ideig
+    (OLLAMA_DOWN_COOLDOWN_S) nem is próbálkozunk újra a helyi géppel. A háttérfeladatok
+    (profil, napi összegzés) nem kérik a helyi modellt, hogy ne lökjék ki a chat
+    gyorsítótárát."""
+    global _ollama_down_until
+    if provider != "ollama" and allow_local:
+        local_model = await _local_llm_config()
+        if local_model and time.monotonic() >= _ollama_down_until:
+            l_sys, l_hist, l_msg = local_override or (system_prompt, history, user_message)
+            sink = _chat_stream_sink.get()
+            try:
+                started = time.perf_counter()
+                if sink is not None:
+                    reply = await _call_local_llm_stream(local_model, l_sys, l_hist, l_msg, sink)
+                else:
+                    reply = await _call_llm_provider("ollama", local_model, LOCAL_LLM_API_KEY, l_sys, l_hist, l_msg)
+                logger.info(
+                    "llm_valaszolt forras=helyi model=%s ido=%.1fs rendszerprompt=%d elozmeny=%d",
+                    local_model, time.perf_counter() - started, len(l_sys), len(l_hist),
+                )
+                return reply
+            except HTTPException as exc:
+                _ollama_down_until = time.monotonic() + OLLAMA_DOWN_COOLDOWN_S
+                logger.warning(
+                    "Helyi modell (%s) nem válaszolt, visszaesés: %s/%s (%s)",
+                    local_model, provider, model, exc.detail,
+                )
+                if sink is not None:
+                    # A félbemaradt helyi szöveg eltűnik; az API-válasz egyben érkezik.
+                    sink("")
+    reply = await _call_llm_provider(provider, model, api_key, system_prompt, history, user_message)
+    if allow_local:
+        logger.info("llm_valaszolt forras=api provider=%s model=%s", provider, model)
+    return reply
+
+
+_local_warm_lock = asyncio.Lock()
+_local_warm_pending: set = set()
+
+
+async def _warm_local_llm(system_prompt: str, history: List[dict], delay_s: float = 0.0) -> None:
+    """Előtöltés: a helyi modell feldolgozza a prompt állandó elejét (rendszerprompt +
+    előzmények) egyetlen tokennyi válasszal, hogy a felhasználó első üzenete már a
+    gyorsítótárból induljon. Ugyanazt a végpontot és üzenetformát használja, mint a
+    valódi kérés, különben nem egyezne az előtag. Ha egy másik előtöltés fut, kivárja a
+    sorát (nem marad ki); ugyanazt az előtagot viszont nem tölti elő kétszer."""
+    if delay_s > 0:
+        await asyncio.sleep(delay_s)
+    model = await _local_llm_config()
+    if not model or time.monotonic() < _ollama_down_until:
+        return
+    msgs = [{"role": "system", "content": system_prompt}]
+    msgs += [{"role": m["role"], "content": m["text"]} for m in history]
+    msgs.append({"role": "user", "content": "."})
+    key = hashlib.sha256(_json.dumps(msgs, ensure_ascii=False).encode("utf-8")).hexdigest()
+    if key in _local_warm_pending:
+        return
+    _local_warm_pending.add(key)
+    try:
+        await _warm_local_llm_locked(model, msgs, history)
+    finally:
+        _local_warm_pending.discard(key)
+
+
+async def _warm_local_llm_locked(model: str, msgs: List[dict], history: List[dict]) -> None:
+    async with _local_warm_lock:
+        if time.monotonic() < _ollama_down_until:
+            return
+        started = time.perf_counter()
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(LOCAL_WARM_TIMEOUT_S, connect=OLLAMA_CONNECT_TIMEOUT_S)
+            ) as client:
+                r = await client.post(
+                    f"{OLLAMA_BASE_URL}/v1/chat/completions",
+                    headers=_local_llm_headers(),
+                    json={"model": model, "messages": msgs, "max_tokens": 1},
+                )
+            logger.info(
+                "helyi elotoltes: model=%s status=%s ido=%.1fs elozmeny=%d",
+                model, r.status_code, time.perf_counter() - started, len(history),
+            )
+        except Exception as exc:
+            logger.warning(
+                "helyi elotoltes hiba: model=%s %s: %s ido=%.1fs",
+                model, type(exc).__name__, exc, time.perf_counter() - started,
+            )
+
+
+async def _warm_local_for_user(user_id: int) -> None:
+    """A chat megnyitásakor (checkin) a felhasználó saját állandó promptját tölti elő,
+    pontosan úgy összerakva, ahogy a /chat/send a helyi modellnek küldi."""
+    try:
+        if not await _local_llm_config():
+            return
+        async with SessionLocal() as db:
+            user = await db.get(User, user_id)
+            if user is None or not user.state_code:
+                return
+            sc = (await db.execute(select(StateCode).where(StateCode.code == user.state_code))).scalar_one_or_none()
+            if sc is None:
+                return
+            latest = (await db.execute(
+                select(QuizSubmission).where(QuizSubmission.user_id == user.id)
+                .order_by(QuizSubmission.created_at.desc()).limit(1)
+            )).scalar_one_or_none()
+            sid = latest.id if latest else None
+            res = await db.execute(
+                select(ChatMessage)
+                .where(ChatMessage.user_id == user.id, ChatMessage.session_id == sid)
+                .order_by(ChatMessage.created_at.desc(), ChatMessage.role.asc())
+                .limit(CHAT_HISTORY_MAX_MESSAGES)
+            )
+            history = _format_local_history(list(reversed(res.scalars().all())))
+            total = int(await db.scalar(
+                select(func.count()).select_from(ChatMessage)
+                .where(ChatMessage.user_id == user.id, ChatMessage.session_id == sid)
+            ) or 0)
+            sys_prompt_base = await get_setting(db, "system_prompt", DEFAULT_SYSTEM_PROMPT)
+            goals_block = _build_goals_block(await _get_active_goals(db, user.id))
+            profile_on = PROFILE_ENABLED and bool(user.profile_memory_enabled)
+            profile_block = _build_profile_block(await _get_user_profile(db, user.id) if profile_on else None)
+            user_name = user.name
+        system = _build_local_system_prompt(
+            sys_prompt_base, sc, user_name,
+            "\n\n".join(part for part in [goals_block, profile_block] if part.strip()),
+        )
+        await _warm_local_llm(system, _local_history_window(history, max(total, len(history))))
+    except Exception as exc:
+        logger.warning("helyi elotoltes (felhasznalo) hiba: %s", exc)
+
+
+async def _call_llm_provider(provider: str, model: str, api_key: str, system_prompt: str, history: List[dict], user_message: str) -> str:
     if provider != "ollama" and not api_key:
         raise HTTPException(status_code=400, detail="Nincs API kulcs beállítva. Az admin a Beállítások menüben megadhatja.")
 
     if provider in ("openai", "groq", "cerebras", "mistral", "openrouter", "ollama"):
         base_url = (
-            "http://localhost:11434/v1/chat/completions" if provider == "ollama"
+            f"{OLLAMA_BASE_URL}/v1/chat/completions" if provider == "ollama"
             else "https://api.openai.com/v1/chat/completions" if provider == "openai"
             else "https://api.groq.com/openai/v1/chat/completions" if provider == "groq"
             else "https://api.cerebras.ai/v1/chat/completions" if provider == "cerebras"
             else "https://openrouter.ai/api/v1/chat/completions" if provider == "openrouter"
             else "https://api.mistral.ai/v1/chat/completions"
         )
-        msgs = [{"role": "system", "content": system_prompt}]
+        msgs = [{"role": "system", "content": system_prompt}] if system_prompt.strip() else []
         for m in history:
             msgs.append({"role": m["role"], "content": m["text"]})
         msgs.append({"role": "user", "content": user_message})
         label = {"openai": "OpenAI", "groq": "Groq", "cerebras": "Cerebras", "mistral": "Mistral",
                  "openrouter": "OpenRouter"}.get(provider, provider)
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            # Üres kulccsal a "Bearer " fejléc érvénytelen (httpx LocalProtocolError),
+            # a helyi Ollama pedig nem is kér kulcsot.
+            headers["Authorization"] = f"Bearer {api_key}"
         if provider == "openrouter":
             # Az OpenRouter ezekbol azonositja az alkalmazast a sajat statisztikaiban.
             headers["HTTP-Referer"] = "https://myra-project.hu"
             headers["X-Title"] = "Myra"
-        max_retries = 3
+        is_local = provider == "ollama"
+        # Helyi modellnél nem ismétlünk: egy perceken át futó kérés megismétlése csak
+        # tovább tartana, a visszaesést a hívó (_call_llm) intézi.
+        max_retries = 1 if is_local else 3
         last_error = ""
         r = None
-        deadline = time.monotonic() + LLM_TOTAL_BUDGET_S
+        deadline = time.monotonic() + (OLLAMA_TIMEOUT_S if is_local else LLM_TOTAL_BUDGET_S)
         for attempt in range(max_retries):
-            attempt_timeout = min(LLM_ATTEMPT_TIMEOUT_S, _llm_remaining_budget(deadline))
+            attempt_timeout = min(OLLAMA_TIMEOUT_S if is_local else LLM_ATTEMPT_TIMEOUT_S, _llm_remaining_budget(deadline))
             if attempt_timeout <= 0:
                 last_error = last_error or "budget exhausted"
                 break
             try:
-                async with httpx.AsyncClient(timeout=attempt_timeout) as client:
+                client_timeout = (
+                    httpx.Timeout(attempt_timeout, connect=OLLAMA_CONNECT_TIMEOUT_S) if is_local else attempt_timeout
+                )
+                async with httpx.AsyncClient(timeout=client_timeout) as client:
                     r = await client.post(
                         base_url,
                         headers=headers,
@@ -5772,6 +6170,18 @@ _MARKUP_PREFIX_RX = re.compile(r"^\s*</?[a-zA-Z][a-zA-Z0-9-]*\s*/?>\s*")
 _INVISIBLE_RX = re.compile(r"[\u200b-\u200f\u2060\ufeff]")
 
 
+def _strip_reply_prefixes(raw: Any) -> str:
+    """A _clean_llm_reply tisztítása naplózás nélkül; a folyamatos kiírás a félkész
+    szövegre is ezt hívja, hogy a felhasználó ne lássa felvillanni az időbélyeget."""
+    text = _INVISIBLE_RX.sub("", str(raw).strip())
+    while True:
+        stripped = _MARKUP_PREFIX_RX.sub("", _TS_PREFIX_RX.sub("", text))
+        if stripped == text:
+            break
+        text = stripped
+    return text.strip()
+
+
 def _clean_llm_reply(raw: Any, context: str = "chat") -> str:
     """Levagja a valasz elejerol az atszivargott formatumot.
 
@@ -5780,13 +6190,7 @@ def _clean_llm_reply(raw: Any, context: str = "chat") -> str:
     probalkozik-e meg a modell: ha a "reply_cleaned" sorok elfogynak, kesz vagyunk.
     """
     original = str(raw).strip()
-    text = _INVISIBLE_RX.sub("", original)
-    while True:
-        stripped = _MARKUP_PREFIX_RX.sub("", _TS_PREFIX_RX.sub("", text))
-        if stripped == text:
-            break
-        text = stripped
-    text = text.strip()
+    text = _strip_reply_prefixes(original)
     if text != original:
         logger.warning("reply_cleaned context=%s removed_chars=%d", context, len(original) - len(text))
     return text
@@ -6047,10 +6451,39 @@ async def chat_send(
         final_note=recall_note,
     )
     mark_timing("prompt", phase_started)
+    now_ts_str = _to_local(_now()).strftime("%Y.%m.%d %H:%M:%S")
+    local_override = None
+    if provider != "ollama" and await _local_llm_config():
+        try:
+            total_prev = int(await db.scalar(
+                select(func.count()).select_from(ChatMessage).where(
+                    ChatMessage.user_id == user.id, ChatMessage.session_id == active_session_id,
+                )
+            ) or 0) - 1  # a most mentett felhasznaloi uzenet nelkul
+            local_kb = "\n\n".join(part for part in [crisis_context, _local_kb_text(retrieved_chunks)] if part)
+            local_history = _format_local_history(db_history)
+            local_override = (
+                _build_local_system_prompt(
+                    sys_prompt_base, sc, user.name,
+                    "\n\n".join(part for part in [goals_block, profile_block] if part.strip()),
+                ),
+                _local_history_window(local_history, max(total_prev, len(local_history))),
+                _build_local_turn_block(
+                    user.code_verified_at, local_kb,
+                    _local_recall_text(recall_block, recall_explicit), recall_note,
+                )
+                + f"\n\n[FELHASZNÁLÓ]\n[{now_ts_str}] {_strip_local_markers(text)}",
+            )
+        except Exception as _e:
+            logger.warning(f"helyi prompt epitesi hiba: {_e}")
+            local_override = None
     try:
-        now_ts_str = _to_local(_now()).strftime("%Y.%m.%d %H:%M:%S")
         phase_started = time.perf_counter()
-        reply = await _call_llm(provider, model, api_key, sys_prompt, history, f"[{now_ts_str}] {text}")
+        reply = await _call_llm(
+            provider, model, api_key, sys_prompt, history, f"[{now_ts_str}] {text}",
+            allow_local=True, local_override=local_override,
+        )
+        raw_reply = reply
         reply = _clean_llm_reply(reply, "chat")
         mark_timing("llm", phase_started)
     except HTTPException:
@@ -6065,6 +6498,10 @@ async def chat_send(
     phase_started = time.perf_counter()
     await db.flush()
     mark_timing("reply_db", phase_started)
+    if local_override is not None:
+        # A következő helyi kérés ezt a két üzenetet szó szerint így kapja vissza.
+        _remember_local_sent(str(user_msg.id), local_override[2])
+        _remember_local_sent(str(ai_msg.id), str(raw_reply))
 
     history_chars = sum(len(item["text"]) for item in history)
     total_s = time.perf_counter() - request_started
@@ -6105,6 +6542,72 @@ async def chat_send(
     return {"user_message": _out(user_msg), "assistant_message": _out(ai_msg)}
 
 
+@api.post("/chat/send-stream")
+async def chat_send_stream(
+    body: ChatSendBody,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+):
+    """Ugyanaz, mint a /chat/send, de a válasz szövege íródás közben, SSE-ben érkezik
+    ("text" esemény: az eddigi teljes, tisztított szöveg), a végén pedig a /chat/send
+    válaszával azonos "done" esemény jön. Hibánál "error" esemény jön státusszal.
+    A hitelesítés rövid saját munkamenettel fut, hogy a hiba még rendes HTTP-kódként
+    (401/503) menjen ki, és ne tartson nyitva adatbázis-kapcsolatot a kiírás alatt.
+    A válasz akkor is elkészül és mentődik, ha a kliens közben megszakad."""
+    async with SessionLocal() as auth_db:
+        auth_user = await get_current_user(authorization, auth_db)
+        user_id = auth_user.id
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def sink(text: str) -> None:
+        queue.put_nowait(("text", text))
+
+    async def run() -> None:
+        _chat_stream_sink.set(sink)
+        try:
+            async with SessionLocal() as db:
+                try:
+                    db_user = await db.get(User, user_id)
+                    if db_user is None:
+                        raise HTTPException(status_code=401, detail="Felhasználó nem található")
+                    result = await chat_send(body, request, db_user, db)
+                    await db.commit()
+                except Exception:
+                    await db.rollback()
+                    raise
+            queue.put_nowait(("done", result))
+        except HTTPException as exc:
+            queue.put_nowait(("error", {"status": exc.status_code, "detail": exc.detail}))
+        except Exception:
+            logger.exception("chat stream hiba")
+            queue.put_nowait(("error", {"status": 502, "detail": "Váratlan hiba történt a válaszadás során."}))
+
+    _spawn_background_task(run())
+
+    async def events():
+        # Azonnali első bájt: a proxyk így rögtön átengedik a fejlécet.
+        yield ": ok\n\n"
+        while True:
+            kind, payload = await queue.get()
+            if kind == "text":
+                # Ha közben több darab is összegyűlt, elég a legfrissebbet küldeni.
+                while not queue.empty():
+                    nxt = queue.get_nowait()
+                    if nxt[0] != "text":
+                        yield f"event: text\ndata: {_json.dumps(payload, ensure_ascii=False)}\n\n"
+                        kind, payload = nxt
+                        break
+                    payload = nxt[1]
+            yield f"event: {kind}\ndata: {_json.dumps(payload, ensure_ascii=False)}\n\n"
+            if kind in ("done", "error"):
+                break
+
+    return StreamingResponse(
+        events(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
 def _message_age_days(now: datetime, created_at: Optional[datetime]) -> float:
     if not created_at:
         return 0.0
@@ -6133,6 +6636,9 @@ async def chat_checkin(request: Request, user: User = Depends(get_current_user),
     Szándékosan „best effort”: ha bármelyik feltétel nem teljesül, üres választ ad, sosem hibázik a felületen.
     """
     _check_and_record_chat_limit(request, user.id)
+    # A chat megnyitásakor a háttérben előtöltjük a helyi modellt (ha be van kapcsolva),
+    # hogy az első üzenetnél már ne kelljen a teljes állandó promptot feldolgozni.
+    _spawn_background_task(_warm_local_for_user(user.id))
     if not user.is_admin and await is_maintenance(db):
         return {"message": None}
     if not user.state_code or not user.code_verified_at:
@@ -6400,6 +6906,13 @@ async def admin_get_settings(_: User = Depends(require_admin), db: AsyncSession 
     live_model = await get_setting(db, "live_model", "gemini-3.1-flash-live-preview")
     live_api_key = await get_setting(db, "live_api_key", "")
     
+    local_enabled = await get_setting(db, "local_llm_enabled", "false") == "true"
+    local_model = await get_setting(db, "local_llm_model", "")
+    ollama_reachable, ollama_models = await _ollama_list_models()
+    suggested = dict(SUGGESTED_MODELS)
+    if ollama_models:
+        suggested["ollama"] = [m["name"] for m in ollama_models]
+
     masked = (api_key[:4] + "…" + api_key[-4:]) if len(api_key) >= 10 else ("•" * len(api_key))
     live_masked = (live_api_key[:4] + "…" + live_api_key[-4:]) if len(live_api_key) >= 10 else ("•" * len(live_api_key))
     
@@ -6408,7 +6921,13 @@ async def admin_get_settings(_: User = Depends(require_admin), db: AsyncSession 
         "llm_api_key_set": bool(api_key), "llm_api_key_preview": masked if api_key else "",
         "system_prompt": system_prompt, "kb_text": kb_text,
         "global_notice_text": global_notice_text,
-        "suggested_models": SUGGESTED_MODELS,
+        "suggested_models": suggested,
+        "local_llm_enabled": local_enabled,
+        "local_llm_model": local_model,
+        "ollama_reachable": ollama_reachable,
+        "ollama_models": ollama_models,
+        "ollama_base_url": OLLAMA_BASE_URL,
+        "local_llm_fallback_active": local_enabled and time.monotonic() < _ollama_down_until,
         "live_model": live_model,
         "live_api_key_set": bool(live_api_key),
         "live_api_key_preview": live_masked if live_api_key else "",
@@ -6420,6 +6939,7 @@ async def admin_get_settings(_: User = Depends(require_admin), db: AsyncSession 
 
 @api.put("/admin/settings")
 async def admin_update_settings(body: SettingsIn, request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    global _ollama_down_until
     if body.llm_provider is not None:
         await set_setting(db, "llm_provider", body.llm_provider)
     if body.llm_model is not None:
@@ -6438,6 +6958,16 @@ async def admin_update_settings(body: SettingsIn, request: Request, admin: User 
         await set_setting(db, "live_api_key", body.live_api_key.strip())
     if body.profile_memory_enabled is not None:
         await set_setting(db, "profile_memory_enabled", "true" if body.profile_memory_enabled else "false")
+    if body.local_llm_enabled is not None:
+        await set_setting(db, "local_llm_enabled", "true" if body.local_llm_enabled else "false")
+    if body.local_llm_model is not None:
+        await set_setting(db, "local_llm_model", body.local_llm_model.strip())
+    if body.local_llm_enabled is not None or body.local_llm_model is not None:
+        # Új beállításnál azonnal próbálja a helyi gépet, ne várja ki a hibaszünetet.
+        _ollama_down_until = 0.0
+        # Mentéskor nincs előtöltés: a csak alappromptos előtöltés lefoglalta a szervert,
+        # és kiszorította a felhasználó saját előtöltését (az az alappromptot is tartalmazza,
+        # a chat megnyitásakor fut).
     await _admin_audit(db, admin, request, "admin.settings.update")
     return {"ok": True}
 

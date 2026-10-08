@@ -106,9 +106,12 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: myra-cloudflared
-    # Csak kifejezett kérésre indul: docker compose --profile tunnel up -d cloudflared
+    # Elso inditas kifejezett keresre: docker compose --profile tunnel up -d cloudflared
+    # Utana a gep ujrainditasakor magatol visszaall (unless-stopped). Ha kezzel allitod le
+    # (docker stop), leallva marad. A karanten nem ezt allitja le, hanem a backend
+    # karbantartasi modjat kapcsolja be, ezert ez nem gyengiti a vedelmet.
     profiles: ["tunnel"]
-    restart: "no"
+    restart: unless-stopped
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?set in .env}
     depends_on:
       - backend

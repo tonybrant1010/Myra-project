@@ -208,6 +208,27 @@ module.exports = async function handler(req, res) {
       res.setHeader(key, value);
     }
 
+    // Folyamatos kiírás (SSE, /api/chat/send-stream): darabonként továbbítjuk,
+    // nem gyűjtjük be a teljes választ. A proxy-időkorlát a fejlécek megérkezéséig él.
+    const contentType = (response.headers.get('content-type') || '').toLowerCase();
+    if (contentType.startsWith('text/event-stream') && response.body) {
+      res.setHeader('Cache-Control', 'no-store, no-transform');
+      res.setHeader('X-Accel-Buffering', 'no');
+      if (typeof res.flushHeaders === 'function') res.flushHeaders();
+      const reader = response.body.getReader();
+      try {
+        for (;;) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          res.write(Buffer.from(chunk.value));
+        }
+      } catch (streamError) {
+        console.error('Proxy stream error:', streamError);
+      }
+      res.end();
+      return;
+    }
+
     const responseBody = await response.arrayBuffer();
     res.send(Buffer.from(responseBody));
   } catch (error) {

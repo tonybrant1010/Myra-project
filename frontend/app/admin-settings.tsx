@@ -34,6 +34,12 @@ type Settings = {
   live_api_key_set: boolean;
   live_api_key_preview: string;
   profile_memory_enabled: boolean;
+  local_llm_enabled: boolean;
+  local_llm_model: string;
+  ollama_reachable: boolean;
+  ollama_models: { name: string; size_gb: number }[];
+  ollama_base_url: string;
+  local_llm_fallback_active: boolean;
 };
 
 /** A `GET /api/admin/security` valasza. A figyelo (ops/myra-watch.py) es a
@@ -102,6 +108,8 @@ export default function AdminSettingsScreen() {
   const [emergencyPassword, setEmergencyPassword] = useState("");
 
   const [memoryOn, setMemoryOn] = useState(true);
+  const [localOn, setLocalOn] = useState(false);
+  const [localModel, setLocalModel] = useState("");
   const [sec, setSec] = useState<SecurityState | null>(null);
   const [secLoading, setSecLoading] = useState(false);
   const [secBusy, setSecBusy] = useState(false);
@@ -129,6 +137,8 @@ export default function AdminSettingsScreen() {
         setPrompt(d.system_prompt);
         setLiveModel(d.live_model || "gemini-3.1-flash-live-preview");
         setMemoryOn(d.profile_memory_enabled !== false);
+        setLocalOn(d.local_llm_enabled === true);
+        setLocalModel(d.local_llm_model || "");
       }
 
 
@@ -157,6 +167,8 @@ export default function AdminSettingsScreen() {
         system_prompt: prompt,
         live_model: liveModel,
         profile_memory_enabled: memoryOn,
+        local_llm_enabled: localOn,
+        local_llm_model: localModel,
       };
       if (apiKey) body.llm_api_key = apiKey;
       if (liveApiKey) body.live_api_key = liveApiKey;
@@ -415,7 +427,59 @@ export default function AdminSettingsScreen() {
                   Itt adhatod meg a Myra chatbot és a hangalapú asszisztens működését vezérlő MI modellek adatait és a system promptot.
                 </T>
 
-                <FieldLabel text="LLM Szolgáltató" />
+                <View style={styles.toggleRow}>
+                  <View style={{ flex: 1, paddingRight: 12 }}>
+                    <T variant="label" color={theme.textOnDark}>Helyi modell (saját szerver)</T>
+                    <T variant="small" color="rgba(247,251,255,0.6)" style={{ marginTop: 2, lineHeight: 18 }}>
+                      Bekapcsolva a Myra először a saját gépen futó modellt kérdezi. Ha a gép nem
+                      érhető el vagy hibázik, automatikusan a lent beállított szolgáltató válaszol.
+                    </T>
+                  </View>
+                  <Switch
+                    value={localOn}
+                    onValueChange={setLocalOn}
+                    trackColor={{ false: "rgba(255,255,255,0.22)", true: theme.accentDeep }}
+                    thumbColor={theme.white}
+                    testID="admin-local-llm-switch"
+                  />
+                </View>
+                <T
+                  variant="small"
+                  color={data?.ollama_reachable ? theme.success : theme.danger}
+                  style={{ marginBottom: 8 }}
+                  testID="local-llm-status"
+                >
+                  {data?.ollama_reachable
+                    ? `Szerver elérhető (${data.ollama_models.length} modell)`
+                    : `Szerver nem érhető el (${data?.ollama_base_url || "-"})`}
+                  {data?.local_llm_fallback_active ? " · most a tartalék szolgáltató válaszol" : ""}
+                </T>
+                {data?.ollama_models?.length ? (
+                  <View style={styles.dropList}>
+                    {data.ollama_models.map((m) => (
+                      <TouchableOpacity
+                        key={m.name}
+                        style={[styles.dropItem, localModel === m.name && styles.dropItemSelected]}
+                        onPress={() => setLocalModel(m.name)}
+                        testID={`local-model-option-${m.name}`}
+                      >
+                        <T variant="small" color={localModel === m.name ? theme.white : theme.textOnDark}>
+                          {m.name}{m.size_gb ? `  ·  ${m.size_gb} GB` : ""}
+                        </T>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : localModel ? (
+                  <T variant="small" color="rgba(247,251,255,0.6)" style={{ marginBottom: 8 }}>
+                    Kiválasztott helyi modell: {localModel}
+                  </T>
+                ) : null}
+                <TouchableOpacity style={styles.outlineBtn} onPress={load} testID="local-llm-refresh">
+                  <Ionicons name="refresh-outline" size={16} color={theme.accent} style={{ marginRight: 6 }} />
+                  <T variant="label" color={theme.accent}>Modellek frissítése</T>
+                </TouchableOpacity>
+
+                <FieldLabel text="LLM Szolgáltató (tartalék, ha a helyi modell ki van kapcsolva vagy nem elérhető)" />
                 <View style={styles.providerRow}>
                   {PROVIDERS.map((p) => (
                     <TouchableOpacity

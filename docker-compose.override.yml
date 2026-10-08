@@ -8,6 +8,12 @@ services:
       ENVIRONMENT: "production"
       TRUST_PROXY: "true"
       PROFILE_ENABLED: "true"
+      # Helyi modellszerver (llama.cpp llama-server) a nagy gepen. Ha nem erheto el,
+      # a chat az admin feluleten beallitott API-szolgaltatora esik vissza.
+      # A kulcs erteke a ~/myra/.env fajlban van (LOCAL_LLM_API_KEY=...).
+      OLLAMA_BASE_URL: "http://192.168.1.184:8080"
+      OLLAMA_TIMEOUT_S: "360"
+      LOCAL_LLM_API_KEY: "${LOCAL_LLM_API_KEY:-}"
       TTS_ENGINE: "piper"
       PIPER_BINARY: "/app/data/piper/piper"
       PIPER_MODEL: "/app/data/tts/hu_HU-anna-medium.onnx"

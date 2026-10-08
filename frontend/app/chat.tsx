@@ -53,7 +53,10 @@ const CHAT_MESSAGE_MAX_CHARS = 8000;
 // függvénynek ~60 mp-es plafonja van, egy lassabb Gemini-válasz viszont ennél tovább is
 // tarthat (mértünk 100 mp-es, sikeresen elmentett választ). Ilyenkor nincs értelme hibát
 // mutatni — megvárjuk és beolvassuk az előzményből. Összesen ~90 mp-ig próbálkozunk.
-const REPLY_RECOVERY_DELAYS_MS = [3000, 5000, 7000, 10000, 15000, 20000, 30000];
+// A helyi (CPU-n futó) modell egy válasza percekig is tarthat, a proxy viszont 55 mp-nél
+// bont. Ilyenkor a backend tovább dolgozik és elmenti a választ: ennyi ideig várjuk
+// (összesen kb. 7 perc), közben a „Myra ír...” jelzés látszik.
+const REPLY_RECOVERY_DELAYS_MS = [3000, 5000, 7000, 10000, 15000, 20000, 30000, ...Array(20).fill(15000)];
 
 type Msg = { id: string; role: "user" | "assistant"; text: string; created_at: string; state_code?: string | null };
 type ListItem = { kind: "msg"; msg: Msg } | { kind: "hint"; id: string; code: string };
@@ -209,6 +212,7 @@ export default function ChatScreen() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [streamingId, setStreamingId] = useState<string | null>(null);
   const [listening, setListening] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
@@ -553,6 +557,41 @@ export default function ChatScreen() {
     return null;
   }, [token]);
 
+  /** A /api/chat/send-stream SSE-válaszát olvassa. A "text" esemény az eddig megírt
+   * teljes szöveget hozza, a "done" ugyanazt, amit a /api/chat/send adna, az "error"
+   * pedig státuszt és üzenetet. Ha a stream végeredmény nélkül zárul, kivételt dob,
+   * és a hívó a megszokott módon megnézi, elkészült-e közben a válasz. */
+  const readChatStream = async (r: Response, onText: (text: string) => void): Promise<any> => {
+    const reader = r.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (value) buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, "\n");
+      let sep = buffer.indexOf("\n\n");
+      while (sep >= 0) {
+        const block = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        sep = buffer.indexOf("\n\n");
+        let event = "message";
+        const dataLines: string[] = [];
+        for (const line of block.split("\n")) {
+          if (line.startsWith("event:")) event = line.slice(6).trim();
+          else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+        }
+        if (!dataLines.length) continue;
+        const payload = JSON.parse(dataLines.join("\n"));
+        if (event === "text") onText(String(payload ?? ""));
+        else if (event === "done") return payload;
+        else if (event === "error") {
+          throw { streamError: true, status: Number(payload?.status) || 502, detail: payload?.detail };
+        }
+      }
+      if (done) break;
+    }
+    throw new Error("A válasz-stream a végeredmény előtt lezárult.");
+  };
+
   const send = async () => {
     const text = input.trim();
     if (!text || sending || isReadOnly) return;
@@ -565,49 +604,99 @@ export default function ChatScreen() {
       created_at: new Date().toISOString(),
       state_code: user?.state_code || null,
     };
+    // Íródás közben ez a buborék mutatja Myra válaszát; a végén a mentett üzenet váltja.
+    const streamId = `stream-${Date.now()}`;
+    let streamStarted = false;
     setMessages((m) => [...m, optimistic]);
     scrollToBottom(true);
-    try {
-      const r = await authedFetch(token, "/api/chat/send", { method: "POST", body: JSON.stringify({ message: text, session_id: activeSessionId }) });
-      if (!r.ok) {
-        const data = await r.json().catch(() => ({}));
-        // 500/502/504 esetén a backend jó eséllyel MÉG DOLGOZIK (vagy már végzett is,
-        // csak a proxy adta fel) — ilyenkor előbb megvárjuk a választ, és csak utána
-        // mondjuk azt, hogy nem sikerült. A 4xx-ek (kvóta, jogosultság) végleges hibák.
-        const mayStillArrive = r.status >= 500;
-        if (mayStillArrive) {
-          const recovered = await recoverPendingReply(activeSessionId, text);
-          if (recovered) {
-            finishReveal();
-            setMessages(recovered);
-            const lastAssistant = [...recovered].reverse().find((m) => m.role === "assistant");
-            if (lastAssistant) animateAssistantMessage(lastAssistant);
-            scrollToBottom(true);
-            return;
-          }
+
+    const showSendError = async (status: number, detail?: string) => {
+      // 500/502/504 esetén a backend jó eséllyel MÉG DOLGOZIK (vagy már végzett is,
+      // csak a proxy adta fel) — ilyenkor előbb megvárjuk a választ, és csak utána
+      // mondjuk azt, hogy nem sikerült. A 4xx-ek (kvóta, jogosultság) végleges hibák.
+      if (status >= 500) {
+        const recovered = await recoverPendingReply(activeSessionId, text);
+        if (recovered) {
+          finishReveal();
+          setMessages(recovered);
+          const lastAssistant = [...recovered].reverse().find((m) => m.role === "assistant");
+          if (lastAssistant) animateAssistantMessage(lastAssistant);
+          scrollToBottom(true);
+          return;
         }
-        const errorMessage: Msg = {
-          id: `err-${Date.now()}`,
-          role: "assistant",
-          text: `Figyelem: ${data?.detail || "Nem sikerült elküldeni az üzenetet."}`,
-          created_at: new Date().toISOString(),
-          state_code: user?.state_code || null,
-        };
-        setMessages((m) => [
-          ...m.filter((x) => x.id !== optimistic.id),
-          errorMessage,
-        ]);
-        animateAssistantMessage(errorMessage);
-        // A beírt szöveg SOHA ne vesszen el hibánál: visszakerül a beviteli mezőbe,
-        // hogy egyetlen gombnyomással újraküldhető legyen.
-        setInput(text);
-        scrollToBottom(true);
+      }
+      const errorMessage: Msg = {
+        id: `err-${Date.now()}`,
+        role: "assistant",
+        text: `Figyelem: ${detail || "Nem sikerült elküldeni az üzenetet."}`,
+        created_at: new Date().toISOString(),
+        state_code: user?.state_code || null,
+      };
+      setMessages((m) => [
+        ...m.filter((x) => x.id !== optimistic.id && x.id !== streamId),
+        errorMessage,
+      ]);
+      animateAssistantMessage(errorMessage);
+      // A beírt szöveg SOHA ne vesszen el hibánál: visszakerül a beviteli mezőbe,
+      // hogy egyetlen gombnyomással újraküldhető legyen.
+      setInput(text);
+      scrollToBottom(true);
+    };
+
+    const onStreamText = (partial: string) => {
+      if (!partial) {
+        // A helyi modell félúton elakadt, az API-válasz egyben jön: a félkész szöveg eltűnik.
+        if (streamStarted) {
+          streamStarted = false;
+          setStreamingId(null);
+          setMessages((m) => m.filter((x) => x.id !== streamId));
+        }
         return;
       }
-      const data = await r.json();
+      if (!streamStarted) {
+        streamStarted = true;
+        finishReveal();
+        setStreamingId(streamId);
+        setMessages((m) => [
+          ...m,
+          { id: streamId, role: "assistant", text: partial, created_at: new Date().toISOString(), state_code: user?.state_code || null },
+        ]);
+      } else {
+        setMessages((m) => m.map((x) => (x.id === streamId ? { ...x, text: partial } : x)));
+      }
+      scrollToBottom(false);
+    };
+
+    try {
+      const r = await authedFetch(token, "/api/chat/send-stream", { method: "POST", body: JSON.stringify({ message: text, session_id: activeSessionId }) });
+      if (!r.ok) {
+        const errData = await r.json().catch(() => ({}));
+        await showSendError(r.status, errData?.detail);
+        return;
+      }
+      let data: any;
+      if ((r.headers.get("content-type") || "").includes("text/event-stream") && r.body) {
+        try {
+          data = await readChatStream(r, onStreamText);
+        } catch (e: any) {
+          if (e?.streamError) {
+            await showSendError(e.status, e.detail);
+            return;
+          }
+          throw e;
+        }
+      } else {
+        data = await r.json();
+      }
       const assistantMessage = data.assistant_message as Msg;
-      setMessages((m) => [...m.filter((x) => x.id !== optimistic.id), data.user_message, assistantMessage]);
-      animateAssistantMessage(assistantMessage);
+      // Amit már íródás közben látott, azt nem gépeljük ki még egyszer.
+      if (streamStarted) animatedMessageIdsRef.current.add(assistantMessage.id);
+      setMessages((m) => [
+        ...m.filter((x) => x.id !== optimistic.id && x.id !== streamId),
+        data.user_message,
+        assistantMessage,
+      ]);
+      if (!streamStarted) animateAssistantMessage(assistantMessage);
       scrollToBottom(true);
     } catch {
       // Megszakadt kapcsolat: a kérés ettől még elérhette a backendet, ezért itt is
@@ -617,7 +706,10 @@ export default function ChatScreen() {
         finishReveal();
         setMessages(recovered);
         const lastAssistant = [...recovered].reverse().find((m) => m.role === "assistant");
-        if (lastAssistant) animateAssistantMessage(lastAssistant);
+        if (lastAssistant) {
+          if (streamStarted) animatedMessageIdsRef.current.add(lastAssistant.id);
+          animateAssistantMessage(lastAssistant);
+        }
         scrollToBottom(true);
         return;
       }
@@ -630,11 +722,12 @@ export default function ChatScreen() {
         created_at: new Date().toISOString(),
         state_code: user?.state_code || null,
       };
-      setMessages((m) => [...m.filter((x) => x.id !== optimistic.id), networkError]);
+      setMessages((m) => [...m.filter((x) => x.id !== optimistic.id && x.id !== streamId), networkError]);
       animateAssistantMessage(networkError);
       setInput(text);
       scrollToBottom(true);
     } finally {
+      setStreamingId(null);
       setSending(false);
     }
   };
@@ -720,7 +813,7 @@ export default function ChatScreen() {
               onLayout={() => {
                 if (!didInitialScroll) scrollToBottom(false);
               }}
-              ListHeaderComponent={sending ? (
+              ListHeaderComponent={sending && !streamingId ? (
                 <View style={styles.typing} testID="typing-indicator">
                   <ActivityIndicator color={theme.primary} size="small" />
                   <T variant="small" color="rgba(247,251,255,0.66)" style={{ marginLeft: 8 }}>Myra ír...</T>
