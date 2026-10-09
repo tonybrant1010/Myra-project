@@ -280,7 +280,7 @@ async def test_goals_included_in_chat_system_prompt(monkeypatch):
     await _seed_user(79)
     captured: dict = {}
 
-    async def fake_llm(provider, model, api_key, system_prompt, history, user_message):
+    async def fake_llm(provider, model, api_key, system_prompt, history, user_message, **_kwargs):
         captured["system_prompt"] = system_prompt
         return "Rendben, itt vagyok."
 
