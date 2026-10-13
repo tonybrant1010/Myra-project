@@ -305,8 +305,9 @@ LLM_TOTAL_BUDGET_S = _env_int("LLM_TOTAL_BUDGET_S", 200, 10, 600)
 LLM_ATTEMPT_TIMEOUT_S = _env_int("LLM_ATTEMPT_TIMEOUT_S", 90, 5, 300)
 LLM_RETRY_BACKOFF_S = _env_int("LLM_RETRY_BACKOFF_S", 8, 0, 60)
 # A Gemini 3.x alapertelmezesben gondolkodik a valasz elott, ez pedig tiz masodperceket
-# visz el a lathato valasz elott. 0 = kikapcsolva, -1 = a mezot el sem kuldjuk.
-LLM_THINKING_BUDGET = _env_int("LLM_THINKING_BUDGET", 0, -1, 32768)
+# visz el a lathato valasz elott. A Gemini 3.x a thinkingLevel mezot ismeri ("low");
+# ures ertek eseten a mezot el sem kuldjuk. Ha a modell 400-at ad ra, nelkule ismetlodik.
+LLM_THINKING_LEVEL = os.environ.get("LLM_THINKING_LEVEL", "low").strip()
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").strip().rstrip("/")
 OLLAMA_TIMEOUT_S = _env_int("OLLAMA_TIMEOUT_S", 300, 10, 900)
 OLLAMA_CONNECT_TIMEOUT_S = _env_int("OLLAMA_CONNECT_TIMEOUT_S", 4, 1, 30)
@@ -5615,6 +5616,56 @@ async def _call_local_llm_stream(
     return content
 
 
+async def _call_gemini_stream(
+    model: str, api_key: str, body: dict, sink: Callable[[str], None],
+) -> str:
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}"
+        f":streamGenerateContent?alt=sse&key={api_key}"
+    )
+    deadline = time.monotonic() + LLM_TOTAL_BUDGET_S
+    parts: List[str] = []
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(LLM_ATTEMPT_TIMEOUT_S, connect=15.0)
+        ) as client:
+            async with client.stream("POST", url, json=body) as r:
+                if r.status_code == 400 and "generationConfig" in body:
+                    await r.aread()
+                    logger.warning(f"A(z) {model} elutasitotta a thinkingConfig-ot, ujra nelkule.")
+                    body.pop("generationConfig", None)
+                    return await _call_gemini_stream(model, api_key, body, sink)
+                if r.status_code != 200:
+                    text = (await r.aread())[:300].decode("utf-8", "replace")
+                    logger.error(f"Gemini stream hiba: status={r.status_code}, response={text}")
+                    raise HTTPException(status_code=502, detail="Gemini API hiba történt.")
+                async for line in r.aiter_lines():
+                    if time.monotonic() > deadline:
+                        raise HTTPException(status_code=504, detail="A válasz elkészítése túl sokáig tartott.")
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if not payload or payload == "[DONE]":
+                        continue
+                    try:
+                        chunk = _json.loads(payload)
+                    except ValueError:
+                        continue
+                    for cand in chunk.get("candidates", []):
+                        for part in (cand.get("content") or {}).get("parts", []):
+                            text = part.get("text") or ""
+                            if text:
+                                parts.append(text)
+                                sink(_strip_reply_prefixes("".join(parts)))
+    except (httpx.TimeoutException, httpx.TransportError) as exc:
+        logger.warning(f"Gemini stream halozati hiba: {type(exc).__name__}: {exc}")
+        raise HTTPException(status_code=502, detail="Gemini hálózati hiba.")
+    content = "".join(parts).strip()
+    if not content:
+        raise HTTPException(status_code=502, detail="Üres válasz érkezett az AI szolgáltatótól.")
+    return content
+
+
 _local_chat_inflight = 0
 
 
@@ -5909,10 +5960,13 @@ async def _call_llm_provider(provider: str, model: str, api_key: str, system_pro
             role = "user" if m["role"] == "user" else "model"
             contents.append({"role": role, "parts": [{"text": m["text"]}]})
         contents.append({"role": "user", "parts": [{"text": user_message}]})
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
         body = {"systemInstruction": {"parts": [{"text": system_prompt}]}, "contents": contents}
-        if LLM_THINKING_BUDGET >= 0:
-            body["generationConfig"] = {"thinkingConfig": {"thinkingBudget": LLM_THINKING_BUDGET}}
+        if LLM_THINKING_LEVEL:
+            body["generationConfig"] = {"thinkingConfig": {"thinkingLevel": LLM_THINKING_LEVEL}}
+        sink = _chat_stream_sink.get()
+        if sink is not None:
+            return await _call_gemini_stream(model, api_key, body, sink)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
         max_retries = 3
         last_error = ""
         r = None
