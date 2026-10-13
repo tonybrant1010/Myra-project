@@ -19,6 +19,7 @@ import smtplib
 import secrets
 import ssl
 import subprocess
+import tempfile
 import threading
 from collections import OrderedDict
 from contextlib import asynccontextmanager
@@ -1183,6 +1184,20 @@ _tts_attempts: dict[str, dict] = {}
 TTS_WINDOW_S = 60
 TTS_MAX = _env_int("TTS_MAX", 30, 5, 200)
 
+# Helyi beszedfelismeres (diktalas). A hanganyag a sajat szerveren marad: a bongeszo
+# feltolti a felvetelt, itt fut a Whisper (faster-whisper, int8 CPU-n), es csak a
+# felismert szoveg megy vissza a feluletre.
+STT_ENABLED = os.environ.get("STT_ENABLED", "true").strip().lower() == "true"
+STT_MODEL = os.environ.get("STT_MODEL", "large-v3-turbo").strip() or "large-v3-turbo"
+STT_MODEL_DIR = Path(os.environ.get("STT_MODEL_DIR", str(DB_FILE_DIR / "stt")))
+STT_LANGUAGE = os.environ.get("STT_LANGUAGE", "hu").strip() or "hu"
+STT_MAX_BYTES = _env_int("STT_MAX_BYTES", 8000000, 100000, 40000000)
+STT_WINDOW_S = 60
+STT_MAX = _env_int("STT_MAX", 30, 5, 200)
+_stt_attempts: dict[str, dict] = {}
+_stt_model = None
+_stt_model_lock = threading.Lock()
+
 _feedback_attempts: dict[str, dict] = {}
 FEEDBACK_WINDOW_S = 600
 FEEDBACK_MAX = _env_int("FEEDBACK_MAX", 5, 1, 50)
@@ -1226,6 +1241,68 @@ def _check_and_record_tts_limit(request: Request, user_id: int) -> None:
         _tts_attempts, request, user_id, TTS_WINDOW_S, TTS_MAX,
         "Túl sok felolvasási kérés. Kérlek, várj egy kicsit.",
     )
+
+
+def _check_and_record_stt_limit(request: Request, user_id: int) -> None:
+    _check_and_record_user_limit(
+        _stt_attempts, request, user_id, STT_WINDOW_S, STT_MAX,
+        "Túl sok diktálási kérés. Kérlek, várj egy kicsit.",
+    )
+
+
+def _load_stt_model():
+    """A Whisper-modell betoltese (eloszor, utana cache-bol). Az elso hivas letolti a
+    modellt az STT_MODEL_DIR mappaba, ami a /app/data koteten keresztul marad meg."""
+    global _stt_model
+    if _stt_model is not None:
+        return _stt_model
+    with _stt_model_lock:
+        if _stt_model is None:
+            from faster_whisper import WhisperModel
+
+            STT_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+            _stt_model = WhisperModel(
+                STT_MODEL,
+                device="cpu",
+                compute_type="int8",
+                download_root=str(STT_MODEL_DIR),
+            )
+    return _stt_model
+
+
+def _transcribe_with_stt(raw: bytes) -> str:
+    """A feltoltott hangfajl atirasa szovegge. A kodolast a faster-whisper a PyAV-val
+    vegzi, ezert kulon ffmpeg telepitese nem szukseges."""
+    model = _load_stt_model()
+    tmp = tempfile.NamedTemporaryFile(suffix=".audio", delete=False)
+    try:
+        tmp.write(raw)
+        tmp.close()
+        segments, _info = model.transcribe(
+            tmp.name,
+            language=STT_LANGUAGE,
+            vad_filter=True,
+            beam_size=1,
+            condition_on_previous_text=False,
+        )
+        return " ".join(segment.text.strip() for segment in segments).strip()
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
+
+async def _warm_stt_model():
+    """A modell a hatterben toltodik be (es az elso alkalommal le), hogy a kontener
+    indulasat ne tartsa fel."""
+    if not STT_ENABLED:
+        return
+    try:
+        await asyncio.to_thread(_load_stt_model)
+        logger.info(f"STT modell kesz: {STT_MODEL}")
+    except Exception:  # noqa: BLE001
+        logger.exception("STT modell elokeszitese sikertelen")
 
 
 def _safe_upload_filename(filename: Optional[str], allowed_suffixes: tuple[str, ...]) -> str:
@@ -2382,6 +2459,8 @@ async def lifespan(app: FastAPI):
         await db.commit()
     # A közös prefix a háttérben melegszik fel; az API indulását nem tartja fel.
     _spawn_background_task(_warm_local_base_prompt_on_startup())
+    # A helyi beszedfelismero modell is a hatterben toltodik be (eloszor le).
+    _spawn_background_task(_warm_stt_model())
     async with SessionLocal() as db:
         kb_res = await db.execute(select(AppSetting).where(AppSetting.key == "kb_text"))
         kb_setting = kb_res.scalar_one_or_none()
@@ -3488,6 +3567,29 @@ async def tts_speak(
         filename="myra-voice.wav",
         headers={"Cache-Control": "private, max-age=86400"},
     )
+
+
+@api.post("/stt/transcribe")
+async def stt_transcribe(
+    request: Request,
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Diktalas helyi beszedfelismeressel. A hanganyag nem hagyja el a szervert."""
+    if not STT_ENABLED:
+        raise HTTPException(status_code=503, detail="A helyi beszedfelismeres ki van kapcsolva.")
+    await _require_not_maintenance_for_user(user, db)
+    _check_and_record_stt_limit(request, user.id)
+    raw = await _read_upload_with_limit(file, STT_MAX_BYTES)
+    if not raw:
+        raise HTTPException(status_code=400, detail="Ures hangfajl.")
+    try:
+        text = await asyncio.to_thread(_transcribe_with_stt, raw)
+    except Exception:
+        logger.exception("STT atiras sikertelen")
+        raise HTTPException(status_code=502, detail="A beszedfelismeres nem sikerult.")
+    return {"text": text}
 
 
 @api.delete("/auth/delete-account")

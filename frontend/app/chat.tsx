@@ -223,7 +223,8 @@ export default function ChatScreen() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [viewSessionId, setViewSessionId] = useState<string | null>(null);
   const listRef = useRef<FlatList>(null);
-  const recognitionRef = useRef<any>(null);
+  const mediaRecorderRef = useRef<any>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   // A backendtől kapott WAV lejátszója. A blob URL-t felszabadítjuk, különben
   // minden felolvasás után a memóriában marad.
   const audioRef = useRef<any>(null);
@@ -231,7 +232,6 @@ export default function ChatScreen() {
   // a felhasználó már máshol járhat. A ref azonnal frissül, az állapot csak
   // újrarendereléskor — ezért a lemondást ezen keresztül ellenőrizzük.
   const speakingIdRef = useRef<string | null>(null);
-  const dictationBaseRef = useRef("");
   const revealTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const revealActiveRef = useRef<{ id: string; text: string } | null>(null);
   const animatedMessageIdsRef = useRef<Set<string>>(new Set());
@@ -261,7 +261,8 @@ export default function ChatScreen() {
   useEffect(() => {
     return () => {
       if (revealTimerRef.current) clearInterval(revealTimerRef.current);
-      recognitionRef.current?.stop?.();
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== "inactive") recorder.stop();
       if (Platform.OS === "web") {
         (globalThis as any).speechSynthesis?.cancel?.();
       }
@@ -415,12 +416,11 @@ export default function ChatScreen() {
   useEffect(() => () => stopSpeech(), [stopSpeech]);
 
   const stopDictation = useCallback(() => {
-    recognitionRef.current?.stop?.();
-    recognitionRef.current = null;
-    setListening(false);
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
   }, []);
 
-  const toggleDictation = useCallback(() => {
+  const toggleDictation = useCallback(async () => {
     if (Platform.OS !== "web") {
       setVoiceStatus("A diktálás ebben a környezetben nem elérhető.");
       return;
@@ -429,53 +429,52 @@ export default function ChatScreen() {
       stopDictation();
       return;
     }
-    const SpeechRecognition = (globalThis as any).SpeechRecognition || (globalThis as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setVoiceStatus("A böngésző nem támogatja a beépített diktálást.");
+    const mediaDevices = (globalThis as any).navigator?.mediaDevices;
+    const Recorder = (globalThis as any).MediaRecorder;
+    if (!mediaDevices?.getUserMedia || !Recorder) {
+      setVoiceStatus("A böngésző nem támogatja a hangrögzítést.");
       return;
     }
-    const recognition = new SpeechRecognition();
-    recognitionRef.current = recognition;
-    dictationBaseRef.current = input.trimEnd();
-    recognition.lang = "hu-HU";
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.maxAlternatives = 1;
-    recognition.onstart = () => {
-      setVoiceStatus("Hallgatlak...");
+    try {
+      // A hang a saját szerverre megy (helyi Whisper), külső szolgáltatóhoz nem.
+      const stream = await mediaDevices.getUserMedia({ audio: true });
+      const recorder = new Recorder(stream);
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+      const base = input.trimEnd();
+      recorder.ondataavailable = (event: any) => {
+        if (event?.data?.size) audioChunksRef.current.push(event.data);
+      };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((track: any) => track.stop());
+        mediaRecorderRef.current = null;
+        setListening(false);
+        setVoiceStatus("Feldolgozás…");
+        try {
+          const form = new FormData();
+          form.append("file", new Blob(audioChunksRef.current, { type: "audio/webm" }), "diktalas.webm");
+          const response = await authedFetch(token, "/api/stt/transcribe", { method: "POST", body: form });
+          const data = await response.json().catch(() => ({}));
+          const spoken = String(data?.text || "").trim();
+          if (!response.ok || !spoken) throw new Error("stt");
+          setInput([base, spoken].filter(Boolean).join(" "));
+          setVoiceStatus(null);
+        } catch {
+          setVoiceStatus("Nem sikerült a diktálás feldolgozása.");
+        }
+      };
+      recorder.start();
       setListening(true);
-    };
-    recognition.onresult = (event: any) => {
-      let finalText = "";
-      let interimText = "";
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        const transcript = event.results[i]?.[0]?.transcript || "";
-        if (event.results[i]?.isFinal) finalText += transcript;
-        else interimText += transcript;
-      }
-      const spoken = (finalText || interimText).trim();
-      const base = dictationBaseRef.current;
-      setInput([base, spoken].filter(Boolean).join(base && spoken ? " " : ""));
-      if (finalText.trim()) {
-        dictationBaseRef.current = [base, finalText.trim()].filter(Boolean).join(base && finalText.trim() ? " " : "");
-      }
-    };
-    recognition.onerror = () => {
-      setVoiceStatus("Nem sikerült rögzíteni a diktálást.");
+      setVoiceStatus("Hallgatlak… nyomd meg újra a leállításhoz.");
+    } catch {
+      setVoiceStatus("Nem sikerült elindítani a hangrögzítést.");
       setListening(false);
-    };
-    recognition.onend = () => {
-      setListening(false);
-      setVoiceStatus(null);
-      recognitionRef.current = null;
-    };
-    recognition.start();
-  }, [input, listening, stopDictation]);
+    }
+  }, [input, listening, stopDictation, token]);
 
-  /** Myra hangja. A backend `/api/tts/speak` végpontja adja a WAV-ot; ott ugyanaz
-   *  a Gemini-hang szól, mint a Myra Live-ban, tehát a két felületen ugyanaz a
-   *  valaki beszél. A backend lemezen gyorsítótáraz, így egy már felolvasott
-   *  üzenet másodszorra azonnal jön. */
+  /** Myra hangja. A backend `/api/tts/speak` végpontja adja a WAV-ot; a hang helyben,
+   *  a szerveren futó Piper motorral (magyar női hang) készül. A backend lemezen
+   *  gyorsítótáraz, így egy már felolvasott üzenet másodszorra azonnal jön. */
   const speakMessage = useCallback(async (msg: Msg) => {
     if (Platform.OS !== "web") {
       setVoiceStatus("A felolvasás ebben a környezetben nem elérhető.");
