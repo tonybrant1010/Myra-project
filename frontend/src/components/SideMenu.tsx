@@ -141,10 +141,6 @@ export default function SideMenu({ visible, onClose, forumUnread }: Props) {
                   />
                 </MenuGroup>
 
-                <MenuGroup title="Béta">
-                  <MenuItem label="Myra Live" icon="mic-circle-outline" onPress={() => { onClose(); router.push("/myra-live" as any); }} testID="menu-myra-live" />
-                </MenuGroup>
-
                 <MenuGroup title="Kikapcsolódás">
                   <MenuItem label="Játszótér" icon="game-controller-outline" onPress={() => { onClose(); router.push("/relax"); }} testID="menu-relax" />
                 </MenuGroup>

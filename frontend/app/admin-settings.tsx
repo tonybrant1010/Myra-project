@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -19,6 +19,7 @@ import ContentBackground from "@/src/components/ContentBackground";
 import TopBar from "@/src/components/TopBar";
 import { T } from "@/src/components/Typography";
 import { shadow, theme } from "@/src/theme";
+import LocalSamplingCard from "@/src/components/LocalSamplingCard";
 
 type Provider = "openai" | "anthropic" | "gemini" | "groq" | "cerebras" | "mistral" | "openrouter" | "ollama";
 
@@ -30,9 +31,6 @@ type Settings = {
   system_prompt: string;
   global_notice_text: string;
   suggested_models: Record<string, string[]>;
-  live_model: string;
-  live_api_key_set: boolean;
-  live_api_key_preview: string;
   profile_memory_enabled: boolean;
   local_llm_enabled: boolean;
   local_llm_model: string;
@@ -67,6 +65,34 @@ type SecurityState = {
   events: SecurityEvent[];
 };
 
+/** A `GET /api/admin/stats` valasza. A szamokat a szerveren futó összesítő
+ *  (ops/myra-stats.py) irja a Caddy hozzaferesi naplojabol; ez a kepernyo csak
+ *  megjeleniti. „frontend" = statikus fajlok, „backend" = /api alatti keresek. */
+type StatsBucket = {
+  total: number;
+  sikeres: number;
+  elutasitott: number;
+  szerverhiba: number;
+  frontend_total: number;
+  frontend_sikeres: number;
+  frontend_elutasitott: number;
+  api_total: number;
+  api_sikeres: number;
+  api_elutasitott: number;
+  kodok: Record<string, number>;
+};
+
+type TrafficStats = {
+  ok: boolean;
+  hiba?: string;
+  nap?: string;
+  fajl_ideje?: string;
+  ma?: StatsBucket;
+  top_elutasito_ipk?: { nev: string; db: number }[];
+  top_utak?: { nev: string; db: number }[];
+  fail2ban?: Record<string, { most: number; osszesen: number }>;
+};
+
 /** Ennyi masodperc utan tekintjuk halottnak a figyelot (5 perces koteg + tartalek). */
 const WATCH_STALE_SECONDS = 600;
 
@@ -79,7 +105,21 @@ const PASSWORD_MAX_CHARS = 128;
 
 export default function AdminSettingsScreen() {
   useAuthGuard();
-  const { token, user } = useAuth();
+  const { token, user, logout } = useAuth();
+  // Az admin token 1 oraig ervenyes. Lejarat utan minden betoltes 401-et kapna (es a figyelo
+  // ezt szamolja), ezert az elso 401 utan leallitjuk a lekeréseket, es ujra-bejelentkezest kerunk.
+  const [expired, setExpired] = useState(false);
+  const expiredRef = useRef(false);
+  const adminGet = useCallback(async (path: string) => {
+    if (expiredRef.current) return null;
+    const r = await authedFetch(token, path);
+    if (r.status === 401) {
+      expiredRef.current = true;
+      setExpired(true);
+      return null;
+    }
+    return r;
+  }, [token]);
   const [data, setData] = useState<Settings | null>(null);
   const [loading, setLoading] = useState(true);
   const [provider, setProvider] = useState<Provider>("gemini");
@@ -91,9 +131,6 @@ export default function AdminSettingsScreen() {
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [showModelDrop, setShowModelDrop] = useState(false);
-  const [liveModel, setLiveModel] = useState("");
-  const [liveApiKey, setLiveApiKey] = useState("");
-
 
   const [maintenance, setMaintenance] = useState(false);
   const [maintenanceLoading, setMaintenanceLoading] = useState(false);
@@ -115,6 +152,8 @@ export default function AdminSettingsScreen() {
   const [secBusy, setSecBusy] = useState(false);
   const [secPassword, setSecPassword] = useState("");
   const [showEvents, setShowEvents] = useState(false);
+  const [stats, setStats] = useState<TrafficStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
 
   const requireEmergencyPassword = () => {
     if (!emergencyPassword.trim()) {
@@ -127,23 +166,22 @@ export default function AdminSettingsScreen() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await authedFetch(token, "/api/admin/settings");
-      if (r.ok) {
+      const r = await adminGet("/api/admin/settings");
+      if (r && r.ok) {
         const d: Settings = await r.json();
         setData(d);
         setProvider(d.llm_provider);
         setModel(d.llm_model);
         setNotice(d.global_notice_text || "");
         setPrompt(d.system_prompt);
-        setLiveModel(d.live_model || "gemini-3.1-flash-live-preview");
         setMemoryOn(d.profile_memory_enabled !== false);
         setLocalOn(d.local_llm_enabled === true);
         setLocalModel(d.local_llm_model || "");
       }
 
 
-      const mr = await authedFetch(token, "/api/admin/maintenance");
-      if (mr.ok) {
+      const mr = await adminGet("/api/admin/maintenance");
+      if (mr && mr.ok) {
         const md = await mr.json();
         setMaintenance(md.maintenance_mode);
       }
@@ -151,7 +189,7 @@ export default function AdminSettingsScreen() {
       console.error("Failed to load settings:", e);
     }
     setLoading(false);
-  }, [token]);
+  }, [adminGet]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -165,13 +203,11 @@ export default function AdminSettingsScreen() {
         llm_model: model,
         global_notice_text: notice,
         system_prompt: prompt,
-        live_model: liveModel,
         profile_memory_enabled: memoryOn,
         local_llm_enabled: localOn,
         local_llm_model: localModel,
       };
       if (apiKey) body.llm_api_key = apiKey;
-      if (liveApiKey) body.live_api_key = liveApiKey;
 
       const r = await authedFetch(token, "/api/admin/settings", {
         method: "PUT",
@@ -180,7 +216,6 @@ export default function AdminSettingsScreen() {
       if (r.ok) {
         setMsg("Beállítások mentve.");
         setApiKey("");
-        setLiveApiKey("");
         load();
       } else {
         const d = await r.json().catch(() => ({}));
@@ -196,16 +231,30 @@ export default function AdminSettingsScreen() {
   const loadSecurity = useCallback(async () => {
     setSecLoading(true);
     try {
-      const r = await authedFetch(token, "/api/admin/security");
-      if (r.ok) setSec(await r.json());
+      const r = await adminGet("/api/admin/security");
+      if (r && r.ok) setSec(await r.json());
     } catch {
       /* a biztonsagi panel sosem torheti el a kepernyot */
     } finally {
       setSecLoading(false);
     }
-  }, [token]);
+  }, [adminGet]);
 
   useEffect(() => { loadSecurity(); }, [loadSecurity]);
+
+  const loadStats = useCallback(async () => {
+    setStatsLoading(true);
+    try {
+      const r = await adminGet("/api/admin/stats");
+      if (r && r.ok) setStats(await r.json());
+    } catch {
+      /* a forgalmi panel sosem torheti el a kepernyot */
+    } finally {
+      setStatsLoading(false);
+    }
+  }, [adminGet]);
+
+  useEffect(() => { loadStats(); }, [loadStats]);
 
   /** Kozos vaz a harom karanten-muvelethez: jelszo -> POST -> ujratoltes. */
   const securityAction = async (path: string, body: Record<string, unknown>, okMsg: string) => {
@@ -415,6 +464,17 @@ export default function AdminSettingsScreen() {
     <SafeAreaView style={styles.safe} testID="admin-settings-screen">
       <ContentBackground>
         <TopBar title="Admin beállítások" showBack />
+        {expired ? (
+          <View style={{ margin: 16, padding: 14, borderRadius: 12, borderWidth: 1, borderColor: "rgba(255,120,120,0.5)", backgroundColor: "rgba(255,90,90,0.14)" }} testID="admin-session-expired">
+            <T variant="title" color={theme.textOnDark}>Lejárt a munkamenet</T>
+            <T variant="small" color="rgba(247,251,255,0.8)" style={{ marginTop: 6, marginBottom: 10 }}>
+              Az admin belépés 1 óráig érvényes. Jelentkezz be újra, addig az oldal nem kér le újabb adatot.
+            </T>
+            <TouchableOpacity onPress={() => { logout(); }} style={{ backgroundColor: theme.accentDeep, borderRadius: 10, paddingVertical: 12, alignItems: "center" }} testID="admin-session-relogin">
+              <T variant="title" color={theme.white}>Újra bejelentkezés</T>
+            </TouchableOpacity>
+          </View>
+        ) : null}
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           {loading ? (
             <View style={styles.center}><ActivityIndicator color={theme.accent} /></View>
@@ -479,6 +539,10 @@ export default function AdminSettingsScreen() {
                   <T variant="label" color={theme.accent}>Modellek frissítése</T>
                 </TouchableOpacity>
 
+                <View style={{ marginTop: 14 }}>
+                  <LocalSamplingCard token={token} initial={data as any} />
+                </View>
+
                 <FieldLabel text="LLM Szolgáltató (tartalék, ha a helyi modell ki van kapcsolva vagy nem elérhető)" />
                 <View style={styles.providerRow}>
                   {PROVIDERS.map((p) => (
@@ -542,31 +606,6 @@ export default function AdminSettingsScreen() {
                 <T variant="small" color="rgba(247,251,255,0.58)" style={{ marginTop: 6, marginBottom: 12 }}>
                   {providerHelp(provider)}
                 </T>
-
-                <FieldLabel text="Live (Hangalapú) modell neve" />
-                <TextInput
-                  style={styles.input}
-                  value={liveModel}
-                  onChangeText={setLiveModel}
-                  autoCapitalize="none"
-                  maxLength={MODEL_MAX_CHARS}
-                  placeholder="Pl. gemini-2.0-flash-exp"
-                  placeholderTextColor="rgba(247,251,255,0.48)"
-                  testID="live-model-input"
-                />
-
-                <FieldLabel text="Live API kulcs" />
-                <TextInput
-                  style={styles.input}
-                  value={liveApiKey}
-                  onChangeText={setLiveApiKey}
-                  placeholder={data?.live_api_key_set ? `Beállítva (${data.live_api_key_preview})` : "Live API kulcs"}
-                  placeholderTextColor="rgba(247,251,255,0.48)"
-                  secureTextEntry
-                  autoCapitalize="none"
-                  maxLength={API_KEY_MAX_CHARS}
-                  testID="live-api-key-input"
-                />
 
                 <FieldLabel text="Chatbot System Prompt" />
                 <TextInput
@@ -797,6 +836,115 @@ export default function AdminSettingsScreen() {
                 >
                   <T variant="label" color={theme.accent}>Eseménylista ürítése</T>
                 </TouchableOpacity>
+              </Section>
+
+
+              <Section title="Forgalom" icon="stats-chart-outline">
+                <T variant="small" color="rgba(247,251,255,0.66)" style={styles.sectionHelp}>
+                  A Caddy hozzáférési naplójából, percenként frissül. „Frontend” a statikus fájlok
+                  kiszolgálása, „backend” a /api alatti kérések. Az elutasított a 4xx (401/403/429/404),
+                  a szerverhiba az 5xx.
+                </T>
+
+                {!stats?.ok ? (
+                  <T variant="small" color={theme.warm} style={styles.feedback}>
+                    {stats?.hiba || "Még nincs összesítés (fut-e a myra-stats.timer?)."}
+                  </T>
+                ) : (
+                  <>
+                    <View style={styles.diagLine}>
+                      <T variant="small" color="rgba(247,251,255,0.7)">Ma összesen</T>
+                      <T variant="small" color={theme.accent}>{stats.ma?.total ?? 0} kérés</T>
+                    </View>
+                    <View style={styles.diagLine}>
+                      <T variant="small" color="rgba(247,251,255,0.7)">Sikeres (2xx/3xx)</T>
+                      <T variant="small" color={theme.success}>{stats.ma?.sikeres ?? 0}</T>
+                    </View>
+                    <View style={styles.diagLine}>
+                      <T variant="small" color="rgba(247,251,255,0.7)">Elutasított (4xx)</T>
+                      <T variant="small" color={(stats.ma?.elutasitott ?? 0) > 0 ? theme.warm : theme.success}>
+                        {stats.ma?.elutasitott ?? 0}
+                      </T>
+                    </View>
+                    <View style={styles.diagLine}>
+                      <T variant="small" color="rgba(247,251,255,0.7)">Szerverhiba (5xx)</T>
+                      <T variant="small" color={(stats.ma?.szerverhiba ?? 0) > 0 ? theme.danger : theme.success}>
+                        {stats.ma?.szerverhiba ?? 0}
+                      </T>
+                    </View>
+
+                    <T variant="caption" color="rgba(247,251,255,0.72)" style={styles.lbl}>Frontend / backend bontás</T>
+                    <View style={styles.diagLine}>
+                      <T variant="small" color="rgba(247,251,255,0.7)">Frontend (statikus)</T>
+                      <T variant="small" color="rgba(247,251,255,0.9)">
+                        {stats.ma?.frontend_total ?? 0} · elutasítva {stats.ma?.frontend_elutasitott ?? 0}
+                      </T>
+                    </View>
+                    <View style={styles.diagLine}>
+                      <T variant="small" color="rgba(247,251,255,0.7)">Backend (/api)</T>
+                      <T variant="small" color="rgba(247,251,255,0.9)">
+                        {stats.ma?.api_total ?? 0} · elutasítva {stats.ma?.api_elutasitott ?? 0}
+                      </T>
+                    </View>
+
+                    {Object.keys(stats.ma?.kodok || {}).length > 0 ? (
+                      <>
+                        <T variant="caption" color="rgba(247,251,255,0.72)" style={styles.lbl}>Státuszkódok ma</T>
+                        <T variant="small" color="#cfd8dc" style={{ fontFamily: "monospace", fontSize: 11 }}>
+                          {Object.entries(stats.ma?.kodok || {})
+                            .sort((a, b) => b[1] - a[1])
+                            .map(([k, v]) => `${k}: ${v}`)
+                            .join("   ")}
+                        </T>
+                      </>
+                    ) : null}
+
+                    {(stats.top_elutasito_ipk?.length ?? 0) > 0 ? (
+                      <>
+                        <T variant="caption" color="rgba(247,251,255,0.72)" style={styles.lbl}>
+                          Legtöbb elutasított kérés (IP)
+                        </T>
+                        {(stats.top_elutasito_ipk || []).slice(0, 5).map((s) => (
+                          <View key={s.nev} style={styles.diagLine}>
+                            <T variant="small" color="#cfd8dc" style={{ fontFamily: "monospace", fontSize: 11 }}>
+                              {s.nev}
+                            </T>
+                            <T variant="small" color={theme.warm}>{s.db}</T>
+                          </View>
+                        ))}
+                      </>
+                    ) : null}
+
+                    {Object.keys(stats.fail2ban || {}).length > 0 ? (
+                      <>
+                        <T variant="caption" color="rgba(247,251,255,0.72)" style={styles.lbl}>
+                          fail2ban (kitiltva most / összesen)
+                        </T>
+                        {Object.entries(stats.fail2ban || {}).map(([nev, adat]) => (
+                          <View key={nev} style={styles.diagLine}>
+                            <T variant="small" color="rgba(247,251,255,0.7)">{nev}</T>
+                            <T variant="small" color={adat.most > 0 ? theme.warm : "rgba(247,251,255,0.9)"}>
+                              {adat.most} / {adat.osszesen}
+                            </T>
+                          </View>
+                        ))}
+                      </>
+                    ) : null}
+
+                    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 6 }}>
+                      <T variant="caption" color="rgba(247,251,255,0.55)">
+                        {stats.fajl_ideje ? `Frissítve: ${stats.fajl_ideje.replace("T", " ").slice(0, 19)} UTC` : ""}
+                      </T>
+                      <TouchableOpacity onPress={loadStats} disabled={statsLoading} testID="stats-refresh">
+                        {statsLoading ? (
+                          <ActivityIndicator size="small" color={theme.accent} />
+                        ) : (
+                          <Ionicons name="refresh-outline" size={18} color={theme.accent} />
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                )}
               </Section>
 
 

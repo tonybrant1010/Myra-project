@@ -49,12 +49,14 @@ const IS_DESKTOP_WEB = (() => {
 const MYRA_AVATAR = require("@/assets/images/myra-avatar.png");
 const CHAT_MESSAGE_MAX_CHARS = 8000;
 
-// A backend akkor is elmenti Myra válaszát, ha a küldő kérés közben elszállt: a Vercel
-// függvénynek ~60 mp-es plafonja van, egy lassabb Gemini-válasz viszont ennél tovább is
-// tarthat (mértünk 100 mp-es, sikeresen elmentett választ). Ilyenkor nincs értelme hibát
-// mutatni — megvárjuk és beolvassuk az előzményből. Összesen ~90 mp-ig próbálkozunk.
-// A helyi (CPU-n futó) modell egy válasza percekig is tarthat, a proxy viszont 55 mp-nél
-// bont. Ilyenkor a backend tovább dolgozik és elmenti a választ: ennyi ideig várjuk
+// A backend akkor is elmenti Myra válaszát, ha a küldő kérés közben elszállt: a
+// szerveroldali proxy (Caddy) időkorlátja 15 perc, egy lassabb Gemini- vagy helyi
+// modell-válasz viszont ennél is tovább tarthat (mértünk 100 mp-es, sikeresen
+// elmentett választ). Ilyenkor nincs értelme hibát mutatni — megvárjuk és beolvassuk
+// az előzményből. Összesen ~90 mp-ig próbálkozunk.
+// A helyi (CPU-n futó) modell egy válasza percekig is tarthat, főleg a hideg
+// gyorsítótár utáni első kérésnél (a prompt előfeldolgozása akár 2-3 perc).
+// Ilyenkor a backend tovább dolgozik és elmenti a választ: ennyi ideig várjuk
 // (összesen kb. 7 perc), közben a „Myra ír...” jelzés látszik.
 const REPLY_RECOVERY_DELAYS_MS = [3000, 5000, 7000, 10000, 15000, 20000, 30000, ...Array(20).fill(15000)];
 

@@ -18,6 +18,29 @@ Mit jelent a karanten:
 
 Mit szandekosan NEM csinal: nem all le semmi, nem tilt IP-t, nem ir at semmit.
 
+MI ZAR KARANTENBA (2026-10-13 ota ket kategoria):
+
+  1. AZONNALI jel - nincs idokorlat, csak te oldod fel: vedett fajl
+     ujjlenyomatanak valtozasa, engedely nelkuli `docker exec`, nem a compose
+     altal inditott kontener. Ezek kivulrol nem hamisithatok, csak a szerver
+     meghekkelese utan keletkeznek, ezert itt a szigorubb reakcio a helyes.
+
+  2. KUSZOB-ALAPU jel - darabszam + ablak + KULONBOZO FORRAS-IP-ek minimuma:
+     proxy-titok nelkuli kopogtatas, sikertelen belepesek, hitelesitett
+     admin-muvelet elutasitasa. Egy tamado EGYETLEN IP-rol riasztast valt ki,
+     de nem tud karantenba zarni: ahhoz legalabb MYRA_KUSZOB_IP_* kulonbozo
+     forras kell. Azert fontos, mert a karanten platform-szintu - ha egyetlen
+     forras kivalthatja, akkor a vedelemmel eppen a tamado zarja ki a
+     felhasznalokat (nehany keresessel).
+
+  A kuszob-alapu karanten KARANTEN_TTL_MIN perc utan magatol feloldodik, hacsak
+  nem jon ujabb jel. Az azonnali jelzesu karanten nem oldodik fel magatol.
+
+  Anonim keres (ervenyes token nelkul) az admin utvonalon CSAK riasztas:
+  karanten nem jar erte. A karanten jele a HITELESITETT, de elutasitott
+  admin-muvelet, amit a backend sajat, strukturált soraval jelez
+  (MYRA_SECURITY_SIGNAL kind=admin_forbidden).
+
 Fuggosegek: csak a Python standard konyvtar. Nincs pip install.
 Az adatbazisba a `docker exec ... psql` uton ir, igy akkor is mukodik,
 ha a backend eppen beragadt.
@@ -44,7 +67,7 @@ import sys
 import threading
 import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from urllib.parse import unquote, urlparse
 
@@ -75,12 +98,36 @@ MEGORZES_NAP = int(os.environ.get("MYRA_WATCH_RETENTION_D", "30"))
 # Ha "0", a figyelo sosem zar karantenba (csak riaszt) - a regi viselkedes.
 KARANTEN_BE = os.environ.get("MYRA_WATCH_QUARANTINE", "1") not in ("0", "false", "no")
 
-# Kuszobok: (esemenyszam, ablak masodpercben). Elerve karanten.
+# Kuszobok: (esemenyszam, ablak masodpercben, MINIMUM KULONBOZO FORRAS-IP).
+#
+# A karanten platform-szintu, fail-closed kapcsolo. Ha egyetlen forras
+# kivalthatja, akkor a vedelmet a tamado kapja a kezebe: nehany keresessel
+# kizarhatja az osszes felhasznalot. Ezert a kuszob-alapu jeleknel nem eleg a
+# darabszam, kell hozza legalabb ennyi KULONBOZO forras-IP is. Egy tamado egy
+# IP-rol igy riasztast kelt, de nem zar; elosztott (tobb forrasu) zaj eseten a
+# karanten valtozatlanul bekapcsol.
+#
+# Az "azonnal" jelzesekre (vedett fajl valtozasa, engedely nelkuli docker exec,
+# idegen kontener) ez nem vonatkozik: azok azonnal es IP-diverzitas nelkul
+# zarnak, mert kivulrol nem hamisithatok.
 KUSZOB = {
-    "proxy-kopogtatas": (int(os.environ.get("MYRA_KUSZOB_PROXY", "10")), 600),
-    "elutasitott-admin": (int(os.environ.get("MYRA_KUSZOB_ADMIN", "5")), 600),
-    "sikertelen-belepes": (int(os.environ.get("MYRA_KUSZOB_LOGIN", "10")), 600),
+    "proxy-kopogtatas": (
+        int(os.environ.get("MYRA_KUSZOB_PROXY", "25")), 600,
+        int(os.environ.get("MYRA_KUSZOB_IP_PROXY", "3")),
+    ),
+    "elutasitott-admin": (
+        int(os.environ.get("MYRA_KUSZOB_ADMIN", "10")), 600,
+        int(os.environ.get("MYRA_KUSZOB_IP_ADMIN", "3")),
+    ),
+    "sikertelen-belepes": (
+        int(os.environ.get("MYRA_KUSZOB_LOGIN", "20")), 600,
+        int(os.environ.get("MYRA_KUSZOB_IP_LOGIN", "3")),
+    ),
 }
+
+# A kuszob-alapu karanten ennyi perc utan magatol feloldodik (0 = nincs
+# automatikus feloldas). Az azonnali jelzesu karantenra nem vonatkozik.
+KARANTEN_TTL_MIN = int(os.environ.get("MYRA_KARANTEN_TTL_MIN", "30"))
 
 # A compose altal inditott kontenereken kivul ezek sem szamitanak idegennek.
 SAJAT_KONTENEREK = {
@@ -88,11 +135,25 @@ SAJAT_KONTENEREK = {
 }
 
 # A vedett fajlok. Ezek megvaltozasa azonnali karanten.
+#
+# A figyelo sajat maga es a TELEPITETT systemd unit is vedett: enelkul a karanten
+# vezerlojet integritas-esemeny nelkul lehetne lecserelni, azaz a vedelmet
+# megkerulni. FIGYELEM: ezert a myra-watch.py feltoltese ELOTT mindig indits
+# szunetet (--szunet), kulonben maga a csere valt ki azonnali karantent;
+# a csere utan pedig rögzits uj alapvonalat (--alapvonal).
+#
+# A repoban levo ops/myra-watch.service csak sablon: NEM ez fut, ezert nem is
+# vedett. Amit a rendszer tenylegesen futtat, az a telepitetett unit alabb.
+UNIT_FAJL = os.environ.get(
+    "MYRA_WATCH_UNIT", "/etc/systemd/system/myra-watch.service"
+)
 VEDETT_FAJLOK = [
     os.path.join(MYRA_DIR, "backend", "server.py"),
     os.path.join(MYRA_DIR, ".env"),
     os.path.join(MYRA_DIR, "docker-compose.yml"),
     os.path.join(MYRA_DIR, "docker-compose.override.yml"),
+    os.path.join(OPS_DIR, "myra-watch.py"),
+    UNIT_FAJL,
 ]
 
 # A backend logjaban ezeket keressuk.
@@ -100,12 +161,22 @@ VEDETT_FAJLOK = [
 #   sulyossag: "info" | "warn" | "critical"
 #   karanten_tipus: None = csak riaszt
 #                   "azonnal" = azonnali karanten
-#                   kulcs a KUSZOB-bol = szamlalunk, kuszob felett karanten
+#                   kulcs a KUSZOB-bol = szamlalunk, kuszob + IP-diverzitas felett karanten
+#
+# FONTOS a sorrend: a hitelesitett admin-jelzes mintaja ELORRE kerul, es az
+# anonim 401 kulon, karanten nelkuli mintat kap. Igy egy bejelentkezes nelkuli
+# keres nem tudja kivaltani a platformzart.
 LOG_MINTAK = [
+    # Hitelesitett, de elutasitott admin muvelet. Ezt a sort a backend csak
+    # akkor irja ki, ha ERVENYES token volt a keresben (server.py require_admin),
+    # tehat bizonyitek-alapu: anonim keresekkel nem hamisithato.
+    (re.compile(r"MYRA_SECURITY_SIGNAL kind=admin_forbidden"),
+     "elutasitott admin muvelet (hitelesitett)", "warn", "elutasitott-admin"),
+    # Anonim koppintas az admin utvonalakra (nincs token): scanner-zaj, csak riaszt.
+    (re.compile(r'"(POST|GET|DELETE|PUT|PATCH) /api/admin/[^"]*" 401'),
+     "anonim koppintas admin utvonalra (nincs token)", "info", None),
     (re.compile(r"Unauthorized direct access attempt"),
      "proxy-titok nelkuli kopogtatas", "warn", "proxy-kopogtatas"),
-    (re.compile(r'"(POST|GET|DELETE|PUT|PATCH) /api/admin/[^"]*" (4\d\d|5\d\d)'),
-     "elutasitott admin muvelet", "warn", "elutasitott-admin"),
     (re.compile(r'"POST /api/auth/(login|mfa/verify|totp/login|admin/action-code)[^"]*" (401|403|429)'),
      "sikertelen belepesi kiserlet", "warn", "sikertelen-belepes"),
     (re.compile(r"Traceback \(most recent call last\)"),
@@ -327,16 +398,37 @@ def esemeny_ment(e):
     psql(sql)
 
 
-def karanten_be(ok, tipus):
-    """maintenance_mode = true + a karanten allapot rogzitese. Idempotens."""
+def karanten_be(ok, tipus, azonnali=False):
+    """maintenance_mode = true + a karanten allapot rogzitese. Idempotens.
+
+    `tipus` az esemeny kategoriaja (ez kerul a quarantine_source mezobe),
+    `azonnali` pedig az, hogy a jel az "azonnali" osztalyba tartozik-e.
+
+    Idokorlat: a KUSZOB-alapu karanten KARANTEN_TTL_MIN perc utan magatol
+    feloldodik (lasd _auto_feloldas), hogy egy elosztott zaj-burst ne
+    eredmenyezzen vegtelen kiesest. Az "azonnali" jelzesu karanten (meghekkelt
+    szerver, engedely nelkuli exec) idokorlat NELKUL zarva marad, amig te fel
+    nem oldod."""
+    if azonnali or KARANTEN_TTL_MIN <= 0:
+        until = ""
+    else:
+        helyi_tz = datetime.now(timezone.utc).astimezone().tzinfo
+        until = (datetime.now(helyi_tz) + timedelta(minutes=KARANTEN_TTL_MIN)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
     sql = "\n".join([
         beallitas_ir("maintenance_mode", "true"),
         beallitas_ir("quarantine_active", "true"),
         beallitas_ir("quarantine_reason", ok),
         beallitas_ir("quarantine_at", most()),
         beallitas_ir("quarantine_source", tipus),
+        beallitas_ir("quarantine_until", until),
     ])
-    return psql(sql)
+    siker = psql(sql)
+    if siker:
+        _karanten_cache["ertek"] = True
+        _karanten_cache["at"] = time.time()
+    return siker
 
 
 def karanten_aktiv_e():
@@ -351,6 +443,82 @@ def karanten_aktiv_e():
         return False
 
 
+# A karanten allapotanak rovid ideig tarto cache-e: egy esemeny-ontes
+# (pl. scanner) ne generaljon adatbazis-lekerdezest soronkent.
+_karanten_cache = {"ertek": False, "at": 0.0}
+KARANTEN_CACHE_S = 10.0
+
+
+def _karanten_aktiv_cached():
+    now = time.time()
+    if now - _karanten_cache["at"] < KARANTEN_CACHE_S:
+        return bool(_karanten_cache["ertek"])
+    ertek = karanten_aktiv_e()
+    _karanten_cache["ertek"] = ertek
+    _karanten_cache["at"] = now
+    return ertek
+
+
+def _beallitas_olvas(kulcs):
+    """Egy app_settings ertek kiolvasása. A kulcs fix, de ugyanugy base64-en
+    keresztul megy az SQL-be, mint az iras (nincs idezojel-gond)."""
+    parancs, kornyezet = _psql_parancs(
+        ["-t", "-A", "-v", f"{WATCH_JELZO}=1",
+         "-c", f"SELECT value FROM app_settings WHERE key = {_sz(kulcs)}"]
+    )
+    try:
+        p = subprocess.run(parancs, text=True, capture_output=True, timeout=20, env=kornyezet)
+        return (p.stdout or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _auto_feloldas():
+    """A KUSZOB-alapu karanten idokorlatanak lejartakor magatol felold.
+
+    Az "azonnal" jelzesu karantennal nincs quarantine_until, ezert az itt
+    soha nem oldodik fel - azt csak az admin felulet (jelszo) oldja."""
+    if not karanten_aktiv_e():
+        return False
+    until = _beallitas_olvas("quarantine_until")
+    if not until:
+        return False
+    helyi_tz = datetime.now(timezone.utc).astimezone().tzinfo
+    try:
+        lejarat = datetime.strptime(until, "%Y-%m-%d %H:%M:%S").replace(tzinfo=helyi_tz)
+    except ValueError:
+        print(f"[watch] Ervenytelen quarantine_until: {until!r}", file=sys.stderr)
+        return False
+    if datetime.now(helyi_tz) < lejarat:
+        return False
+
+    cimke = "karanten automatikusan feloldva (idokorlat lejart)"
+    sql = "\n".join([
+        beallitas_ir("maintenance_mode", "false"),
+        beallitas_ir("quarantine_active", "false"),
+        beallitas_ir("quarantine_reason", ""),
+        beallitas_ir("quarantine_source", ""),
+        beallitas_ir("quarantine_until", ""),
+    ])
+    if not psql(sql):
+        return False
+    _karanten_cache["ertek"] = False
+    _karanten_cache["at"] = time.time()
+    esemeny_ment({
+        "tipus": "feloldas", "sulyossag": "info", "cimke": cimke,
+        "reszlet": f"idokorlat: {until}", "karanten": False,
+    })
+    try:
+        SOR.put_nowait({
+            "ido": most(), "tipus": "feloldas", "cimke": cimke,
+            "reszlet": f"idokorlat: {until}", "sulyossag": "info", "karanten": False,
+        })
+    except queue.Full:
+        pass
+    print(f"[watch] {cimke} (idokorlat: {until})")
+    return True
+
+
 def szivdobbanas():
     psql(beallitas_ir("watch_heartbeat", most()))
 
@@ -360,6 +528,10 @@ def takaritas():
 
 
 # ------------------------------------------------------------------- szunet
+
+# A szunet felső korlatta: a karanten felfuggesztese karbantartasra valo, nem
+# tartos kikapcsolas. Minden szunet bekerul az esemenynaploba.
+SZUNET_MAX_PERC = int(os.environ.get("MYRA_SZUNET_MAX", "480"))
 
 
 def szunet_aktiv_e():
@@ -373,13 +545,24 @@ def szunet_aktiv_e():
 
 
 def szunet_allit(perc):
+    try:
+        perc = int(perc)
+    except (TypeError, ValueError):
+        perc = 0
+    perc = max(0, min(perc, SZUNET_MAX_PERC))
     os.makedirs(OPS_DIR, exist_ok=True)
     with open(SZUNET_FAJL, "w", encoding="utf-8") as f:
         f.write(str(time.time() + perc * 60))
     if perc > 0:
-        print(f"[watch] Karanten felfuggesztve {perc} percre.")
+        print(f"[watch] Karanten felfuggesztve {perc} percre (max {SZUNET_MAX_PERC}).")
     else:
         print("[watch] Karanten-szunet vege.")
+    # Audit: minden felfuggesztes lathato legyen az admin feluleten es emailben.
+    _esemeny(
+        "szunet",
+        f"karanten-szunet: {perc} perc" if perc > 0 else "karanten-szunet vege",
+        "", "warn", None,
+    )
 
 
 # --------------------------------------------------------------- mentesi ablak
@@ -441,6 +624,20 @@ def alapvonal_olvas():
         return {}
 
 
+def _alapvonal_ment(adat):
+    """Az ujjlenyomat-alapvonal visszairasa. Csak a NEM biztonsagi jelzesu
+    valtozasnal hasznaljuk, hogy ne ismetlodjön az info-esemeny minden
+    ujrainditasnal."""
+    try:
+        os.makedirs(OPS_DIR, exist_ok=True)
+        with open(ALAPVONAL_FAJL, "w", encoding="utf-8") as f:
+            json.dump({"rogzitve": most(), "fajlok": adat}, f, indent=2)
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"[watch] Alapvonal iras hiba: {e}", file=sys.stderr)
+        return False
+
+
 def _integritas_ciklus():
     alapvonal = alapvonal_olvas()
     if not alapvonal:
@@ -454,7 +651,21 @@ def _integritas_ciklus():
             if regi is None:
                 alapvonal[utvonal] = uj
                 continue
-            if uj != regi:
+            if uj == regi:
+                continue
+            if regi == "nincs" and uj != "nincs":
+                # Uj vedett fajl jelent meg (pl. bovitettuk a vedett listat).
+                # Ez nem behatolas jele, ezert csak rogzitjuk - kulonben minden
+                # lista-bovites azonnali karantent valtana ki.
+                _esemeny(
+                    "integritas",
+                    f"uj vedett fajl rogzitve: {os.path.basename(utvonal)}",
+                    f"{utvonal}\n  uj: {uj[:16]}",
+                    "info",
+                    None,
+                )
+                _alapvonal_ment(alapvonal)
+            else:
                 _esemeny(
                     "integritas",
                     f"vedett fajl megvaltozott: {os.path.basename(utvonal)}",
@@ -462,7 +673,7 @@ def _integritas_ciklus():
                     "critical",
                     "azonnal",
                 )
-                alapvonal[utvonal] = uj  # csak egyszer jelentjuk
+            alapvonal[utvonal] = uj  # csak egyszer jelentjuk
 
 
 # --------------------------------------------------------------------- olvasok
@@ -492,26 +703,49 @@ def _folyam_olvas(parancs, feldolgozo, nev):
         time.sleep(10)
 
 
-def _kuszob_atlepve(kulcs):
-    """Sliding window szamlalo. True, ha az ablakban elerte a kuszobot."""
-    darab, ablak = KUSZOB[kulcs]
+# A forras-IP kinyerese a log sorbol: a strukturált jelzesbol (ip=...) vagy az
+# uvicorn access-log sorabol ("1.2.3.4:5678 - \"GET ..."). Ha nem sikerul, a jel
+# szamit, de az IP-diverzitashoz nem jarul hozza.
+_IP_SIGNAL_RX = re.compile(r"\bip=([0-9a-fA-F\.:]{3,45})")
+_IP_ACCESS_RX = re.compile(r"\s([0-9a-fA-F\.:]{3,45}):\d+ - \"")
+
+
+def _sor_ip(sor):
+    m = _IP_SIGNAL_RX.search(sor) or _IP_ACCESS_RX.search(sor)
+    return m.group(1)[:45] if m else ""
+
+
+def _kuszob_atlepve(kulcs, ip=""):
+    """Sliding window szamlalo. True, ha az ablakban elerte a kuszobot ES a jel
+    legalabb a megkivant szamu KULONBOZO forras-IP-rol erkezett. Egyetlen forras
+    igy nem tudja karantenba zarni a platformot."""
+    darab, ablak, min_ip = KUSZOB[kulcs]
     mostanra = time.time()
     with SZAMLALO_ZAR:
         d = SZAMLALOK[kulcs]
-        d.append(mostanra)
-        while d and mostanra - d[0] > ablak:
+        d.append((mostanra, ip or ""))
+        while d and mostanra - d[0][0] > ablak:
             d.popleft()
-        return len(d) >= darab
+        if len(d) < darab:
+            return False
+        return len({forras for _, forras in d if forras}) >= min_ip
 
 
-def _esemeny(tipus, cimke, reszlet, sulyossag="info", karanten_tipus=None):
+def _esemeny(tipus, cimke, reszlet, sulyossag="info", karanten_tipus=None, ip=""):
     """Egyetlen belepesi pont: osztalyoz, dont a karantenrol, sorba tesz."""
     karanten = False
     if KARANTEN_BE and karanten_tipus:
         if karanten_tipus == "azonnal":
             karanten = True
         elif karanten_tipus in KUSZOB:
-            karanten = _kuszob_atlepve(karanten_tipus)
+            if _karanten_aktiv_cached():
+                # Mar karantenban vagyunk: nem szamolunk tovabb. Kulonben a
+                # karanten sajat magat tartana fenn (a zar alatti 401/503
+                # valaszok is illeszkednenek a mintakra), es feloldas utan
+                # nehany keresessel azonnal vissza is zarulna.
+                cimke = f"{cimke} (mar karantenban, nem szamol)"
+            else:
+                karanten = _kuszob_atlepve(karanten_tipus, ip)
 
     if karanten and szunet_aktiv_e():
         karanten = False
@@ -527,7 +761,7 @@ def _esemeny(tipus, cimke, reszlet, sulyossag="info", karanten_tipus=None):
     }
 
     if karanten:
-        karanten_be(cimke, tipus)
+        karanten_be(cimke, tipus, karanten_tipus == "azonnal")
 
     esemeny_ment(e)
     try:
@@ -597,7 +831,7 @@ def log_feldolgozo(sor):
     for minta, cimke, sulyossag, karanten_tipus in LOG_MINTAK:
         if minta.search(sor):
             tipus = "log-sulyos" if sulyossag == "critical" else "log"
-            _esemeny(tipus, cimke, sor, sulyossag, karanten_tipus)
+            _esemeny(tipus, cimke, sor, sulyossag, karanten_tipus, _sor_ip(sor))
             return
 
 
@@ -659,6 +893,7 @@ def fociklus():
     puffer = []
     kovetkezo_urites = time.time() + KOTEG_MASODPERC
     kovetkezo_takaritas = time.time() + 3600
+    kovetkezo_feloldas = time.time() + 30
 
     while True:
         varakozas = max(1.0, kovetkezo_urites - time.time())
@@ -678,6 +913,15 @@ def fociklus():
                 puffer = []
             szivdobbanas()
             kovetkezo_urites = time.time() + KOTEG_MASODPERC
+
+        # A KUSZOB-alapu karanten idokorlatanak ellenorzese (30 masodpercenkent).
+        # Az "azonnal" jelzesu karantent ez nem erinti.
+        if time.time() >= kovetkezo_feloldas:
+            try:
+                _auto_feloldas()
+            except Exception as e:  # noqa: BLE001
+                print(f"[watch] Auto-feloldas hiba: {e}", file=sys.stderr)
+            kovetkezo_feloldas = time.time() + 30
 
         if time.time() >= kovetkezo_takaritas:
             takaritas()

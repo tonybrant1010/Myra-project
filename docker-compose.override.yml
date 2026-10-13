@@ -8,10 +8,11 @@ services:
       ENVIRONMENT: "production"
       TRUST_PROXY: "true"
       PROFILE_ENABLED: "true"
-      # Helyi modellszerver (llama.cpp llama-server) a nagy gepen. Ha nem erheto el,
-      # a chat az admin feluleten beallitott API-szolgaltatora esik vissza.
-      # A kulcs erteke a ~/myra/.env fajlban van (LOCAL_LLM_API_KEY=...).
-      OLLAMA_BASE_URL: "http://192.168.1.184:8080"
+      # Helyi modellszerver (llama.cpp llama-server) a nagy gepen, a WireGuard-alagut
+      # tunnel-cimen. A llama-server KIZAROLAG a 10.10.0.2-n figyel, a LAN-rol nem
+      # erheto el. Ha nem erheto el, a chat az admin feluleten beallitott
+      # API-szolgaltatora esik vissza. A kulcs a ~/myra/.env fajlban van.
+      OLLAMA_BASE_URL: "http://10.10.0.2:8080"
       OLLAMA_TIMEOUT_S: "360"
       LOCAL_LLM_API_KEY: "${LOCAL_LLM_API_KEY:-}"
       TTS_ENGINE: "piper"

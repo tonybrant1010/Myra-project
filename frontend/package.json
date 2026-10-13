@@ -14,9 +14,8 @@
     "audit:ci": "npm audit --omit=dev --audit-level=critical",
     "patch-dist": "node scripts/patch-dist.js",
     "export": "npx expo export --platform web",
-    "deploy": "npm run vercel:auth && npm run export && npm run patch-dist && npx --yes vercel --prod --yes",
-    "deploy:upload": "npm run vercel:auth && npx --yes vercel --prod --yes",
-    "vercel:auth": "npx --yes vercel whoami || npx --yes vercel login"
+    "deploy": "npm run export && npm run patch-dist && node scripts/deploy-local.js",
+    "deploy:local": "npm run deploy"
   },
   "dependencies": {
     "@babel/runtime": "^7.20.6",
@@ -24,7 +23,6 @@
     "@expo-google-fonts/manrope": "^0.4.2",
     "@expo/metro-runtime": "^6.1.2",
     "@expo/vector-icons": "^15.0.3",
-    "@google/genai": "^2.8.0",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-navigation/bottom-tabs": "^7.3.10",
     "@react-navigation/elements": "^2.3.8",
@@ -72,7 +70,7 @@
     "protobufjs": "7.6.5",
     "shell-quote": "1.12.0",
     "tar": "7.5.22",
-    "undici": "6.28.0",
+    "undici": "6.29.0",
     "ws": "8.21.0",
     "@istanbuljs/load-nyc-config": {
       "js-yaml": "3.15.1"
@@ -85,7 +83,7 @@
     "protobufjs": "7.6.5",
     "shell-quote": "1.12.0",
     "tar": "7.5.22",
-    "undici": "6.28.0",
+    "undici": "6.29.0",
     "ws": "8.21.0"
   },
   "private": true,

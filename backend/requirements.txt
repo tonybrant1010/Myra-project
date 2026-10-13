@@ -28,6 +28,3 @@ fpdf2==2.8.7
 
 # Local embeddings (ONNX Runtime, no PyTorch)
 fastembed==0.8.0
-
-# Gemini SDK
-google-genai>=2.2.0,<3

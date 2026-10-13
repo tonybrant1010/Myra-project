@@ -73,6 +73,11 @@ backend-search.py
 search-details.py
 backend/rag/
 
+# Uzemeltetesi futtatasok (helyi allapotok, nem valo verziokovetesbe)
+ops/*.bak-*
+backend/data/statisztika.json
+backend/data/.statisztikai-allapot.json
+
 # Deployment
 .vercel
 

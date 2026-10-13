@@ -10,24 +10,23 @@ Fontos: a Myra nem hivatalos diagnosztikai vagy terápiás eszköz, és nem hely
 Felhasználó böngészője
   |
   v
-Vercel frontend
-  - Expo web export
-  - /api útvonalak Vercel Function proxyn keresztül
-  - X-Myra-Proxy-Secret header hozzáadása
+myra-project.hu (a ház nyilvános IP-címe) → router port-forward (80/443)
   |
   v
-Cloudflare Tunnel  (api.myra-project.hu, tunnel: myra-szerver)
-  - a szerveren nincs nyitott port az internet felé
-  - cloudflared kifelé épít kapcsolatot
-  - útvonalszűrő: csak a ^/api/.*$ megy tovább, minden más 404 az élen
+Caddy (a backend szerveren, ugyanazon a domainen)
+  - Let's Encrypt tanúsítvány, automatikus megújítással
+  - HSTS és biztonsági fejlécek, CSP, kérésméret- és időkorlátok
+  - statikus frontend a /srv/myra mappából (azonos eredet az API-val)
+  - /api/* reverse proxy a 127.0.0.1:8001-re, X-Myra-Proxy-Secret fejléccel
+  - hozzáférési napló: /var/log/caddy/myra-access.log (fail2ban figyeli)
   |
   v
-Saját szerver (Ubuntu, hostnév: backend, Magyarország)
-  - Docker Compose, projekt: myra (myra-backend, myra-cloudflared, myra-docker-socket-proxy)
+Saját szerver (Ubuntu, hostnév: backend, 192.168.1.103, Magyarország)
+  - Docker Compose, projekt: myra (myra-backend, myra-docker-socket-proxy)
   - FastAPI / Uvicorn, csak 127.0.0.1:8001-en figyel
   - helyi RAG: multilingual-e5-large (1024 dim) + bge-reranker-base
   - myra-watch: integritás- és eseményfigyelő, automatikus karanténnal
-  - óránkénti pg_dump mentés (~/myra-backups)
+  - óránkénti pg_dump mentés (~/myra-backups), a modellszerverre is átmásolva
   |
   v
 Supabase EU Postgres (Írország, eu-west-1)
@@ -36,11 +35,25 @@ Supabase EU Postgres (Írország, eu-west-1)
   - IP-korlátozás: csak a szerver publikus IP-je
 ```
 
+A helyi nyelvi modell **külön gépen** fut, a backend szerverrel WireGuard-alagúton összekötve:
+
+```text
+backend szerver (192.168.1.103)  ←→  modellszerver (myrallm, 192.168.1.184)
+  - WireGuard: 10.10.0.1 ↔ 10.10.0.2
+  - a llama-server KIZÁRÓLAG a 10.10.0.2-n figyel, a LAN-ról nem érhető el
+  - a backend OLLAMA_BASE_URL értéke: http://10.10.0.2:8080
+```
+
 **2026-10-04 óta** a backend nem a Google Cloud VM-en, hanem a saját, otthoni Ubuntu
-szerveren fut Docker konténerben, Cloudflare Tunnel mögött. A Google Cloud VM kiürítve,
-az ottani tunnel törölve. Helyi adatbázis a szerveren **nincs és nem is lehet**: minden adat
-a Supabase-ben van. A frontend továbbra is Vercelen fut, a Vercel CLI-vel telepítve
-(nem GitHub-integrációval, lásd *Frontend Deploy*).
+szerveren fut Docker konténerben. **2026-10-13 óta** a frontend is innen megy: a Caddy
+szolgálja ki a `/srv/myra` mappából, ugyanazon a domainen, mint az API. A Cloudflare Tunnel
+és a Vercel megszűnt, a DNS zóna a Rackhost/dns24 névszerverein van. Helyi adatbázis a
+szerveren **nincs és nem is lehet**: minden adat a Supabase-ben van.
+
+**A ház IP-címe nem fix.** A DNS-rekordokat (`myra-project.hu` és `www` → a ház nyilvános
+IP-je) a Rackhost zónaszerkesztőjében **kézzel** kell frissíteni, ha a szolgáltató új címet
+ad — automatikus DDNS egyelőre nincs. Ugyanez az IP szerepel a Supabase allowlistjén is,
+tehát egy címváltás a DNS-t és az adatbázis-elérést is érinti.
 
 > A README további részeiben előforduló „VM” a backend szervert jelenti. A Google Cloud-
 > specifikus részek (GCP tűzfal, IAP, e2-micro mérések) történeti feljegyzések.
@@ -58,11 +71,10 @@ a Supabase-ben van. A frontend továbbra is Vercelen fut, a Vercel CLI-vel telep
 - bővített chat kontextus ugyanazon mérési szálon belül;
 - TXT beszélgetés-export a chat felületről;
 - asztali gépen Enterrel küldés a chatben (Shift+Enter új sor);
-- visszajelzés gomb a chat és a Live felületen, közvetlen e-mail-küldéssel a fejlesztőnek;
+- visszajelzés gomb a chat felületen, közvetlen e-mail-küldéssel a fejlesztőnek;
 - fórum-értesítés: jelzés a menüben és a menügombon, ha új poszt érkezett;
 - felhasználói adathordozhatóság (GDPR Art. 20) adatexporttal JSON formátumban;
 - felhasználói fiók és adatok végleges önkiszolgáló törlése (GDPR Art. 17);
-- Gemini Live beszélgetés az aktuális kapcsolat idejére korlátozott kontextussal;
 - Fórum (csoportos üzenőfal) egyedi becenevekkel, 12 választható emoji-avatarral, magyar trágárságszűrővel és szerzői/adminisztrátori törlési jogkörökkel;
 - Játszótér (Kikapcsolódás): kifestő, memóriajáték, kígyó és sudoku, globális ranglistával és választható becenévvel;
 - PDF-alapú hibrid (pgvector + magyar full-text, RRF) RAG tudásvisszakeresés relevancia-küszöbbel;
@@ -75,7 +87,7 @@ a Supabase-ben van. A frontend továbbra is Vercelen fut, a Vercel CLI-vel telep
 - admin felületen felhasználónkénti profilnézet (megtekintés, újraképzés, törlés);
 - admin adatbázis-mentés letöltés: a legfrissebb óránkénti, tudásanyag-index nélküli felhasználói mentés (`userdata-*.sql.gz`);
 - karbantartás / karantén alatt a felhasználók tájékoztató oldalt látnak (`MaintenanceGate`), a karbantartás végén az oldal magától újratöltődik;
-- Vercel frontend, saját szerveren futó backend, Supabase adatbázis.
+- saját szerveren futó frontend és backend (Caddy), Supabase adatbázis.
 
 ## Stack
 
@@ -93,8 +105,8 @@ a Supabase-ben van. A frontend továbbra is Vercelen fut, a Vercel CLI-vel telep
 - Gmail SMTP MFA kódokhoz
 - Docker / Docker Compose
 - LLM provider admin felületről konfigurálva: OpenAI, Anthropic, Gemini, Groq, Cerebras, Mistral,
-  valamint **Ollama** helyben futó modellekhez (`http://localhost:11434`, API kulcs nélkül;
-  ajánlott modellek: `myra`, `puli`, `racka`)
+  valamint **Ollama-kompatibilis helyi modellszerver** (`llama.cpp` `llama-server` a `myrallm`
+  gépen, WireGuard-alagúton elérve: `http://10.10.0.2:8080`, API kulccsal)
 - Statikus kód- és függőség-sérülékenység ellenőrzés (bandit, pip-audit)
 - Automatizált pytest tesztcsomag (biztonsági és megfelelőségi tesztek: OWASP szűrések, JWT token érvényesség, MFA ellenőrzés, biztonsági HTTP fejlécek validálása és GDPR megfelelőségi folyamatok)
 
@@ -103,7 +115,7 @@ a Supabase-ben van. A frontend továbbra is Vercelen fut, a Vercel CLI-vel telep
 - Expo Router
 - React Native Web
 - TypeScript
-- Vercel deploy
+- telepítés a saját szerverre (`npm run deploy`)
 - Expo web export
 
 ## Design Irány
@@ -148,7 +160,7 @@ váltasz, a `theme-tokens.css` tartalmát oda is be kell húzni.
 Natívon (iOS/Android) nincs CSS-változó, ezért ott a nappali paletta fix értékei élnek.
 
 Design módosításnál az alapelv: a működő app-felület maradjon az első képernyő, ne marketing landing page
-legyen belőle. A chat és a Live felület maradjon alacsony zajszintű, gyors, könnyen olvasható és mobilon is
+legyen belőle. A chat felület maradjon alacsony zajszintű, gyors, könnyen olvasható és mobilon is
 stabil. Új színpaletta, nagyobb vizuális átalakítás vagy Myra promptot érintő változtatás csak külön jóváhagyással
 kerülhet be.
 
@@ -160,22 +172,19 @@ A kvíz normalizálása a pszichometriában standard POMP-skálázást használj
 
 A v1 (2026-07-02 előtt) csak a maximummal osztott, ezért az A/P/H dimenziók nem érték el a skála szélét; a P-nél emiatt a 4-es bucket ("erős érzelemszabályozás") érvényes kitöltésből elérhetetlen volt. A v2 lineáris átskálázás: a kitöltők sorrendjét és a dimenziók közötti korrelációkat nem változtatja meg, de a határközeli kitöltők bucketje eltolódhat. Az új mérések `norms` mezőjében `"v": 2` jelzi a verziót; a régi (v1) mérések változatlanul maradnak, és a 30 napos ciklus végén maguktól lejárnak. A számítási referencia (`backend/data/esv_calc.ods`, ill. a gyökérben az `ESV_Calc1_egyéni_v2.ods`) ugyanezeket a képleteket tartalmazza, üressor-védelemmel (üres adat-sor nem kap értéket és diagnózist).
 
-### Vercel API proxy
+### Frontend és API kiszolgálás (azonos origin)
 
-A böngészőből induló API hívások `/api/...` útvonalra mennek. Vercelen ezt a `dist/api/proxy.js` Vercel Function kezeli, amely:
+A böngészőből induló API hívások `/api/...` útvonalra mennek, **ugyanarra a domainre**, amiről
+a felület betöltődött. A statikus frontendet és a `/api/*` kéréseket is a szerveren futó
+**Caddy** szolgálja ki:
 
-- továbbítja a kérést a VM backend felé;
-- hozzáadja a `X-Myra-Proxy-Secret` headert;
-- kiszűri a hop-by-hop HTTP headereket, például `transfer-encoding` és `content-length`, hogy a POST kérések ne akadjanak el a Vercel Function proxyban;
-- megakadályozza, hogy a backend publikus originje közvetlenül használható legyen.
+- a `/srv/myra` mappából kiszolgálja az Expo web buildet;
+- a `/api/*` kéréseket továbbítja a `127.0.0.1:8001`-re (a backend konténerhez);
+- a továbbított kérésekhez hozzáadja a `X-Myra-Proxy-Secret` fejlécet;
+- TLS-t bont, HSTS-t és biztonsági fejléceket ad, és a hozzáférési naplót írja.
 
-Emiatt a böngészőben gyakran ilyen útvonal látszik:
-
-```text
-/api/api/auth/login
-```
-
-Ez szándékos. Az első `/api` a Vercel proxy útvonala, a második `/api` a FastAPI backend prefixe.
+Mivel a felület és az API **azonos originen** van, nincs Vercel-proxy, nincs CORS és nincs
+`vercel.json`-rewrite: a böngésző közvetlenül a `/api/...` útvonalat hívja.
 
 ### Backend origin védelem
 
@@ -191,52 +200,47 @@ Ha ez hiányzik vagy rossz, a backend válasza:
 {"detail":"Direct access to origin is forbidden."}
 ```
 
-A VM `.env` és a Vercel project env ugyanazt a `MYRA_PROXY_SECRET` értéket kell használja.
+A `.env` (`MYRA_PROXY_SECRET`) és a Caddy ugyanazt az értéket használja: a titkot a Caddy
+fűzi be a `/api/*` kérésekhez (`/etc/caddy/myra.env`, amit a `caddy.service` systemd drop-in
+tölt be). A titok így a szerveren marad, a böngészőbe nem kerül.
 
-A proxy-titok a **harmadik** védelmi réteg. A teljes lánc kívülről befelé:
+A teljes lánc kívülről befelé:
 
 | réteg | mit csinál | hol van beállítva |
 |---|---|---|
-| 1. Cloudflare Tunnel | a szerveren nincs publikált port, a `cloudflared` kifelé épít kapcsolatot | `docker-compose.yml`, UFW tűzfal |
-| 2. útvonalszűrő | csak a `^/api/.*$` megy le az alagúton, minden más 404 | Cloudflare Zero Trust → Tunnels → Published application routes → **Path** |
-| 3. proxy-titok | `/api/*` alatt is csak a saját Vercel proxynkat engedi be | `MYRA_PROXY_SECRET` a VM `.env`-ben és a Vercelen |
+| 1. router + tűzfal | kifelé csak a 80/443 van nyitva; a backend `127.0.0.1:8001`-en figyel, tehát a LAN-ról sem érhető el | router port-forward, `docker-compose.yml`, UFW |
+| 2. Caddy | TLS + biztonsági fejlécek, kérésméret- és időkorlátok, hozzáférési napló, fail2ban-tiltás | `/etc/caddy/Caddyfile` |
+| 3. proxy-titok | a `/api/*` kérésekhez a Caddy fűzi be; a backend csak így fogad | `MYRA_PROXY_SECRET` a `.env`-ben és a Caddy környezetében |
 
-A 2. réteg 2026-08-14 óta él. Előtte a gyökérre menő scanner-kopogtatás (`HEAD /`)
-lejutott a backend konténerig, és ott kapott 403-at; most már a cloudflared elhajtja,
-a gépet el sem éri.
-
-Fontos, hogy ez a hosztnév **szándékosan publikus**: a Vercel szerver nélküli függvényei
-váltakozó AWS-címekről hívják a backendet, tehát IP-alapú engedélyezés nem lehetséges.
-A név a Cloudflare TLS-tanúsítványán keresztül a nyilvános Certificate Transparency
-naplókba is kikerül, tehát meg fogják találni. Attól, hogy „csak a frontend éri el",
-nem az alagút véd, hanem a proxy-titok.
+A `/api/config` az egyetlen útvonal, amit a backend loopbackről titok nélkül is átenged (ezt
+használja a konténer healthcheckje és a karbantartási kapu).
 
 Ellenőrzés kívülről:
 
 ```bash
-curl -i https://api.myra-project.hu/             # 404, a cloudflared útvonalszűrője
-curl -i https://api.myra-project.hu/api/config   # 403, "Direct access to origin is forbidden."
-curl -m 5 http://<SZERVER_PUBLIKUS_IP>:8001/api/config  # timeout
+curl -i https://myra-project.hu/                        # 200, a Caddy szolgálja ki a frontendet
+curl -i https://myra-project.hu/api/config              # 200 (loopback-exempt útvonal)
+curl -m 5 http://<SZERVER_PUBLIKUS_IP>:8001/api/config  # timeout: a backend nem publikált
 ```
 
-A két válasz különbsége mutatja, melyik réteg állította meg a kérést: a 404-nek nincs
-`Content-Type` fejléce és chunked, mert a cloudflared adja; a 403 JSON törzzsel jön,
-mert az már a FastAPI middleware.
+A backend közvetlen elérését a 2. és 3. réteg együtt zárja: a 8001-es port sem kívülről, sem
+a LAN-ról nem érhető el (a backend kizárólag a loopbacken figyel), a proxy-titok nélküli
+kérés pedig `403`-at kap.
 
-### Szerver tűzfal (2026-10-04 óta)
+### Szerver tűzfal (2026-10-13 óta)
 
 | szabály | forrás | port | állapot |
 |---|---|---|---|
+| HTTP / HTTPS | `0.0.0.0/0` | tcp:80, tcp:443 | aktív — a publikus webes forgalom (ide érkezik a router port-forwardja) |
 | SSH | `192.168.1.0/24` | tcp:22 | aktív — csak a helyi hálózatról |
 | minden más bejövő | — | — | tiltva (UFW alapértelmezés) |
 
 A backend a compose-ban `127.0.0.1:8001:8001`-re van kötve, tehát a helyi hálózatról sem
-érhető el, csak a szerveren belülről és a `cloudflared`-en át. A `myra-cloudflared`
-szolgáltatás a compose-ban a `tunnel` profil mögött van. Ellenőrzés:
+érhető el — kizárólag a szerveren belülről, a Caddy-n át. Ellenőrzés:
 
 ```bash
 sudo ufw status numbered
-ss -tln | grep -vE '127\.0\.0|::1'   # csak a 22-es port maradhat
+ss -tln | grep -vE '127\.0\.0|::1'   # 22, 80 és 443 maradhat (a 80/443-at a Caddy tartja)
 ```
 
 ### GCP tűzfal állapota (történeti, 2026-08-14 – 2026-10-04)
@@ -267,7 +271,8 @@ van engedélyezve (`<SZERVER_PUBLIKUS_IP>/32`). A régi Google VM címe 2026-10-
 el az adatbázist (`EADDRNOTALLOWED`), és a Myra leáll. Ilyenkor az új IP-t kell felvenni az
 allowlistre. Az aktuális cím: `curl -s ifconfig.me` a szerveren.
 
-A Vercel IP változása ezt nem érinti, mert a Supabase adatbázishoz csak a backend csatlakozik.
+A frontend és a backend ugyanarról a szerverről megy, ezért a Supabase allowlistjén csak ez
+az egy cím szerepel; a böngésző sosem kapcsolódik közvetlenül az adatbázishoz.
 
 ## RAG / Tudásanyag
 
@@ -586,19 +591,20 @@ reply_cleaned context=chat removed_chars=20
 hogy a bemeneti oldali javítás után próbálkozik-e még a modell. 2026-08-17 óta négy mérésen
 (köztük 120-as előzményen) egyetlen ilyen sor sem keletkezett.
 
-## Live Beszélgetés
+## Hang (felolvasás)
 
-A Live kapcsolat közvetlenül a Google Gemini Live API-val kommunikál. A backend csak
-rövid élettartamú Live tokent ad ki; a böngésző mikrofonhangja és a generált hang a
-Live kapcsolatban halad. A kapcsolatról nem készül leirat és bezárás után nem marad
-felhasználói Live-előzmény.
+A felolvasás kizárólag **helyben**, az adatkezelő saját szerverén futó Piper motorral
+történik (magyar női hang: `hu_HU-anna-medium`), a `/api/tts/speak` végponton. Hanganyag
+külső szolgáltatóhoz nem kerül.
 
-A Live indításakor a backend technikai kontextusként átadja az aktuális
-`Europe/Budapest` időpontot. Ez nem módosítja az admin felületen tárolt Myra-promptot.
+> **2026-10-13:** a Myra Live (Gemini Live API) funkció **kikerült** a rendszerből: a
+> böngésző mikrofonhangját külső szolgáltatóhoz továbbította, és a gyakorlatban nem
+> használták. Törölve a képernyő, a `/api/live/token` végpont, valamint a `@google/genai`
+> (frontend) és a `google-genai` (backend) függőség is.
 
 Backend újraindítás után a RAG modell előmelegítése az alkalmazás indulásakor fut le,
 egyetlen próba-embeddinggel és egy csak olvasó kereséssel. Emiatt a konténer csak a
-modell betöltése után lesz kész, de az első chat- vagy Live-felhasználónak nem kell
+modell betöltése után lesz kész, de az első chat-felhasználónak nem kell
 megvárnia a FastEmbed/Hugging Face cold startot. Ez nem indít tudásanyag-élesítést és
 nem ír át `knowledge_chunks` rekordot.
 
@@ -626,7 +632,6 @@ frontend/
   app/
     chat.tsx
     forum.tsx
-    myra-live.tsx
     relax.tsx
     relax-coloring.tsx
     relax-match.tsx
@@ -642,14 +647,21 @@ frontend/
       forumSeen.ts
   assets/
   scripts/patch-dist.js
-  vercel.json
+  scripts/deploy-local.js  # a dist feltöltése a szerverre (tarball -> scp -> /srv/myra)
+  vercel.json              # a patch-dist BEMENETE: ebbol keszul a dist/vercel.json.
+                           #   A kiszolgalast a Caddy vegzi, ezert a kimenet ott nem
+                           #   szamit; a fajl a fejlec-definiciok miatt marad a repoban.
   package.json
 
 ops/
   myra-watch.py        # integritás- és eseményfigyelő, karanténnal (Supabase mód)
   myra-watch.service
+  myra-stats.py        # forgalmi statisztika a Caddy JSON-naplójából (percenként)
+  myra-stats.service
+  myra-stats.timer
   myra-deploy.py       # backend telepítés füstteszttel és visszaállással
-  myra-backup.sh       # óránkénti pg_dump mentés (a szerveren: ~/myra-backup.sh)
+  myra-backup.sh       # óránkénti mentés: DB + konfig + frontend, két gépre
+  llm/                 # a modellszerver telepítése (llama-server.service, models.ini)
 
 publication/
 docker-compose.yml
@@ -794,22 +806,9 @@ lát, de gyakorlatilag ingyen van.
 
 ## Frontend Deploy
 
-**Fontos (2026-10-04):** a Vercel projekt **nincs a GitHubhoz kötve**: a `git push` nem
-telepít. Az élesítés a Vercel CLI-vel történik (`npm run deploy`), a Vercel projekt a
-`tonybrant-s-projects` csapat `frontend` projektje. Első alkalommal egy gépen:
-
-```cmd
-npx vercel login
-npx vercel link --yes --project frontend --scope tonybrant-s-projects
-```
-
-**Csak tiszta git-klónból telepíts** (pl. `C:\Users\User\myra-github\frontend`), ahol nincs
-`frontend/.env`. A fejlesztői munkamappa `.env`-je az `EXPO_PUBLIC_BACKEND_URL`-t a helyi
-hálózati címre állítja, és ez a buildbe beégve élesben minden API-hívást elrontana. Üres
-`EXPO_PUBLIC_BACKEND_URL` mellett a frontend relatív `/api` útvonalat használ, ami a Vercel
-proxyn megy a backendhez.
-
-A frontend deploy a `frontend` mappából történik:
+**Fontos (2026-10-13):** a frontend a **saját szerverről** megy: a Caddy szolgálja ki a
+`/srv/myra` mappából, ugyanazon a domainen, mint az API (azonos eredet). Nincs Vercel-proxy,
+nincs CORS és nincs `vercel.json`-rewrite. A telepítés a `frontend` mappából történik:
 
 ```bash
 cd frontend
@@ -826,30 +825,35 @@ A deploy folyamat:
 
 1. Expo web export készül.
 2. `scripts/patch-dist.js` javítja a `dist` kimenetet.
-3. Létrejön a Vercel proxy function.
-4. Frissül a `dist/vercel.json`.
-5. A nappali/éjszakai paletta (`scripts/theme-tokens.css`) beszúródik a `dist/index.html` `<head>`-jébe.
-6. Vercel production deploy fut.
+3. A nappali/éjszakai paletta (`scripts/theme-tokens.css`) beszúródik a `dist/index.html` `<head>`-jébe.
+4. `scripts/deploy-local.js` tarballt készít a `dist`-ből, `scp`-vel feltölti a backend hostra
+   (`/tmp/myra_dist.tgz`), majd SSH-n kicsomagolja a `/srv/myra` mappába.
 
-A `patch-dist.js` az 5. lépés után **ellenőriz is**: ha a paletta bármi miatt nem került be
+Előfeltétel: **jelszó nélküli SSH** a backend hostra, és hogy a `/srv/myra` a `myra-admin`
+tulajdona legyen (különben a kicsomagolás `sudo` nélkül nem megy).
+
+**Csak tiszta git-klónból telepíts** (pl. `C:\Users\User\myra-github\frontend`), ahol nincs
+`frontend/.env`. A fejlesztői munkamappa `.env`-je az `EXPO_PUBLIC_BACKEND_URL`-t a helyi
+hálózati címre állítja, és ez a buildbe beégve élesben minden API-hívást elrontana. Üres
+`EXPO_PUBLIC_BACKEND_URL` mellett a frontend relatív `/api` útvonalat használ, ami azonos
+originen megy a backendhez.
+
+A `patch-dist.js` a 3. lépés után **ellenőriz is**: ha a paletta bármi miatt nem került be
 az `index.html`-be, kivételt dob és a deploy megáll. Palettát nem tartalmazó `index.html`
 esetén ugyanis minden szín feloldatlan `var(--myra-*)` maradna, vagyis szín nélkül menne ki
 az oldal.
 
-Ezért a `npm run deploy:upload` önmagában **nem elég**, ha a `+html.tsx`-en vagy a
-palettán változtattál: a beszúrás az `expo export` utáni `patch-dist` lépésben történik.
-
 ## Lokális Fejlesztés
 
-Backend — **csak a backend szolgáltatást indítsd**, mert a `cloudflared` a
-`CLOUDFLARE_TUNNEL_TOKEN`-t követeli meg, ami csak a VM `.env`-jében van:
+Backend — a fejlesztői gépen elég a backend szolgáltatást indítani:
 
 ```bash
 docker compose up -d --build backend
 ```
 
 A teljes `docker compose up` a fejlesztői gépen hibával áll meg — ez szándékos, nem hiba:
-a compose fájl a VM éles állapotát tükrözi.
+a compose fájl az éles állapotot tükrözi, és a `.env` kötelező értékei (`JWT_SECRET`,
+`DATABASE_URL`) a fejlesztői gépen nincsenek meg.
 
 Frontend:
 
@@ -900,7 +904,6 @@ TRUST_PROXY=true
 TTS_ENGINE=gemini
 GEMINI_TTS_VOICE=Kore
 GEMINI_TTS_MODEL=gemini-3.1-flash-tts-preview
-CLOUDFLARE_TUNNEL_TOKEN=...
 MYRA_ALERT_EMAIL=...
 RAG_CHAT_CHUNKS=5
 RAG_VECTOR_MAX_DISTANCE=0.62
@@ -921,23 +924,18 @@ a beszélgetésből. A kód felső határa 300 üzenet és 120 000 karakter; enn
 `server.py`-ban a `_env_int` korlátait is emelni kell. A limit elérésekor a rendszer
 **csendben eldobja a legrégebbi üzeneteket** — nincs róla se hibaüzenet, se logsor.
 
-A `CLOUDFLARE_TUNNEL_TOKEN` a `cloudflared` konténeré. Ha kiszivárog, a Cloudflare Zero
-Trust felületen töröld a tunnelt és hozz létre újat — a token nem forgatható a helyén.
+A `MYRA_PROXY_SECRET` értékét a backend a `.env`-ből olvassa; ugyanezt az értéket kapja meg a
+Caddy is (`/etc/caddy/myra.env`, amit a `caddy.service` systemd drop-in tölt be), és ő fűzi be
+a `/api/*` kérésekhez. A titok így a szerveren marad, a böngészőbe nem kerül.
 
-Vercel:
+Frontend env (`frontend/.env`, csak lokális fejlesztéshez):
 
 ```env
-MYRA_PROXY_SECRET=...
-MYRA_BACKEND_ORIGIN=https://api.myra-project.hu
-EXPO_PUBLIC_BACKEND_URL=/api
-MYRA_PROXY_TIMEOUT_MS=55000
+EXPO_PUBLIC_BACKEND_URL=http://localhost:8001
 ```
 
-A `MYRA_BACKEND_ORIGIN` 2026-08-13 óta a Cloudflare Tunnel hosztneve, nem a VM IP-je. A
-`MYRA_PROXY_TIMEOUT_MS` 55000, hogy a proxy ne vágja el az LLM-választ a Vercel ~60 mp-es
-függvénykorlátja előtt.
-
-Vercelen a `MYRA_BACKEND_ORIGIN`/`BACKEND_URL` és a `MYRA_PROXY_SECRET` kötelező. Ha bármelyik hiányzik, a proxy szándékosan hibával leáll, és nem próbál régi, beégetett VM IP-re továbbítani.
+Élesben ez **üresen marad**: a felület és az API azonos originen van, ezért a frontend relatív
+`/api` útvonalat használ.
 
 ## Git / Repo Higiénia
 
@@ -969,11 +967,14 @@ backend/rag/
 
 ## Biztonsági Megjegyzések
 
-- A backend nem érhető el közvetlenül az internetről: Cloudflare Tunnel mögött fut, a szerveren nincs publikált port, a backend csak `127.0.0.1`-en figyel. Fölötte az alagút útvonalszűrője (csak `^/api/.*$`), alatta a proxy-titok — három réteg, lásd a *Backend origin védelem* szakaszt.
-- A szerveren **egyetlen TCP-port sem nyitott** az internet felé. Az SSH kizárólag a helyi hálózatról (`192.168.1.0/24`) érhető el (UFW). A routeren nem lehet porttovábbítás a szerver felé.
+- A backend nem érhető el közvetlenül az internetről: csak `127.0.0.1:8001`-en figyel, kívülről a Caddy proxyzik rá (a router csak a 80/443-at továbbítja). A `/api/*` kérésekhez a Caddy fűzi be a proxy-titkot — a lépcsőket lásd a *Backend origin védelem* szakaszban.
+- A szerveren kifelé **csak a 80/443** nyitott (a webes forgalom számára), minden más bejövő tiltott. Az SSH kizárólag a helyi hálózatról (`192.168.1.0/24`) érhető el (UFW). A router port-forwardja (80/443) a backend szerverre mutat.
 - Futásidejű felügyelet: az `ops/myra-watch.py` systemd szolgáltatás emailben riaszt, és védett fájl módosulásakor vagy nem engedélyezett konténeren belüli parancsindításkor karanténba zárja a platformot. Karbantartási sorrend: *Backend Üzemeltetés*.
 - A `~/myra` mappák „other” írási joga 2026-10-04-én megszűnt (`chmod -R o-w`); a `.env` `600`-as.
-- A `cloudflared` képe `:latest`-re van állítva, tehát minden `docker compose pull` a legfrissebbet hozza, verziórögzítés nélkül. Frissítés után ellenőrizd az útvonalszűrőt is (`curl -i https://api.myra-project.hu/` → 404).
+- A tanúsítványt a Caddy szerzi be (Let's Encrypt, HTTP-01 igazolás) és automatikusan megújítja; a `myra-project.hu` és a `www` is ugyanarra a szerverre mutat. A Caddy konfigja `/etc/caddy/Caddyfile`, a proxy-titok `/etc/caddy/myra.env` (600).
+- A bejövő forgalmat a **fail2ban** négy börtöne védi a Caddy naplója alapján: `sshd`, `myra-auth` (csak a `/api/auth/*` 401/403 válaszai), `myra-badpath` (a path elejére horgonyzott scanner-minták, 3 próba után) és `myra-rate` (400 kérés/perc). A belső hálózat az `ignoreip`-ben van. **Tanulság:** a `/vendor-assets/...` betűtípus-útvonalak nem szerepelhetnek a mintákban, mert minden oldalletöltés tartalmazza őket — egy ilyen minta a tulajdonos saját IP-jét is kitiltaná.
+- Forgalmi statisztika: az `ops/myra-stats.py` percenként, növekvő módon dolgozza fel a Caddy JSON-naplóját, és a `backend/data/statisztika.json`-ba írja az összesítést (sikeres / elutasított / szerverhiba, frontend vs. API bontás, státuszkódok, legtöbb elutasított IP, fail2ban-állapot). Ezt a `GET /api/admin/stats` végpont és az admin felület „Forgalom” kártyája jeleníti meg.
+- Az adatkezelési tájékoztató és a felhasználási feltételek verziója `2026-10-13` (backend: `LEGAL_PRIVACY_VERSION` / `LEGAL_TERMS_VERSION`, frontend: `accepted_*_version`); a GDPR-dokumentum már a saját szerveres felállást írja le (nincs Vercel, nincs Cloudflare).
 - A Supabase publikus REST API-ja zárt: minden táblán be van kapcsolva az RLS, policy nélkül — ez Postgresben teljes tiltást jelent. Az `anon` kulccsal semmilyen sor nem olvasható. Ezt ne kapcsold ki: a backend közvetlen Postgres-kapcsolattal, tábla-tulajdonosként dolgozik, nem a REST API-n keresztül.
 - API kulcsot és `.env` fájlt ne commitolj.
 - Éles adatbázis-exportot vagy felhasználói adatot tartalmazó fájlt ne commitolj.
@@ -987,17 +988,17 @@ backend/rag/
 - A rate-limit tárolók automatikusan takarítják a régi vagy túl sok rekordot, hogy támadás alatt se nőjenek korlátlanul memóriában.
 - Az admin beállítások mezőszintű hosszlimiteket kapnak, így túlméretes modelnév, API kulcs, globális üzenet, prompt vagy manuális tudásbázis-szöveg nem kerülhet kontroll nélkül adatbázisba.
 - A jelszó-reset frontend hívás a központi `apiUrl()` útvonalat használja, nem fix domainre küld érzékeny adatot.
-- A backend és a Vercel frontend alap biztonsági HTTP fejléceket ad: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, éles HTTPS alatt `Strict-Transport-Security`.
-- A Vercel API proxy fail-closed módon működik: hiányzó backend origin vagy proxy secret esetén nem továbbít kérést, és nincs beégetett VM IP fallback.
+- A biztonsági HTTP fejléceket (HSTS, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, CSP) a Caddy adja minden válaszhoz; a `write` időkorlát 15 perc, hogy a helyi modell lassú (hideg gyorsítótár utáni) válaszát ne vágja el.
+- A backend fail-closed módon működik: ha a `MYRA_PROXY_SECRET` nincs beállítva, vagy a beérkező fejléc nem egyezik, minden nem-loopback kérés `403`-at kap (`/api/config` a kivétel, mert a healthcheck használja).
 - A backend production módban az `OPTIONS` preflight kéréseket is csak engedélyezett originről engedi proxy secret nélkül; ismeretlen origin vagy direkt origin nélküli OPTIONS kérés 403-at kap.
 - A frontend `package.json` célzott `overrides`/`resolutions` réteget használ a magasabb kockázatú transitive build-eszköz sérülékenységek zárására; Expo/React Native főverziót csak külön regressziós teszttel frissíts. A pineket rendszeresen felül kell vizsgálni: egy korábban javító verzió idővel maga is sérülékennyé válhat, és akkor a pin már lefelé rögzít.
 - Az `overrides` csak akkor kaphat lapos (verziónként nem bontott) értéket, ha a csomag egyetlen főverzióban van jelen a fában. A `brace-expansion` például négy példányban, négy főverzióval szerepel, és az 5-ös ág már objektumot exportál függvény helyett — lapos override esetén a `minimatch v3` build közben `expand is not a function` hibával áll meg. Ilyenkor `npm ls <csomag>` és a lockfile alapján kell dönteni, nem az `npm audit` javaslata alapján.
 - Az `image-size` sérülékenységéhez (GHSA-w3rx-r6r6-pgpr, GHSA-5p2g-fcmc-qvqq) nincs javított kiadás: a legfrissebb verzió is érintett, és a Metro bundleren keresztül az egész Expo/React Native lánc örökli. Emiatt a `--audit-level=high` kapu nem teljesíthető. A CI ezért `--audit-level=critical` szinten blokkol (`audit:ci`), a magas szintű jelentés pedig nem blokkoló lépésként fut. Ez build idejű, nem futásidejű kockázat: a hibás kód a bundlerben van, nem a böngészőbe kiküldött csomagban, és nem lát felhasználói bemenetet.
 - Az `uuid` maradék figyelmeztetése az `xcode` csomagon keresztül jön, ami kizárólag natív iOS-építéshez kell; a webes bundle nem tartalmazza.
 - Backend dependency frissítés előtt és után futtasd a `pip-audit -r backend/requirements.txt` ellenőrzést; a framework csomagokat (`fastapi`, `starlette`) mindig együtt validáld teljes backend teszttel.
-- Szigorú Content-Security-Policy jelenleg nincs bekapcsolva, mert a Gemini Live/WebSocket és Expo web bundle miatt külön, célzott tesztelést igényelne.
+- A CSP be van kapcsolva (`default-src 'self'`), és szándékosan a saját originre korlátozza a kapcsolatokat: külső szolgáltatóhoz a felület nem indít kapcsolatot. Az inline script és stílus engedélyezett, mert a build beágyazott paletta-szkriptet tesz az `index.html`-be.
 - Az admin log nézet maszkolja az URL-ben vagy headerben megjelenő API kulcsokat és bearer tokeneket.
 - Az admin audit log `detail` és `user_agent` mezői mentés előtt is maszkolva vannak, és felhasználótörlésnél csak a belső `user_id` kerül naplózásra, email cím nem.
 - A személyes vagy admin jellegű API válaszok `Cache-Control: no-store` fejléccel mennek ki.
-- Adatbázis-mentés: az `ops/myra-backup.sh` óránként (cron) két dumpot készít a `~/myra-backups/orankent` alá: teljes (`db-*.sql.gz`) és a `knowledge_chunks` tartalma nélküli felhasználói mentést (`userdata-*.sql.gz`). Megőrzés: óránkénti 48 óra, napi 30 nap; tükrözés a második lemezre (`/mnt/win`), ha csatolva van. A napi `tar.gz` az `.env`-et is tartalmazza, ezért azt az alkalmazás nem szolgálja ki.
-- Az admin „Adatbázis mentés letöltése” gomb a legfrissebb `userdata-*.sql.gz`-t adja ki (a mappa csak olvasható volume-ként van a konténerben: `/app/backups`). A Vercel proxy 4,5 MB-os válaszkorlátja miatt a teljes, tudásanyag-indexet is tartalmazó mentés (~6 MB) innen nem tölthető le, azt a szerverről kell levenni. A letöltés admin audit logba kerül.
+- Mentés: az `ops/myra-backup.sh` óránként fut (`myra-backup.timer`), és két dumpot készít a `~/myra-backups/orankent` alá: teljes (`db-*.sql.gz`) és a `knowledge_chunks` tartalma nélküli felhasználói mentést (`userdata-*.sql.gz`). Naponta egyszer emellé kerül a konfig-tarball (Caddy, fail2ban, systemd unitok), a projekt-fájlok és a frontend build. **Megőrzés darabszám alapján**: óránkénti DB 6, napi 7, frontend 3, konfig 7 példány — a régebbiek automatikusan törlődnek. A mentés tükröződik a `/mnt/win`-re (ha csatolva) **és átmásolódik a modellszerverre** (`myrallm`, 10.10.0.2) a WireGuard-alagúton, tehát a backend host kiesése nem viszi el. A napi `tar.gz` az `.env`-et is tartalmazza, ezért azt az alkalmazás nem szolgálja ki.
+- Az admin „Adatbázis mentés letöltése” gomb a legfrissebb `userdata-*.sql.gz`-t adja ki (a mappa csak olvasható volume-ként van a konténerben: `/app/backups`). A külső proxy megszűnésével a korábbi 4,5 MB-os válaszkorlát is eltűnt, de a teljes, tudásanyag-indexet is tartalmazó mentést továbbra is a szerverről érdemes levenni. A letöltés admin audit logba kerül.

@@ -7,7 +7,6 @@
       "frontend/app/login.tsx",
       "frontend/app/welcome.tsx",
       "frontend/app/chat.tsx",
-      "frontend/app/myra-live.tsx",
       "frontend/app/quiz.tsx",
       "frontend/app/quiz-result.tsx"
     ],
