@@ -86,11 +86,8 @@ PIPER_NOISE_SCALE = os.environ.get("PIPER_NOISE_SCALE", "0.667")
 PIPER_NOISE_W = os.environ.get("PIPER_NOISE_W", "0.8")
 TTS_ENGINE = os.environ.get("TTS_ENGINE", "none").strip().lower()
 
-# A felolvasó kizárólag a helyi Piper motort használja (magyar női hang: Anna).
-# A korábbi Gemini TTS ág 2026-09-14-én kikerült: a Google megszüntette hozzá az
-# ingyenes keretet, és a helyi szintézis amúgy is gyorsabb (RTF ~0,09) és
-# hálózatfüggetlen. A Myra Live (Gemini Live API) 2026-10-13-án szintén kikerült:
-# hanganyag nem megy ki külső szolgáltatóhoz.
+# A felolvasó kizárólag a helyi Piper motort használja (magyar női hang: Anna):
+# gyorsabb (RTF ~0,09), hálózatfüggetlen, és hanganyag nem megy ki külső szolgáltatóhoz.
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("myra")
@@ -379,7 +376,7 @@ except ValueError:
     RAG_VECTOR_MAX_DISTANCE = 0.62
 CHAT_MESSAGE_MAX_CHARS = _env_int("CHAT_MESSAGE_MAX_CHARS", 8000, 500, 20000)
 # Az LLM-hívás teljes költségkerete. Korábban 90s timeout x 3 próba (+2x8s várakozás)
-# volt, azaz worst case ~4,8 perc — a Vercel proxy viszont jóval korábban bontott, így
+# volt, azaz worst case ~4,8 perc — a proxy viszont jóval korábban bontott, így
 # a kliens 504-et kapott, miközben a backend még percekig égette az API-keretet egy
 # olyan kérésre, amit már senki nem várt. A keret alá kell esni a proxy timeoutjának.
 # Az egy próbálkozásra jutó timeout az eredeti 90 mp (a 30 mp-es szigorítás lassú
@@ -972,8 +969,9 @@ def _client_ip(request: Request) -> str:
     közvetlenül az origin-hez forduló támadó tetszőleges IP-t hazudhatna, és ezzel az
     összes rate limitet (bejelentkezés, reset, regisztráció) megkerülhetné."""
     if os.environ.get("TRUST_PROXY", "").lower() == "true" and getattr(request.state, "via_trusted_proxy", False):
-        # A Vercel felülírja az x-forwarded-for-t a valódi kliens IP-jével, ezért a
-        # bal szélső érték itt megbízható. Tartaléknak az x-real-ip-t is elfogadjuk.
+        # A fordított proxy (Caddy) a valódi kliens IP-jét teszi az x-forwarded-for
+        # fejlécbe, ezért a bal szélső érték itt megbízható. Tartaléknak az
+        # x-real-ip-t is elfogadjuk.
         forwarded = request.headers.get("x-forwarded-for", "") or request.headers.get("x-real-ip", "")
         if forwarded:
             return forwarded.split(",", 1)[0].strip()[:80]
@@ -1172,31 +1170,6 @@ def _check_and_record_admin_action_limit(request: Request, admin_id: int, action
     else:
         s["count"] = s.get("count", 0) + 1
     _admin_action_attempts[key] = s
-
-
-_live_token_attempts: dict[str, dict] = {}
-LIVE_TOKEN_WINDOW_S = 60
-LIVE_TOKEN_MAX = 6
-
-
-def _check_and_record_live_token_limit(request: Request, user_id: int) -> None:
-    if _is_testing():
-        return
-    ip = _client_ip(request)
-    key = f"{ip}:{user_id}"
-    now = time.monotonic()
-    _prune_rate_limit_map(_live_token_attempts, now, LIVE_TOKEN_WINDOW_S)
-    s = _live_token_attempts.get(key)
-    if s and now - s.get("first", now) > LIVE_TOKEN_WINDOW_S:
-        _live_token_attempts.pop(key, None)
-        s = None
-    if s and s.get("count", 0) >= LIVE_TOKEN_MAX:
-        raise HTTPException(status_code=429, detail="Tul sok Live inditasi keres. Probald ujra rovidesen.")
-    if not s:
-        s = {"count": 1, "first": now}
-    else:
-        s["count"] = s.get("count", 0) + 1
-    _live_token_attempts[key] = s
 
 
 # A két legdrágább végpont: a /chat/send minden hívása egy LLM-kérés RAG-kereséssel,
@@ -2401,8 +2374,6 @@ async def lifespan(app: FastAPI):
             ("llm_api_key", ""),
             ("system_prompt", DEFAULT_SYSTEM_PROMPT),
             ("kb_text", ""),
-            ("live_api_key", ""),
-            ("live_model", "gemini-3.1-flash-live-preview"),
             ("proactive_checkin_days", "3"),
         ]:
             res = await db.execute(select(AppSetting).where(AppSetting.key == k))
@@ -2551,7 +2522,7 @@ LOOPBACK_ALLOWED_PATHS = {"/api/config"}
 
 
 @app.middleware("http")
-async def verify_vercel_proxy(request: Request, call_next):
+async def verify_proxy_secret(request: Request, call_next):
     request.state.via_trusted_proxy = False
 
     if request.method == "OPTIONS":
@@ -2714,8 +2685,6 @@ class SettingsIn(BaseModel):
     system_prompt: Optional[str] = None
     kb_text: Optional[str] = None
     global_notice_text: Optional[str] = Field(None, max_length=1200)
-    live_model: Optional[str] = None
-    live_api_key: Optional[str] = None
     profile_memory_enabled: Optional[bool] = None
     local_llm_enabled: Optional[bool] = None
     local_llm_model: Optional[str] = Field(None, max_length=160)
@@ -7058,9 +7027,6 @@ async def admin_get_settings(_: User = Depends(require_admin), db: AsyncSession 
     kb_text = await get_setting(db, "kb_text", "")
     global_notice_text = await get_setting(db, "global_notice_text", "")
     
-    live_model = await get_setting(db, "live_model", "gemini-3.1-flash-live-preview")
-    live_api_key = await get_setting(db, "live_api_key", "")
-    
     local_enabled = await get_setting(db, "local_llm_enabled", "false") == "true"
     local_model = await get_setting(db, "local_llm_model", "")
     local_temperature = await get_setting(db, "local_llm_temperature", "")
@@ -7074,7 +7040,6 @@ async def admin_get_settings(_: User = Depends(require_admin), db: AsyncSession 
         suggested["ollama"] = [m["name"] for m in ollama_models]
 
     masked = (api_key[:4] + "…" + api_key[-4:]) if len(api_key) >= 10 else ("•" * len(api_key))
-    live_masked = (live_api_key[:4] + "…" + live_api_key[-4:]) if len(live_api_key) >= 10 else ("•" * len(live_api_key))
     
     return {
         "llm_provider": provider, "llm_model": model,
@@ -7093,9 +7058,6 @@ async def admin_get_settings(_: User = Depends(require_admin), db: AsyncSession 
         "ollama_models": ollama_models,
         "ollama_base_url": OLLAMA_BASE_URL,
         "local_llm_fallback_active": local_enabled and time.monotonic() < _ollama_down_until,
-        "live_model": live_model,
-        "live_api_key_set": bool(live_api_key),
-        "live_api_key_preview": live_masked if live_api_key else "",
         # Az env a vegso kikapcsolo: ha az tiltja, a kapcsolo nem is jelenik meg.
         "profile_memory_available": PROFILE_ENABLED,
         "profile_memory_enabled": await _profile_feature_on(db),
@@ -7132,10 +7094,6 @@ async def admin_update_settings(body: SettingsIn, request: Request, admin: User 
         await set_setting(db, "kb_text", body.kb_text)
     if body.global_notice_text is not None:
         await set_setting(db, "global_notice_text", body.global_notice_text.strip())
-    if body.live_model is not None:
-        await set_setting(db, "live_model", body.live_model.strip())
-    if body.live_api_key is not None:
-        await set_setting(db, "live_api_key", body.live_api_key.strip())
     if body.profile_memory_enabled is not None:
         await set_setting(db, "profile_memory_enabled", "true" if body.profile_memory_enabled else "false")
     if body.local_llm_enabled is not None:
@@ -7573,8 +7531,8 @@ async def _delayed_down():
     await asyncio.sleep(1.0)
     logger.info("Emergency system shutdown (docker compose down) triggered via admin API.")
     async with httpx.AsyncClient(timeout=10.0) as proxy_client:
-        # A frontend a Vercelen fut, nem konténerben — a "myra-frontend" leállítási
-        # kísérlet csak hibalogot termelt.
+        # A frontend statikus fajl (a Caddy szolgalja ki a /srv/myra mappabol), nem
+        # konténer — csak a backendet kell leallitani.
         for container in ["myra-backend"]:
             try:
                 resp = await proxy_client.post(f"{DOCKER_SOCKET_PROXY_URL}/containers/{container}/stop")
@@ -7889,10 +7847,10 @@ async def admin_delete_user(user_id: int, request: Request, admin: User = Depend
 # Postgres/Supabase eseten a szerveren orankent futo pg_dump (myra-backup.sh) mentesei
 # csak olvashato koteten erkeznek ide; a gomb a legfrissebb "userdata" mentest adja ki.
 # Ez a teljes adatbazis a knowledge_chunks tabla TARTALMA nelkul (a tudasbazis a PDF-ekbol
-# ujraindexelheto), igy belefer a Vercel proxy 4,5 MB-os valaszkorlatjaba. Uj dumpot nem
-# keszit, es a napi tar.gz-t (abban az .env is benne van) szandekosan nem szolgalja ki.
+# ujraindexelheto). Uj dumpot nem keszit, es a napi tar.gz-t (abban az .env is benne van)
+# szandekosan nem szolgalja ki.
 BACKUP_DIR = Path(os.environ.get("BACKUP_DIR", "/app/backups"))
-# A Vercel proxy valasza legfeljebb 4,5 MB lehet; e folott a mentest a szerverrol kell levenni.
+# Egy ekkora valaszt a bongeszo meg jol kezel; e folott a mentest a szerverrol kell levenni.
 BACKUP_MAX_BYTES = int(os.environ.get("BACKUP_MAX_BYTES", "4400000"))
 
 

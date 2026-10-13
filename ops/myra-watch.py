@@ -13,7 +13,7 @@ Mit csinal:
 
 Mit jelent a karanten:
   A backend a nem-admin keresekre 503-at ad, amig te fel nem oldod az admin
-  feluleten. A cloudflared es a backend TOVABB FUT, tehat te be tudsz lepni
+  feluleten. A backend TOVABB FUT, tehat te be tudsz lepni
   akkor is, ha eppen nem vagy a gep kozeleben. Semmit nem allitunk le.
 
 Mit szandekosan NEM csinal: nem all le semmi, nem tilt IP-t, nem ir at semmit.
@@ -153,6 +153,23 @@ VEDETT_FAJLOK = [
     os.path.join(MYRA_DIR, "docker-compose.yml"),
     os.path.join(MYRA_DIR, "docker-compose.override.yml"),
     os.path.join(OPS_DIR, "myra-watch.py"),
+    # 2026-10-13: a bejovo forgalom es a vedelem kulcsfajljai is vedettek. A root-only
+    # fajlokat (pl. a Caddy titka) a _ujjlenyomat meret+ido alapon figyeli. A
+    # /etc/wireguard/wg0.conf szandekosan NINCS itt: a /etc/wireguard konyvtar 0700-as
+    # root-mappa, ezert a figyelo (myra-admin) meg stat-olni sem tudja.
+    os.path.join(OPS_DIR, "myra-stats.py"),
+    os.path.join(OPS_DIR, "myra-backup.sh"),
+    "/etc/caddy/Caddyfile",
+    "/etc/caddy/myra.env",
+    "/etc/fail2ban/jail.d/myra.conf",
+    "/etc/fail2ban/jail.d/myra-rate.conf",
+    "/etc/fail2ban/filter.d/myra-auth.conf",
+    "/etc/fail2ban/filter.d/myra-badpath.conf",
+    "/etc/fail2ban/filter.d/myra-rate.conf",
+    "/etc/systemd/system/myra-stats.service",
+    "/etc/systemd/system/myra-stats.timer",
+    "/etc/systemd/system/myra-backup.service",
+    "/etc/systemd/system/myra-backup.timer",
     UNIT_FAJL,
 ]
 
@@ -601,6 +618,15 @@ def _ujjlenyomat(utvonal):
         return h.hexdigest()
     except FileNotFoundError:
         return "nincs"
+    except PermissionError:
+        # Root-only fajl (pl. /etc/caddy/myra.env, /etc/wireguard/wg0.conf): a tartalmat
+        # nem tudjuk hashelni, de a meret es a modositas ideje az illetetlen modositast
+        # igy is megfogja.
+        try:
+            s = os.stat(utvonal)
+            return f"stat:{s.st_size}:{int(s.st_mtime)}"
+        except OSError:
+            return "nincs"
     except Exception as e:  # noqa: BLE001
         return f"hiba:{e}"
 
