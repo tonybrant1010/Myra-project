@@ -5625,45 +5625,71 @@ async def _call_gemini_stream(
     )
     deadline = time.monotonic() + LLM_TOTAL_BUDGET_S
     parts: List[str] = []
-    try:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(LLM_ATTEMPT_TIMEOUT_S, connect=15.0)
-        ) as client:
-            async with client.stream("POST", url, json=body) as r:
-                if r.status_code == 400 and "generationConfig" in body:
-                    await r.aread()
-                    logger.warning(f"A(z) {model} elutasitotta a thinkingConfig-ot, ujra nelkule.")
-                    body.pop("generationConfig", None)
-                    return await _call_gemini_stream(model, api_key, body, sink)
-                if r.status_code != 200:
-                    text = (await r.aread())[:300].decode("utf-8", "replace")
-                    logger.error(f"Gemini stream hiba: status={r.status_code}, response={text}")
-                    raise HTTPException(status_code=502, detail="Gemini API hiba történt.")
-                async for line in r.aiter_lines():
-                    if time.monotonic() > deadline:
-                        raise HTTPException(status_code=504, detail="A válasz elkészítése túl sokáig tartott.")
-                    if not line.startswith("data:"):
+    last_error = ""
+    for attempt in range(1, 4):
+        attempt_timeout = min(LLM_ATTEMPT_TIMEOUT_S, _llm_remaining_budget(deadline))
+        if attempt_timeout <= 0:
+            last_error = last_error or "budget exhausted"
+            break
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(attempt_timeout, connect=15.0)
+            ) as client:
+                async with client.stream("POST", url, json=body) as r:
+                    status = r.status_code
+                    if status == 400 and body.get("generationConfig", {}).get("thinkingConfig"):
+                        await r.aread()
+                        logger.warning(f"A(z) {model} elutasitotta a thinkingConfig-ot, ujra nelkule.")
+                        body["generationConfig"].pop("thinkingConfig", None)
                         continue
-                    payload = line[5:].strip()
-                    if not payload or payload == "[DONE]":
-                        continue
-                    try:
-                        chunk = _json.loads(payload)
-                    except ValueError:
-                        continue
-                    for cand in chunk.get("candidates", []):
-                        for part in (cand.get("content") or {}).get("parts", []):
-                            text = part.get("text") or ""
-                            if text:
-                                parts.append(text)
-                                sink(_strip_reply_prefixes("".join(parts)))
-    except (httpx.TimeoutException, httpx.TransportError) as exc:
-        logger.warning(f"Gemini stream halozati hiba: {type(exc).__name__}: {exc}")
-        raise HTTPException(status_code=502, detail="Gemini hálózati hiba.")
-    content = "".join(parts).strip()
-    if not content:
-        raise HTTPException(status_code=502, detail="Üres válasz érkezett az AI szolgáltatótól.")
-    return content
+                    if status != 200:
+                        text = (await r.aread())[:300].decode("utf-8", "replace")
+                        last_error = f"status={status} {text}"
+                        if status == 429 or status >= 500:
+                            logger.warning(
+                                f"Gemini stream atmeneti hiba ({status}, {attempt}/3): {text[:160]}"
+                            )
+                            if attempt < 3 and _llm_remaining_budget(deadline) > LLM_RETRY_BACKOFF_S:
+                                await asyncio.sleep(LLM_RETRY_BACKOFF_S)
+                                continue
+                        logger.error(f"Gemini stream hiba: status={status}, response={text}")
+                        raise HTTPException(status_code=502, detail="Gemini API hiba történt.")
+                    async for line in r.aiter_lines():
+                        if time.monotonic() > deadline:
+                            raise HTTPException(status_code=504, detail="A válasz elkészítése túl sokáig tartott.")
+                        if not line.startswith("data:"):
+                            continue
+                        payload = line[5:].strip()
+                        if not payload or payload == "[DONE]":
+                            continue
+                        try:
+                            chunk = _json.loads(payload)
+                        except ValueError:
+                            continue
+                        for cand in chunk.get("candidates", []):
+                            for part in (cand.get("content") or {}).get("parts", []):
+                                text = part.get("text") or ""
+                                if text:
+                                    parts.append(text)
+                                    sink(_strip_reply_prefixes("".join(parts)))
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            if parts:
+                logger.warning(f"Gemini stream megszakadt szoveg kozben: {last_error}")
+                break
+            logger.warning(f"Gemini stream halozati hiba ({attempt}/3): {last_error}")
+            if attempt < 3 and _llm_remaining_budget(deadline) > LLM_RETRY_BACKOFF_S:
+                await asyncio.sleep(LLM_RETRY_BACKOFF_S)
+                continue
+            break
+        content = "".join(parts).strip()
+        if content:
+            return content
+        last_error = last_error or "empty response"
+    if parts:
+        return "".join(parts).strip()
+    logger.error(f"Gemini stream vegso hiba: {last_error}")
+    raise HTTPException(status_code=502, detail="Gemini API hiba történt.")
 
 
 _local_chat_inflight = 0
