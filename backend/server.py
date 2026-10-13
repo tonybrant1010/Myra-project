@@ -304,6 +304,9 @@ CHAT_MESSAGE_MAX_CHARS = _env_int("CHAT_MESSAGE_MAX_CHARS", 8000, 500, 20000)
 LLM_TOTAL_BUDGET_S = _env_int("LLM_TOTAL_BUDGET_S", 200, 10, 600)
 LLM_ATTEMPT_TIMEOUT_S = _env_int("LLM_ATTEMPT_TIMEOUT_S", 90, 5, 300)
 LLM_RETRY_BACKOFF_S = _env_int("LLM_RETRY_BACKOFF_S", 8, 0, 60)
+# A Gemini 3.x alapertelmezesben gondolkodik a valasz elott, ez pedig tiz masodperceket
+# visz el a lathato valasz elott. 0 = kikapcsolva, -1 = a mezot el sem kuldjuk.
+LLM_THINKING_BUDGET = _env_int("LLM_THINKING_BUDGET", 0, -1, 32768)
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").strip().rstrip("/")
 OLLAMA_TIMEOUT_S = _env_int("OLLAMA_TIMEOUT_S", 300, 10, 900)
 OLLAMA_CONNECT_TIMEOUT_S = _env_int("OLLAMA_CONNECT_TIMEOUT_S", 4, 1, 30)
@@ -5907,6 +5910,9 @@ async def _call_llm_provider(provider: str, model: str, api_key: str, system_pro
             contents.append({"role": role, "parts": [{"text": m["text"]}]})
         contents.append({"role": "user", "parts": [{"text": user_message}]})
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        body = {"systemInstruction": {"parts": [{"text": system_prompt}]}, "contents": contents}
+        if LLM_THINKING_BUDGET >= 0:
+            body["generationConfig"] = {"thinkingConfig": {"thinkingBudget": LLM_THINKING_BUDGET}}
         max_retries = 3
         last_error = ""
         r = None
@@ -5918,10 +5924,7 @@ async def _call_llm_provider(provider: str, model: str, api_key: str, system_pro
                 break
             try:
                 async with httpx.AsyncClient(timeout=attempt_timeout) as client:
-                    r = await client.post(
-                        url,
-                        json={"systemInstruction": {"parts": [{"text": system_prompt}]}, "contents": contents},
-                    )
+                    r = await client.post(url, json=body)
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 r = None
                 last_error = f"{type(exc).__name__}: {exc}"
@@ -5937,6 +5940,11 @@ async def _call_llm_provider(provider: str, model: str, api_key: str, system_pro
                     logger.error("Empty candidates list received from Gemini.")
                     raise HTTPException(status_code=502, detail="Üres válasz érkezett az AI szolgáltatótól.")
                 return "".join(p.get("text", "") for p in cands[0].get("content", {}).get("parts", []))
+            if r.status_code == 400 and "generationConfig" in body:
+                # Ez a modell nem ismeri a thinkingConfig mezot: egyszer ujra nelkule.
+                logger.warning("A(z) %s elutasitotta a thinkingConfig-ot, ujra nelkule.", model)
+                body.pop("generationConfig", None)
+                continue
             last_error = r.text[:300]
             retryable = r.status_code == 429 or r.status_code >= 500
             if retryable and attempt < max_retries - 1 and _llm_remaining_budget(deadline) > LLM_RETRY_BACKOFF_S:
