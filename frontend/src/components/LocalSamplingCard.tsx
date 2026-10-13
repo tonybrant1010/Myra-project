@@ -32,14 +32,6 @@ const FIELDS = [
 type Key = (typeof FIELDS)[number]["key"];
 type Values = Record<Key, string> & { local_llm_thinking: string };
 
-const EMPTY: Values = {
-  local_llm_temperature: "",
-  local_llm_top_p: "",
-  local_llm_top_k: "",
-  local_llm_min_p: "",
-  local_llm_thinking: "",
-};
-
 /** Gondolkodás (enable_thinking): üres = a szerver alapértéke, "false" = kikapcsolva, "true" = bekapcsolva. */
 const THINKING_OPTIONS = [
   { value: "", label: "Alapérték" },
