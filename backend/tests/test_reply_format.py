@@ -1,9 +1,3 @@
-"""A 2026-08-17-i felhasználói teszt négy anomáliája ellen.
-
-A modell a beszélgetési előzmény formátumát vette át, és a saját válaszát
-időbélyeggel / formátum-törmelékkel kezdte. A tesztek két oldalt fognak közre:
-a bemenetet (mit lát a modell) és a kimenetet (mit engedünk ki).
-"""
 
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
@@ -18,11 +12,7 @@ def _msg(role: str, text: str, when: datetime):
 BASE = datetime(2026, 8, 17, 17, 22, 44, tzinfo=timezone.utc)
 
 
-# --- bemeneti oldal: mit lát a modell -------------------------------------------------
-
 def test_history_timestamps_only_on_user_messages():
-    """Myra saját korábbi válaszai NEM kaphatnak időbélyeget: abból tanulta meg,
-    hogy 'így írok én', és sajátot kezdett generálni."""
     hist = _format_chat_history_for_llm([
         _msg("user", "Szia myra", BASE),
         _msg("assistant", "Szia, Kira! Jó itt lenni.", BASE),
@@ -37,7 +27,6 @@ def test_history_timestamps_only_on_user_messages():
 
 
 def test_history_timestamp_has_seconds():
-    """Másodperc nélkül az azonos percbe eső üzenetek sorrendje nem állapítható meg."""
     hist = _format_chat_history_for_llm([
         _msg("user", "első", BASE),
         _msg("user", "második", BASE.replace(second=51)),
@@ -48,15 +37,11 @@ def test_history_timestamp_has_seconds():
         assert stamp.count(":") == 2, f"nincs másodperc: {stamp}"
 
 
-# --- kimeneti oldal: biztonsági háló --------------------------------------------------
-
 def test_strips_single_timestamp():
     assert _clean_llm_reply("[2026.08.17 19:23] Az a teljes megszűnés") == "Az a teljes megszűnés"
 
 
 def test_strips_repeated_timestamps():
-    """A korábbi egyszeri re.sub csak az elsőt vitte el — a második bennmaradt,
-    és pontosan ez került ki a felhasználóhoz."""
     raw = "[2026.08.17 19:22] [2026.08.17 19:23] Az a teljes megszűnés"
     assert _clean_llm_reply(raw) == "Az a teljes megszűnés"
 
@@ -91,6 +76,5 @@ def test_leaves_normal_reply_untouched():
 
 
 def test_does_not_eat_the_whole_reply():
-    """Csak az elejéről vágunk; a szövegtörzsben lévő minta maradjon."""
     raw = "[2026.08.17 19:23] Erre írtad: [2026.08.17 19:20] szia"
     assert _clean_llm_reply(raw) == "Erre írtad: [2026.08.17 19:20] szia"

@@ -101,8 +101,6 @@ def test_reset_token_hash_does_not_store_plain_code():
     assert len(hashed) == 64
     assert _hash_reset_token(code, email) == hashed
     assert _hash_reset_token("654321", email) != hashed
-    # A hash a fiókhoz van kötve: ugyanaz a kód más email-címmel más hasht ad, ezért
-    # egy találgatott kód nem illeszkedhet másik felhasználó függő tokenjére.
     assert _hash_reset_token(code, "masik@example.com") != hashed
 
 
@@ -228,9 +226,6 @@ def test_rag_search_query_stays_compact_for_short_message():
 
     query = _build_chat_kb_query("aktuális kérdés", [], state)
 
-    # 2026-08-17 óta a lekérdezés MINDIG csak az input üzenet: sem az állapotprofil,
-    # sem a cím/súlyosság nem kerül bele. Korábban a rövid üzeneteket ezekkel
-    # dúsította a kód, és emiatt nem arra keresett, amit a felhasználó írt.
     assert query == "aktuális kérdés"
     assert "Teszt profil" not in query
     assert "kozepes" not in query
@@ -502,7 +497,6 @@ def test_auth_and_admin_code_schemas_reject_oversized_tokens():
     ResetPasswordBody(email="user@example.com", token="1234", new_password="password123")
     with pytest.raises(Exception):
         ResetPasswordBody(email="user@example.com", token="x" * 129, new_password="password123")
-    # Az email kötelező: enélkül a kód bármelyik fiók függő tokenjére illeszkedhetne.
     with pytest.raises(Exception):
         ResetPasswordBody(token="1234", new_password="password123")
 
@@ -552,9 +546,6 @@ async def test_emergency_admin_routes_reject_wrong_current_password(init_db):
         is_active=True,
     )
 
-    # Az admint valóban be kell szúrni a DB-be: a végpontok admin_audit_logs sort írnak,
-    # ami idegen kulccsal mutat a users táblára. Enélkül (bekapcsolt FK-kényszerítés
-    # mellett, ahogy éles PostgreSQL-en is) a kérés FK-hibával szállna el.
     async with TestingSessionLocal() as db:
         db.add(admin)
         await db.commit()
@@ -736,10 +727,6 @@ def test_verify_proxy_secret_middleware():
 
 @pytest.mark.asyncio
 async def test_require_admin_logs_structured_signal_only_for_authenticated_user(caplog):
-    """A karanten kuszob-alapu jele (ops/myra-watch.py) ezen a strukturált log
-    soron alapul. A sornak tartalmaznia kell a felhasznalo azonositojat es a
-    forras-IP-t, mert a figyelo a KULONBOZO IP-ek szama alapjan dont: enelkul
-    egyetlen anonim forras is kivalthatna a platform-szintu zarat."""
     import logging as _logging
     import server
 
@@ -765,13 +752,11 @@ async def test_require_admin_logs_structured_signal_only_for_authenticated_user(
             await server.require_admin(_FakeRequest(), _NonAdmin())
 
     assert exc.value.status_code == 403
-    # A valasz uzenete valtozatlan (a frontend/tesztek erre epitenek).
     assert exc.value.detail == "Csak adminok férnek hozzá"
     assert "MYRA_SECURITY_SIGNAL kind=admin_forbidden" in caplog.text
     assert "user_id=42" in caplog.text
     assert "ip=203.0.113.7" in caplog.text
 
-    # Adminnal nincs jelzes (nincs elutasitas).
     caplog.clear()
     with caplog.at_level(_logging.WARNING, logger="myra"):
         returned = await server.require_admin(_FakeRequest(), _Admin())

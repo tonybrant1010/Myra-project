@@ -1,4 +1,3 @@
-"""Seed the 256 ESV state codes from the LibreOffice ODS file into SQLite."""
 import asyncio
 import re
 import sys

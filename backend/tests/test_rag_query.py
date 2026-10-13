@@ -43,14 +43,6 @@ def test_build_chat_kb_query_specific_message_stays_clean():
     assert "Emelkedett" not in q
 
 
-# 2026-08-17: a rövid üzenetek "feldúsítása" megszűnt. Korábban négynél kevesebb
-# érdemi szó esetén az ELŐZŐ user-üzenet és az állapotprofil is bekerült a
-# lekérdezésbe — emiatt a keresés nem arra futott, amit a felhasználó éppen írt.
-# Mérés: a "szia" 0,493-as találati értéket kapott és öt PDF-részletet hozott,
-# mert az előző mondatra és az állapotkódra keresett. Az alábbi három teszt ezt
-# az új szerződést rögzíti: a lekérdezés MINDIG az input üzenet, vagy semmi.
-
-
 def test_build_chat_kb_query_short_message_stays_on_input():
     q = _build_chat_kb_query(
         "És miért?",
@@ -69,7 +61,6 @@ def test_build_chat_kb_query_greeting_stays_on_input():
 
 
 def test_build_chat_kb_query_empty_without_searchable_terms():
-    """Ha nincs mire keresni, ne is keressen: a hívó ilyenkor kihagyja a RAG-ot."""
     assert _build_chat_kb_query("ok", [_msg("user", "hosszabb korábbi üzenet")], STATE) == ""
     assert _build_chat_kb_query(":)", [], STATE) == ""
 

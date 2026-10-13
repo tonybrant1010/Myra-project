@@ -22,9 +22,6 @@ import { T } from "@/src/components/Typography";
 import { setForumSeenAt, newestCreatedAt } from "@/src/utils/forumSeen";
 import type { TextStyle } from "react-native";
 
-/** A `word-break` / `overflow-wrap` bongeszos CSS-tulajdonsag: RN Web futasidoben
- *  atengedi a DOM-nak, a TextStyle tipus viszont nem ismeri, ezert a `tsc --noEmit`
- *  elhasal rajta. Nativon nincs ra szukseg, ott a Text amugy is tor. */
 const webWordBreak = (Platform.OS === "web"
   ? { wordBreak: "break-word", overflowWrap: "break-word" }
   : {}) as TextStyle;
@@ -86,7 +83,6 @@ export default function ForumScreen() {
         const data = await r.json();
         const loaded = data.posts || [];
         setPosts(loaded);
-        // A forum megnyitasa szamit elolvasasnak: innentol nincs pötty.
         await setForumSeenAt(newestCreatedAt(loaded));
       }
     } finally {
@@ -152,7 +148,6 @@ export default function ForumScreen() {
       if (r.ok) {
         const newPost = await r.json();
         setPosts((prev) => [...prev, newPost]);
-        // A sajat posztunkra ne kapjunk jelzest.
         await setForumSeenAt(newPost.created_at);
         setInputText("");
         scrollToBottom();

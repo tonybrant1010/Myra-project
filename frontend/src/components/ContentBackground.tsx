@@ -8,7 +8,6 @@ type Props = {
   style?: object;
 };
 
-// Nyugodt légzésritmus: ~6 légzés/perc (4,2 mp be, 5,8 mp ki).
 const BREATH_IN_MS = 4200;
 const BREATH_OUT_MS = 5800;
 const MIST_TWO_BASE_OPACITY = Platform.OS === "web" ? 1 : 0.55;
@@ -63,8 +62,6 @@ export default function ContentBackground({ children, style }: Props) {
 
   return (
     <LinearGradient
-      // A négy megálló a témából jön: weben CSS-változó, natívon fix érték.
-      // Éjszakai módban a negyedik (nappal majdnem fehér) megálló is besötétedik.
       colors={backgroundGradient}
       locations={[0, 0.42, 0.78, 1]}
       start={{ x: 0, y: 0 }}

@@ -1,14 +1,3 @@
-"""
-OWASP biztonsági tesztek a Myra API-hoz.
-
-Ellenőrzi:
-- SQL injection kísérletek elutasítása
-- XSS payload elutasítása input mezőkben
-- Túl nagy request elutasítása (body size limit)
-- Érvénytelen JWT token elutasítása
-- Lejárt JWT token elutasítása
-- Jogosultsági szint bypass kísérlet (nem-admin -> admin endpoint)
-"""
 import os
 import sys
 import uuid
@@ -25,20 +14,15 @@ TEST_PASSWORD = "OwaspTest!2026"
 
 
 def _unique_email() -> str:
-    """Egyedi teszt email generálása."""
     return f"owasp_{uuid.uuid4().hex[:12]}@example.com"
 
 
 def _create_fake_jwt(payload: dict, secret: str = JWT_SECRET, algorithm: str = JWT_ALG) -> str:
-    """Teszt JWT token generálása megadott payload-dal."""
     return pyjwt.encode(payload, secret, algorithm=algorithm)
 
 
 @pytest.fixture
 async def normal_user(client):
-    """
-    Regisztrál egy normál (nem-admin) felhasználót és visszaadja a tokent.
-    """
     email = _unique_email()
     resp = await client.post("/api/auth/register", json={
         "email": email,
@@ -59,7 +43,6 @@ async def normal_user(client):
 
 @pytest.mark.anyio
 async def test_sql_injection_in_login_email(client):
-    """SQL injection kísérlet az email mezőben elutasításra kerül."""
     sql_payloads = [
         "admin@test.com' OR '1'='1",
         "admin@test.com'; DROP TABLE users;--",
@@ -77,7 +60,6 @@ async def test_sql_injection_in_login_email(client):
 
 @pytest.mark.anyio
 async def test_sql_injection_in_register_email(client):
-    """SQL injection kísérlet a regisztrációs email mezőben elutasításra kerül."""
     resp = await client.post("/api/auth/register", json={
         "email": "'; DROP TABLE users;--@evil.com",
         "name": "SQL Injector",
@@ -92,7 +74,6 @@ async def test_sql_injection_in_register_email(client):
 
 @pytest.mark.anyio
 async def test_sql_injection_in_register_name(client):
-    """SQL injection kísérlet a name mezőben nem okoz hibát (sanitized)."""
     email = _unique_email()
     resp = await client.post("/api/auth/register", json={
         "email": email,
@@ -108,7 +89,6 @@ async def test_sql_injection_in_register_name(client):
 
 @pytest.mark.anyio
 async def test_xss_in_register_name(client):
-    """XSS payload a name mezőben nem jelenik meg a válaszban védetlenül."""
     xss_payloads = [
         "<script>alert('xss')</script>",
         "<img src=x onerror=alert('xss')>",
@@ -134,7 +114,6 @@ async def test_xss_in_register_name(client):
 
 @pytest.mark.anyio
 async def test_xss_in_login_email(client):
-    """XSS payload a login email mezőben elutasításra kerül."""
     resp = await client.post("/api/auth/login", json={
         "email": "<script>alert('xss')</script>",
         "password": TEST_PASSWORD,
@@ -145,7 +124,6 @@ async def test_xss_in_login_email(client):
 
 @pytest.mark.anyio
 async def test_oversized_request_body_rejected(client):
-    """Túl nagy request body (>1MB) elutasításra kerül 413-as hibával."""
     oversized_data = "A" * (2 * 1024 * 1024)
     resp = await client.post(
         "/api/auth/login",
@@ -157,7 +135,6 @@ async def test_oversized_request_body_rejected(client):
 
 @pytest.mark.anyio
 async def test_oversized_request_with_content_length(client):
-    """Túl nagy Content-Length header esetén a kérés elutasításra kerül."""
     resp = await client.post(
         "/api/auth/login",
         content=b'{"email":"a@b.com","password":"x"}',
@@ -172,7 +149,6 @@ async def test_oversized_request_with_content_length(client):
 
 @pytest.mark.anyio
 async def test_invalid_jwt_signature_rejected(client):
-    """Rossz kulccsal aláírt JWT token elutasításra kerül."""
     now = int(time.time())
     fake_token = _create_fake_jwt(
         {
@@ -197,7 +173,6 @@ async def test_invalid_jwt_signature_rejected(client):
 
 @pytest.mark.anyio
 async def test_expired_jwt_rejected(client):
-    """Lejárt JWT token elutasításra kerül."""
     now = int(time.time())
     expired_token = _create_fake_jwt({
         "sub": "1",
@@ -219,7 +194,6 @@ async def test_expired_jwt_rejected(client):
 
 @pytest.mark.anyio
 async def test_jwt_wrong_type_rejected(client):
-    """Rossz típusú JWT (nem 'access') elutasításra kerül."""
     now = int(time.time())
     wrong_type_token = _create_fake_jwt({
         "sub": "1",
@@ -241,7 +215,6 @@ async def test_jwt_wrong_type_rejected(client):
 
 @pytest.mark.anyio
 async def test_jwt_tampered_payload_rejected(client):
-    """Manipulált JWT payload (pl. is_admin=True) érvénytelen aláírással elutasításra kerül."""
     now = int(time.time())
     tampered_token = _create_fake_jwt(
         {
@@ -267,7 +240,6 @@ async def test_jwt_tampered_payload_rejected(client):
 
 @pytest.mark.anyio
 async def test_completely_random_jwt_rejected(client):
-    """Teljesen véletlenszerű JWT string elutasításra kerül."""
     resp = await client.get(
         "/api/auth/me",
         headers={"Authorization": "Bearer aGVsbG8ud29ybGQuZm9v.YmFyLmJheg.cXV4"},
@@ -278,7 +250,6 @@ async def test_completely_random_jwt_rejected(client):
 
 @pytest.mark.anyio
 async def test_normal_user_cannot_access_admin_settings(client, normal_user):
-    """Normál (nem-admin) felhasználó nem fér hozzá az admin beállításokhoz."""
     resp = await client.get(
         "/api/admin/settings",
         headers={"Authorization": f"Bearer {normal_user['token']}"},
@@ -289,7 +260,6 @@ async def test_normal_user_cannot_access_admin_settings(client, normal_user):
 
 @pytest.mark.anyio
 async def test_normal_user_cannot_access_admin_codes(client, normal_user):
-    """Normál felhasználó nem fér hozzá az admin kódokhoz."""
     resp = await client.get(
         "/api/admin/codes",
         headers={"Authorization": f"Bearer {normal_user['token']}"},
@@ -300,7 +270,6 @@ async def test_normal_user_cannot_access_admin_codes(client, normal_user):
 
 @pytest.mark.anyio
 async def test_normal_user_cannot_create_admin_codes(client, normal_user):
-    """Normál felhasználó nem tud admin kódot létrehozni."""
     resp = await client.post(
         "/api/admin/codes",
         json={"code": "TESTCODE", "max_uses": 10},
@@ -312,7 +281,6 @@ async def test_normal_user_cannot_create_admin_codes(client, normal_user):
 
 @pytest.mark.anyio
 async def test_normal_user_cannot_access_admin_diagnostics(client, normal_user):
-    """Normál felhasználó nem fér hozzá az admin diagnosztikai endpointhoz."""
     resp = await client.get(
         "/api/admin/diagnostics",
         headers={"Authorization": f"Bearer {normal_user['token']}"},
@@ -323,7 +291,6 @@ async def test_normal_user_cannot_access_admin_diagnostics(client, normal_user):
 
 @pytest.mark.anyio
 async def test_normal_user_cannot_force_logout_all(client, normal_user):
-    """Normál felhasználó nem tud force logout all műveletet végrehajtani."""
     resp = await client.post(
         "/api/admin/force-logout-all",
         headers={"Authorization": f"Bearer {normal_user['token']}"},
@@ -334,7 +301,6 @@ async def test_normal_user_cannot_force_logout_all(client, normal_user):
 
 @pytest.mark.anyio
 async def test_unauthenticated_cannot_access_admin(client):
-    """Autentikálatlan kérés nem fér hozzá az admin endpointokhoz."""
     admin_endpoints = [
         ("GET", "/api/admin/settings"),
         ("GET", "/api/admin/codes"),

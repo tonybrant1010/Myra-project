@@ -1,6 +1,3 @@
-"""
-Compliance / GDPR tesztek a Myra API-hoz.
-"""
 import os
 import sys
 import uuid
@@ -13,15 +10,11 @@ TEST_PASSWORD = "ComplianceTest!2026"
 
 
 def _unique_email() -> str:
-    """Egyedi teszt email generálása."""
     return f"compliance_{uuid.uuid4().hex[:12]}@example.com"
 
 
 @pytest.fixture
 async def auth_headers(client):
-    """
-    Regisztrál egy felhasználót és visszaadja az Authorization headert.
-    """
     email = _unique_email()
     resp = await client.post("/api/auth/register", json={
         "email": email,
@@ -38,7 +31,6 @@ async def auth_headers(client):
 
 @pytest.mark.anyio
 async def test_data_export_returns_200(client, auth_headers):
-    """POST /api/user/data-export 200 OK választ ad JSON formátumban."""
     resp = await client.post(
         "/api/user/data-export",
         json={"current_password": TEST_PASSWORD},
@@ -51,7 +43,6 @@ async def test_data_export_returns_200(client, auth_headers):
 
 @pytest.mark.anyio
 async def test_data_export_requires_auth(client):
-    """POST /api/user/data-export autentikáció nélkül 401-es hibát ad."""
     resp = await client.post(
         "/api/user/data-export",
         json={"current_password": TEST_PASSWORD}
@@ -61,7 +52,6 @@ async def test_data_export_requires_auth(client):
 
 @pytest.mark.anyio
 async def test_data_export_contains_user_data(client, auth_headers):
-    """A data export tartalmazza a felhasználó alapvető adatait."""
     resp = await client.post(
         "/api/user/data-export",
         json={"current_password": TEST_PASSWORD},
@@ -75,7 +65,6 @@ async def test_data_export_contains_user_data(client, auth_headers):
 
 @pytest.mark.anyio
 async def test_data_delete_with_password_confirmation(client, auth_headers):
-    """DELETE /api/user/data-delete jelszó megerősítéssel törli a fiókot."""
     resp = await client.request(
         "DELETE",
         "/api/user/data-delete",
@@ -87,7 +76,6 @@ async def test_data_delete_with_password_confirmation(client, auth_headers):
 
 @pytest.mark.anyio
 async def test_data_delete_wrong_password_rejected(client, auth_headers):
-    """DELETE /api/user/data-delete hibás jelszóval elutasításra kerül."""
     resp = await client.request(
         "DELETE",
         "/api/user/data-delete",
@@ -99,7 +87,6 @@ async def test_data_delete_wrong_password_rejected(client, auth_headers):
 
 @pytest.mark.anyio
 async def test_data_delete_requires_auth(client):
-    """DELETE /api/user/data-delete autentikáció nélkül 401-es hibát ad."""
     resp = await client.request(
         "DELETE",
         "/api/user/data-delete",
@@ -110,7 +97,6 @@ async def test_data_delete_requires_auth(client):
 
 @pytest.mark.anyio
 async def test_privacy_endpoint_returns_version(client):
-    """GET /api/legal/privacy visszaadja az adatkezelési tájékoztató verzióját."""
     resp = await client.get("/api/legal/privacy")
     assert resp.status_code == 200, f"Várt 200, kapott: {resp.status_code}"
     data = resp.json()
@@ -120,7 +106,6 @@ async def test_privacy_endpoint_returns_version(client):
 
 @pytest.mark.anyio
 async def test_privacy_version_format(client):
-    """Az adatkezelési tájékoztató verziója dátum formátumú (YYYY-MM-DD)."""
     resp = await client.get("/api/legal/privacy")
     assert resp.status_code == 200
     data = resp.json()
@@ -131,7 +116,6 @@ async def test_privacy_version_format(client):
 
 @pytest.mark.anyio
 async def test_terms_endpoint_returns_version(client):
-    """GET /api/legal/terms visszaadja a felhasználási feltételek verzióját."""
     resp = await client.get("/api/legal/terms")
     assert resp.status_code == 200, f"Várt 200, kapott: {resp.status_code}"
     data = resp.json()
@@ -141,7 +125,6 @@ async def test_terms_endpoint_returns_version(client):
 
 @pytest.mark.anyio
 async def test_terms_version_format(client):
-    """A felhasználási feltételek verziója dátum formátumú (YYYY-MM-DD)."""
     resp = await client.get("/api/legal/terms")
     assert resp.status_code == 200
     data = resp.json()
@@ -152,7 +135,6 @@ async def test_terms_version_format(client):
 
 @pytest.mark.anyio
 async def test_consent_post_success(client, auth_headers):
-    """POST /api/user/consent sikeresen rögzíti a felhasználó beleegyezését."""
     resp = await client.post(
         "/api/user/consent",
         json={"consent_given": True},
@@ -163,7 +145,6 @@ async def test_consent_post_success(client, auth_headers):
 
 @pytest.mark.anyio
 async def test_consent_revoke(client, auth_headers):
-    """POST /api/user/consent lehetővé teszi a beleegyezés visszavonását."""
     resp = await client.post(
         "/api/user/consent",
         json={"consent_given": False},
@@ -174,7 +155,6 @@ async def test_consent_revoke(client, auth_headers):
 
 @pytest.mark.anyio
 async def test_consent_requires_auth(client):
-    """POST /api/user/consent autentikáció nélkül 401-es hibát ad."""
     resp = await client.post(
         "/api/user/consent",
         json={"consent_given": True},
@@ -184,7 +164,6 @@ async def test_consent_requires_auth(client):
 
 @pytest.mark.anyio
 async def test_consent_invalid_type_rejected(client, auth_headers):
-    """POST /api/user/consent érvénytelen adattal (üres body) elutasításra kerül."""
     resp = await client.post(
         "/api/user/consent",
         json={},

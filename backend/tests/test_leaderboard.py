@@ -42,8 +42,6 @@ async def init_db():
 
 
 def start_game_session(client: TestClient, headers: dict, game_type: str) -> str:
-    """Szerver-oldali jatek-munkamenet inditasa; a visszakapott egyszer
-    hasznalatos session_token kell a /leaderboard/submit hivashoz."""
     r = client.post("/api/leaderboard/start", json={"game_type": game_type}, headers=headers)
     assert r.status_code == 200, f"Nem sikerult jatek-sessiont inditani: {r.text}"
     token = r.json().get("session_token")
@@ -52,7 +50,6 @@ def start_game_session(client: TestClient, headers: dict, game_type: str) -> str
 
 
 def submit_score(client: TestClient, headers: dict, game_type: str, score: int):
-    """Friss session-tokennel bekuldott pontszam (a token egyszer hasznalatos)."""
     token = start_game_session(client, headers, game_type)
     return client.post("/api/leaderboard/submit", json={
         "game_type": game_type,
@@ -117,12 +114,6 @@ async def test_leaderboard_operations():
     assert r.status_code == 200
     assert r.json()["best_score"] == 4000
 
-    # A ranglista bejelentkezest igenyel: korabban barki lekerhette, es beceneve nem
-    # levo jatekosnal a valodi nevet is visszaadta.
-    #
-    # A 401-es agat csak ugy lehet ellenorizni, ha erre az egy hivasra levesszuk a
-    # get_current_user override-ot: a mock user kulonben minden kerest bejelentkezettnek
-    # lat, fejleccel vagy anelkul, es a vegpont mindig 200-at adna.
     app.dependency_overrides.pop(get_current_user, None)
     r = client.get("/api/leaderboard")
     assert r.status_code == 401

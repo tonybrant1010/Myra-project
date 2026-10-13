@@ -1,17 +1,9 @@
-"""A v2 (POMP) ESV-normalizálás egységtesztjei.
-
-A v1 hibája: a P dimenzió (1 - xp/30) érvényes, 1-5 közötti válaszokkal
-legfeljebb 0.8-ig jutott, így a 4-es bucket ("erős érzelemszabályozás")
-mérésből elérhetetlen volt. A v2 (POMP) képleteknél mind a négy dimenzió
-a teljes [0, 1] tartományt kihasználja, és mind a négy bucket elérhető.
-"""
 import itertools
 
 from server import NORM_VERSION, _bucket, _compute_norms
 
 
 def _answers(a_val: int, p_val: int, h_val: int, c_val: int) -> list[int]:
-    """21 elemű válaszlista blokkonként azonos értékekkel."""
     return [a_val] * 6 + [p_val] * 6 + [h_val] * 4 + [c_val] * 5
 
 
@@ -58,7 +50,6 @@ def test_all_norms_stay_in_unit_interval():
 
 
 def test_every_bucket_reachable_in_every_dimension():
-    """v1-ben a P dimenzióban a 4-es bucket elérhetetlen volt — v2-ben már nem."""
     reachable = {"a": set(), "p": set(), "h": set(), "c": set()}
     for xa in range(6, 31):
         reachable["a"].add(_bucket((xa - 6) / 24.0))
@@ -72,7 +63,6 @@ def test_every_bucket_reachable_in_every_dimension():
 
 
 def test_p_is_inverted_and_monotonic():
-    """Magasabb P-válaszok (rosszabb szabályozás) monoton alacsonyabb P-normát adnak."""
     previous = None
     for p_val in range(1, 6):
         current = _compute_norms(_answers(3, p_val, 3, 1))["p"]

@@ -1,5 +1,3 @@
-"""Myra-project backend — Supabase/PostgreSQL + custom JWT, no external dependencies except the
-configurable LLM provider (OpenAI / Anthropic / Google Gemini) chosen by the admin."""
 import asyncio
 import base64
 import csv
@@ -87,12 +85,10 @@ PIPER_NOISE_SCALE = os.environ.get("PIPER_NOISE_SCALE", "0.667")
 PIPER_NOISE_W = os.environ.get("PIPER_NOISE_W", "0.8")
 TTS_ENGINE = os.environ.get("TTS_ENGINE", "none").strip().lower()
 
-# A felolvasó kizárólag a helyi Piper motort használja (magyar női hang: Anna):
-# gyorsabb (RTF ~0,09), hálózatfüggetlen, és hanganyag nem megy ki külső szolgáltatóhoz.
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("myra")
-logging.getLogger("fontTools").setLevel(logging.WARNING)  # PDF-riport fontbeágyazás INFO-zaja
+logging.getLogger("fontTools").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
@@ -182,26 +178,12 @@ def _is_allowed_cors_origin(origin: str) -> bool:
     norm = origin.rstrip("/")
     if norm in ["https://www.myra-project.hu", "https://myra-project.hu"]:
         return True
-    # localhost csak fejlesztői módban — élesben ne legyen preflight-átjáró
     if os.environ.get("ENVIRONMENT") == "development" and re.match(r"^http://localhost:\d+$", norm):
         return True
     return False
 
 
 def _build_chat_kb_query(user_message: str, history: list, state: Any) -> str:
-    """A keresés MINDIG az aktuális input üzenetre megy.
-
-    Korábban a rövid üzeneteket "feldúsította": négynél kevesebb érdemi szó esetén
-    az ELŐZŐ user-üzenetet és az állapotprofilt is beletette a keresésbe. Emiatt a
-    keresés nem arra futott, amit a felhasználó éppen írt — a 2026-08-17-i mérésben
-    a "szia" 0,493-as találati értéket kapott és öt PDF-részletet hozott, mert nem
-    a "szia"-ra keresett, hanem az előző mondatra és az állapotkódra.
-
-    Ha az üzenetben nincs egyetlen érdemi szó sem (köszönés, hangulatjel, "ok"),
-    üres stringet adunk vissza, és a hívó kihagyja a keresést: ilyenkor nulla
-    részlet megy a promptba. A `history` és a `state` paraméter szándékosan a
-    helyén marad, hogy a hívási pontok változatlanok maradjanak.
-    """
     terms = _knowledge_terms(user_message, max_terms=12)
     if not terms:
         return ""
@@ -258,94 +240,44 @@ def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
 CHAT_HISTORY_MAX_MESSAGES = _env_int("CHAT_HISTORY_MAX_MESSAGES", 120, 20, 300)
 CHAT_HISTORY_MAX_CHARS = _env_int("CHAT_HISTORY_MAX_CHARS", 45000, 8000, 120000)
 RAG_CANDIDATE_POOL = _env_int("RAG_CANDIDATE_POOL", 20, 5, 200)
-# Hány PDF-részlet mehet a chat promptjába. 0 = egyáltalán ne menjen.
-# 2026-08-12 óta fordulónként 5 részlet (~5400 karakter) kerül a rendszerutasításba;
-# azelőtt ez a blokk üres volt. Ezzel a kapcsolóval a régi állapot visszaállítható
-# újraépítés nélkül, a .env-ből.
 RAG_CHAT_CHUNKS = _env_int("RAG_CHAT_CHUNKS", 5, 0, 10)
 RAG_KEEPWARM_INTERVAL_S = _env_int("RAG_KEEPWARM_INTERVAL_S", 240, 0, 3600)
-# A beagyazo modell (paraphrase-multilingual-MiniLM-L12-v2) max_seq_length ertek 128 TOKEN.
-# Magyar szakszovegen ez ~500 karakter: efolott a szoveg vege NEM kerul be a vektorba.
-# 2026-08-18-i meres (Cloud Shell, valodi tudasanyag-reszlet): 500 karakternel az elteres
-# mar csak 0.117, 550-nel pontosan 0.000000 -- vagyis a farok lathatatlan.
-# A regi 1400-as darabolassal a 980 reszletbol 825 (84%) csonkolva indexelodott, es a
-# tudasanyag 601 619 karaktere (57%) SOHA nem kerult be a szemantikus keresesbe. A
-# kulcsszavas ag (Postgres to_tsquery) a teljes szoveget latja -- ezert az hordta eddig
-# a rendszert.
-# A cim is a beagyazasba megy ("{title}\n{chunk}"), a leghosszabb cim 77 karakter,
-# ezert a darab merete 400, hogy a cimmel egyutt is beleferjen.
-# FONTOS: a valtoztatas utan UJRAINDEXELES kell, kulonben a regi, csonkolt vektorok
-# maradnak az adatbazisban.
 RAG_CHUNK_MAX_CHARS = _env_int("RAG_CHUNK_MAX_CHARS", 400, 120, 2000)
 RAG_CHUNK_OVERLAP = _env_int("RAG_CHUNK_OVERLAP", 80, 0, 400)
-# Ennel rovidebb darab ne alljon onalloan az indexben, ha a szomszedjaba beolvaszthato.
 RAG_CHUNK_MIN_CHARS = _env_int("RAG_CHUNK_MIN_CHARS", 120, 0, 1000)
 
-# --- Beagyazo modell es ujrarangsorolas (2026-09) -----------------------------
-# A dimenzio es az oszlopnev ezentul egyutt mozog a modellel: egy 1024 dimenzios
-# modell sajat oszlopot kap (embedding_1024), a regi embedding_384 erintetlen
-# marad, igy ket modell kozott ujraindexeles nelkul is lehet oda-vissza valtani.
 EMBED_DIM = _env_int("EMBED_DIM", 384, 64, 4096)
 EMBED_COL = f"embedding_{EMBED_DIM}"
-# Az e5 csaladnal a prefix NEM opcionalis: prefix nelkul a kerdes es a bekezdes
-# vektora mas terbe kerul, es a talalati minoseg erdemben romlik.
 EMBED_QUERY_PREFIX = os.environ.get("EMBED_QUERY_PREFIX", "")
 EMBED_PASSAGE_PREFIX = os.environ.get("EMBED_PASSAGE_PREFIX", "")
-# Ures ertek = nincs ujrarangsorolas, a regi (tavolsag alapu) viselkedes marad.
 RAG_RERANKER_MODEL = os.environ.get("RAG_RERANKER_MODEL", "").strip()
 try:
     RAG_RERANK_MIN_SCORE = float(os.environ.get("RAG_RERANK_MIN_SCORE", "0.0"))
 except (TypeError, ValueError):
     RAG_RERANK_MIN_SCORE = 0.0
-# Az ujrarangsorolas ara linearis a jeloltek szamaval ES a szovegek hosszaval.
-# Merve (4 magos CPU, bge-reranker-base): 60 jelolt x 1500 karakter ~ 40 masodperc.
-# Ezert a rangsorolas SZUKEBB listan es ROVIDEBB szovegen fut, mint ami vegul a
-# promptba kerul: a dontesehez elég a reszlet eleje, a modell viszont a teljes
-# darabot kapja meg.
 RAG_RERANK_POOL = _env_int("RAG_RERANK_POOL", 20, 1, 200)
 RAG_RERANK_DOC_CHARS = _env_int("RAG_RERANK_DOC_CHARS", 700, 100, 4000)
 RAG_RERANK_THREADS = _env_int("RAG_RERANK_THREADS", 0, 0, 64)
 
-# --- Felhasznaloi profil (2026-09) -------------------------------------------
-# A profil NEM a beszelgetes osszefoglaloja, hanem fix mezos kivonat tobb
-# merési ciklusbol. Azert fix mezos, mert igy longitudinalisan osszevetheto es
-# egy szakember is el tudja olvasni; azert teljes ujrageneralas a forrasbol
-# (soha nem inkrementalis toldozas), mert egy hibas kovetkeztetes kulonben
-# beegne, es onnantol onmagat erositene.
 PROFILE_ENABLED = os.environ.get("PROFILE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 PROFILE_MAX_CHARS = _env_int("PROFILE_MAX_CHARS", 2800, 300, 6000)
 PROFILE_SOURCE_MAX_CHARS = _env_int("PROFILE_SOURCE_MAX_CHARS", 60000, 2000, 400000)
 PROFILE_REFRESH_MESSAGES = _env_int("PROFILE_REFRESH_MESSAGES", 30, 5, 500)
-# A beszelgetes-diagram (v1.3, 2026-08-30) parameterei. Ezek NEM szabadon
-# hangolhato izlesbeli ertekek: a jelolt kiugrasok tolük fuggenek, tehat
-# valtoztatas eseten a korabbi profilok mar mas szabaly szerint keszultek.
 CONV_SESSION_GAP_MIN = _env_int("CONV_SESSION_GAP_MIN", 30, 1, 1440)
 try:
     CONV_SPIKE_K = float(os.environ.get("CONV_SPIKE_K", "2.5"))
 except (TypeError, ValueError):
     CONV_SPIKE_K = 2.5
 
-# --- Celzott felidezes (2026-09) ---------------------------------------------
-# Nem minden fordulóban fut. A kiindulas az, hogy a korabbi beszelgetesbol vett
-# reszlet a beszelgetes kozepen kizokkent - kiveve, ha a felhasznalo EPPEN a
-# multra kerdez. Ezert kapuzott: elobb egy olcso mintaillesztes dont, es csak
-# utana indul barmilyen kereses.
 RECALL_ENABLED = os.environ.get("RECALL_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 RECALL_MAX_ITEMS = _env_int("RECALL_MAX_ITEMS", 3, 1, 10)
 RECALL_CANDIDATES = _env_int("RECALL_CANDIDATES", 20, 3, 100)
 RECALL_MAX_CHARS = _env_int("RECALL_MAX_CHARS", 1200, 200, 6000)
 RECALL_SNIPPET_CHARS = _env_int("RECALL_SNIPPET_CHARS", 320, 80, 1200)
-# Jelentes szerinti (vektoros) felidezes, 2026-10. A felhasznalo uzenetei a helyi
-# embedding-modellel vektort kapnak (chat_message_embeddings tabla), igy a mas szavakkal
-# leirt hasonlo helyzetek is megtalalhatok. Csak bekapcsolt memoria mellett, es a
-# memoria kikapcsolasakor a vektorok torlodnek.
 RECALL_VECTOR_ENABLED = os.environ.get("RECALL_VECTOR_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 RECALL_EMBED_CHARS = _env_int("RECALL_EMBED_CHARS", 1500, 100, 4000)
 RECALL_MIN_MESSAGE_CHARS = _env_int("RECALL_MIN_MESSAGE_CHARS", 12, 1, 500)
 RECALL_BACKFILL_BATCH = _env_int("RECALL_BACKFILL_BATCH", 32, 1, 256)
-# Az ujrarangsorolo (bge-reranker) pontszamanak kuszobe. Ha a felhasznalo maga utal a
-# multra, lazabb; ha Myra magatol hozna elo egy korabbi helyzetet, szigorubb, hogy ne
-# zokkentse ki a beszelgetest egy alig kapcsolodo emlek.
 try:
     RECALL_EXPLICIT_MIN_SCORE = float(os.environ.get("RECALL_EXPLICIT_MIN_SCORE", "0.0"))
 except ValueError:
@@ -355,19 +287,12 @@ try:
 except ValueError:
     RECALL_PROACTIVE_MIN_SCORE = 2.0
 RECALL_PROACTIVE_MAX_ITEMS = _env_int("RECALL_PROACTIVE_MAX_ITEMS", 2, 1, 10)
-# Felidezeskor ennyi korabbi felhasznaloi uzenet kerul az ulesbol a keresesbe,
-# uzenetenkent legfeljebb ennyi karakterrel (az ujrarangsorolo 512 tokenes).
 RECALL_CONTEXT_MESSAGES = _env_int("RECALL_CONTEXT_MESSAGES", 4, 1, 10)
 RECALL_CONTEXT_CHARS = _env_int("RECALL_CONTEXT_CHARS", 200, 50, 1000)
-# A bge-reranker-base magyarul gyenge: egyertelmu talalatra is adhat negativ
-# pontot. Felidezeskor ezert a nagyon kozeli uzenet-vektor (e5 koszinusz-tavolsag)
-# onmagaban is elfogadott.
 try:
     RECALL_EXPLICIT_MAX_DIST = float(os.environ.get("RECALL_EXPLICIT_MAX_DIST", "0.10"))
 except ValueError:
     RECALL_EXPLICIT_MAX_DIST = 0.10
-# Felidezeskor a legjobb talalat utani nehany felhasznaloi uzenet is bekerul
-# ugyanabbol az ulesbol: a "ki akarom beszelni a rajztanart" utan jon a tortenet.
 RECALL_EXPLICIT_FOLLOWUPS = _env_int("RECALL_EXPLICIT_FOLLOWUPS", 2, 0, 5)
 RECALL_EXPLICIT_SNIPPET_CHARS = _env_int("RECALL_EXPLICIT_SNIPPET_CHARS", 600, 80, 2000)
 RECALL_EXPLICIT_MAX_CHARS = _env_int("RECALL_EXPLICIT_MAX_CHARS", 2400, 200, 8000)
@@ -376,29 +301,14 @@ try:
 except ValueError:
     RAG_VECTOR_MAX_DISTANCE = 0.62
 CHAT_MESSAGE_MAX_CHARS = _env_int("CHAT_MESSAGE_MAX_CHARS", 8000, 500, 20000)
-# Az LLM-hívás teljes költségkerete. Korábban 90s timeout x 3 próba (+2x8s várakozás)
-# volt, azaz worst case ~4,8 perc — a proxy viszont jóval korábban bontott, így
-# a kliens 504-et kapott, miközben a backend még percekig égette az API-keretet egy
-# olyan kérésre, amit már senki nem várt. A keret alá kell esni a proxy timeoutjának.
-# Az egy próbálkozásra jutó timeout az eredeti 90 mp (a 30 mp-es szigorítás lassú
-# Gemini-válasznál 502-t okozott ott, ahol korábban a válasz még megérkezett és
-# mentésre került). A teljes keret ezt kétszer engedi meg, hogy egy beakadt kérés
-# se tudjon percekig futni. Mindhárom env-változóval hangolható újrafordítás nélkül.
 LLM_TOTAL_BUDGET_S = _env_int("LLM_TOTAL_BUDGET_S", 200, 10, 600)
 LLM_ATTEMPT_TIMEOUT_S = _env_int("LLM_ATTEMPT_TIMEOUT_S", 90, 5, 300)
 LLM_RETRY_BACKOFF_S = _env_int("LLM_RETRY_BACKOFF_S", 8, 0, 60)
-# Helyi modellszerver (Ollama), 2026-10. Az admin a felületen kapcsolja be és választ
-# modellt; ha a gép nem érhető el, a chat a beállított API-szolgáltatóra esik vissza.
-# CPU-n a rendszerprompt első feldolgozása perceket vehet igénybe, ezért a válaszra
-# hosszabb ideig várunk, a kapcsolódásra viszont csak pár másodpercig.
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").strip().rstrip("/")
 OLLAMA_TIMEOUT_S = _env_int("OLLAMA_TIMEOUT_S", 300, 10, 900)
 OLLAMA_CONNECT_TIMEOUT_S = _env_int("OLLAMA_CONNECT_TIMEOUT_S", 4, 1, 30)
 OLLAMA_DOWN_COOLDOWN_S = _env_int("OLLAMA_DOWN_COOLDOWN_S", 60, 0, 3600)
-# A helyi LLM-szerver (llama-server --api-key) kulcsa. Üresen nem küld fejlécet.
 LOCAL_LLM_API_KEY = os.environ.get("LOCAL_LLM_API_KEY", "").strip()
-# Az előtöltés a háttérben fut, senki nem vár rá: kisebb (sűrű) modellnél a teljes
-# állandó rész első beolvasása CPU-n 6 percnél is tovább tarthat.
 LOCAL_WARM_TIMEOUT_S = _env_int("LOCAL_WARM_TIMEOUT_S", 1200, 30, 3600)
 
 
@@ -410,9 +320,6 @@ def _local_llm_headers() -> dict:
 
 
 def _strip_local_markers(text: str) -> str:
-    """A helyi modell üzenetében a [FORDULÓ KONTEXTUSA] és [FELHASZNÁLÓ] jelölők
-    tagolják a promptot; a felhasználó szövegében ezeket hatástalanítjuk, hogy ne
-    tudjon hamis rendszerkontextust beírni."""
     for marker, safe in (
         ("[FORDULÓ KONTEXTUSA", "(FORDULÓ KONTEXTUSA"),
         ("[FELHASZNÁLÓ]", "(FELHASZNÁLÓ)"),
@@ -423,24 +330,12 @@ def _strip_local_markers(text: str) -> str:
 
 
 _ollama_down_until = 0.0
-# A helyi modell (CPU) csak akkor gyors, ha a prompt eleje fordulóról fordulóra
-# változatlan, mert azt a helyi szerver nem számolja újra. Ezért a helyi kérés máshogy épül:
-# elöl az állandó rész (szabályok, állapot, profil, előzmények), a fordulónként változó
-# rész (idő, tudásanyag, felidézés, krízisblokk) az utolsó üzenetben. Az előzmények
-# ablaka lépcsőzetesen csúszik (LOCAL_HISTORY_MIN..MIN+STEP-1 üzenet), hogy ne minden
-# fordulóban mozduljon el az eleje.
 LOCAL_RAG_CHUNKS = _env_int("LOCAL_RAG_CHUNKS", 1, 0, 10)
 LOCAL_HISTORY_MIN = _env_int("LOCAL_HISTORY_MIN", 24, 2, 200)
 LOCAL_HISTORY_STEP = _env_int("LOCAL_HISTORY_STEP", 24, 1, 200)
-# A fordulónként változó blokk minden token-je ~0,05 mp beolvasás CPU-n, ezért a helyi
-# modellnél rövidítve megy: egy tudásrészlet, korlátozott hosszal; a magától (nem kérésre)
-# felhozott emlékek kimaradnak, a kért felidézés rövidítve marad.
 LOCAL_KB_MAX_CHARS = _env_int("LOCAL_KB_MAX_CHARS", 600, 0, 20000)
 LOCAL_RECALL_MAX_CHARS = _env_int("LOCAL_RECALL_MAX_CHARS", 900, 0, 20000)
 LOCAL_IMPLICIT_RECALL = os.environ.get("LOCAL_IMPLICIT_RECALL", "false").strip().lower() == "true"
-# Az elküldött helyi üzenetek pontos szövege (üzenet-id -> tartalom). A következő
-# fordulóban az előzmény szó szerint ugyanígy megy vissza, így a szerver gyorsítótára
-# a teljes korábbi beszélgetést felhasználja, és csak az új részt kell beolvasnia.
 LOCAL_SENT_MAX = _env_int("LOCAL_SENT_MAX", 20000, 100, 1000000)
 _local_sent: "OrderedDict[str, str]" = OrderedDict()
 
@@ -455,8 +350,6 @@ def _remember_local_sent(msg_id: str, content: str) -> None:
 
 
 def _format_local_history(messages: list) -> List[dict]:
-    """Előzmény a helyi modellnek: ha egy üzenet pontos elküldött formája ismert, azt
-    adjuk vissza, különben ugyanazt a formát, mint a felhős modellnél."""
     out: List[dict] = []
     for m in messages:
         sent = _local_sent.get(str(m.id))
@@ -491,7 +384,6 @@ KB_TEXT_UPLOAD_MAX_BYTES = _env_int("KB_TEXT_UPLOAD_MAX_BYTES", 2 * 1024 * 1024,
 
 
 class pgvector_type(UserDefinedType):
-    """Custom SQLAlchemy type for PostgreSQL pgvector columns."""
     def __init__(self, dim: int = None):
         dim = EMBED_DIM if dim is None else dim
         self.dim = dim
@@ -546,7 +438,6 @@ class User(Base):
     
     reset_token = Column(String(80), nullable=True)
     token_expires_at = Column(DateTime(timezone=True), nullable=True)
-    # Per-token találgatás-számláló: RESET_TOKEN_MAX_ATTEMPTS hibás próba után a token elhal.
     reset_attempts = Column(Integer, nullable=False, default=0)
 
     last_login_ip = Column(String(80), nullable=True)
@@ -563,8 +454,6 @@ class User(Base):
     terms_accepted_at = Column(DateTime(timezone=True), nullable=True)
     forum_nickname = Column(String(50), nullable=True, unique=True)
     forum_avatar = Column(String(10), nullable=True)
-    # Onkentes: a profil-memoria csak akkor keszul es csak akkor kerul a promptba,
-    # ha a felhasznalo maga kapcsolta be a Beallitasokban. Alapertek: kikapcsolva.
     profile_memory_enabled = Column(Boolean, nullable=False, default=False, server_default=sql_text("false"))
 
 
@@ -612,7 +501,6 @@ class QuizSubmission(Base):
 
 
 class UserGoal(Base):
-    """A felhasználó által vállalt mikro-célok (a mérés leggyengébb skálája alapján javasolva)."""
     __tablename__ = "user_goals"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -625,8 +513,6 @@ class UserGoal(Base):
 
 
 class UserProfile(Base):
-    """Felhasznalonkent egy sor. A `content` a kesz, promptba illesztheto szoveg;
-    a szamlalok abbol dontenek, mikor avult el a profil."""
     __tablename__ = "user_profiles"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
@@ -638,7 +524,6 @@ class UserProfile(Base):
 
 
 class AppSetting(Base):
-    """Key-value bag for admin-managed configuration (LLM provider/model/api_key/system_prompt/kb_text)."""
     __tablename__ = "app_settings"
     key = Column(String(60), primary_key=True)
     value = Column(Text, nullable=True)
@@ -694,15 +579,6 @@ class AdminAuditLog(Base):
 
 
 class SecurityEvent(Base):
-    """Biztonsági esemény napló.
-
-    Ide ír a hoston futó `ops/myra-watch.py` (közvetlenül psql-lel, hogy akkor is
-    menjen, ha a backend beragadt) és maga a backend is. Az admin felület ebből
-    a táblából mutatja, mi történt, amíg nem voltál gép közelben.
-
-    FIGYELEM: az oszlopnevek és típusok kötöttek — ha itt változtatsz,
-    a myra-watch.py DDL-jét is át kell írni.
-    """
     __tablename__ = "security_events"
     id = Column(Integer, primary_key=True, index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
@@ -734,21 +610,17 @@ def _now() -> datetime:
 try:
     from zoneinfo import ZoneInfo
     _BUDAPEST_TZ = ZoneInfo("Europe/Budapest")
-except Exception:  # a slim image-bol hianyozhat a tz-adatbazis
+except Exception:
     _BUDAPEST_TZ = None
 
 
 def _last_sunday_utc(year: int, month: int) -> datetime:
     d = datetime(year, month, 31, tzinfo=timezone.utc)
-    d -= timedelta(days=(d.weekday() + 1) % 7)  # weekday(): hetfo=0 ... vasarnap=6
+    d -= timedelta(days=(d.weekday() + 1) % 7)
     return d.replace(hour=1, minute=0, second=0, microsecond=0)
 
 
 def _to_local(dt: Optional[datetime]) -> Optional[datetime]:
-    """UTC -> magyar helyi ido. A modellnek MINDIG ezt kell latnia: a nyers UTC
-    miatt hitte 14:20-kor, hogy 12:20 van. Ha a tz-adatbazis hianyzik a kepbol,
-    kezi EU-s szabaly: marcius utolso vasarnapjatol oktober utolso vasarnapjaig
-    UTC+2, egyebkent UTC+1."""
     if dt is None:
         return None
     if dt.tzinfo is None:
@@ -772,15 +644,10 @@ def verify_password(p: str, h: str) -> bool:
 
 
 def _hash_secret(value: str) -> str:
-    # Megjegyzés: a titok itt utótag, nem előtag, ezért a SHA-256 length-extension
-    # tulajdonsága nem használható ki. Új kódban inkább a _hmac_secret() használandó;
-    # ez a függvény azért marad változatlan, mert a már kiadott trusted-device
-    # hasheket egy csere érvénytelenítené (a felhasználóknak újra MFA-zniuk kellene).
     return hashlib.sha256(f"{value}:{JWT_SECRET}".encode("utf-8")).hexdigest()
 
 
 def _hmac_secret(value: str) -> str:
-    """Kulcsolt hash HMAC-SHA256-tal — új titok-származtatásokhoz ez a helyes konstrukció."""
     return _hmac.new(JWT_SECRET.encode("utf-8"), value.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
@@ -789,8 +656,6 @@ def _hash_mfa_code(challenge_id: str, code: str) -> str:
 
 
 def _hash_reset_token(token: str, email: str) -> str:
-    """A hash a felhasználó email-címéhez van kötve, így egy kód kizárólag arra a fiókra
-    érvényes, amelyikre kiadták — nem illeszkedhet más felhasználó függő tokenjére."""
     return _hmac_secret(f"reset:{(email or '').strip().lower()}:{token.strip()}")[:64]
 
 
@@ -809,7 +674,6 @@ async def _create_unique_reset_token(db: AsyncSession, email: str) -> tuple[str,
 
 
 def _hkdf_sha256(ikm: bytes, salt: bytes, info: bytes, length: int = 32) -> bytes:
-    """Simplified HKDF-SHA256 (RFC 5869) — extract-then-expand, stdlib only."""
     prk = _hmac.new(salt or b"\x00" * 32, ikm, hashlib.sha256).digest()
     t = b""
     okm = b""
@@ -820,13 +684,10 @@ def _hkdf_sha256(ikm: bytes, salt: bytes, info: bytes, length: int = 32) -> byte
 
 
 def _derive_field_key(purpose: str) -> bytes:
-    """Derive a 32-byte key from JWT_SECRET for a specific purpose."""
     return _hkdf_sha256(JWT_SECRET.encode("utf-8"), b"myra-field-key-v1", purpose.encode("utf-8"), 32)
 
 
 def _encrypt_field(plaintext: str, purpose: str = "totp") -> str:
-    """Encrypt a short string using XOR with HMAC-SHA256 keystream + HMAC tag.
-    Format: base64(nonce‖ciphertext‖tag) where nonce=16B, tag=32B."""
     key = _derive_field_key(purpose)
     enc_key = _hmac.new(key, b"enc", hashlib.sha256).digest()
     mac_key = _hmac.new(key, b"mac", hashlib.sha256).digest()
@@ -841,7 +702,6 @@ def _encrypt_field(plaintext: str, purpose: str = "totp") -> str:
 
 
 def _decrypt_field(token: str, purpose: str = "totp") -> str:
-    """Decrypt a field encrypted with _encrypt_field. Raises ValueError on tamper."""
     key = _derive_field_key(purpose)
     enc_key = _hmac.new(key, b"enc", hashlib.sha256).digest()
     mac_key = _hmac.new(key, b"mac", hashlib.sha256).digest()
@@ -867,22 +727,19 @@ TOTP_ISSUER = "Myra-Project"
 
 
 def _totp_generate_secret(length: int = 20) -> str:
-    """Generate a random TOTP secret as base32."""
     return base64.b32encode(os.urandom(length)).decode("ascii").rstrip("=")
 
 
 def _totp_hotp(secret_b32: str, counter: int) -> str:
-    """HOTP value (RFC 4226)."""
     padded = secret_b32.upper() + "=" * (-len(secret_b32) % 8)
     key = base64.b32decode(padded)
-    digest = _hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()  # nosec B303
+    digest = _hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
     offset = digest[-1] & 0x0F
     code_int = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
     return str(code_int % (10 ** TOTP_DIGITS)).zfill(TOTP_DIGITS)
 
 
 def _totp_verify(secret_b32: str, code: str) -> bool:
-    """Verify a TOTP code with ±TOTP_WINDOW tolerance."""
     code = code.strip()
     if len(code) != TOTP_DIGITS or not code.isdigit():
         return False
@@ -894,7 +751,6 @@ def _totp_verify(secret_b32: str, code: str) -> bool:
 
 
 def _totp_provisioning_uri(secret_b32: str, email: str) -> str:
-    """Build otpauth:// URI for QR scanning."""
     import urllib.parse
     label = urllib.parse.quote(f"{TOTP_ISSUER}:{email}", safe="")
     params = urllib.parse.urlencode({"secret": secret_b32, "issuer": TOTP_ISSUER, "algorithm": "SHA1", "digits": TOTP_DIGITS, "period": TOTP_PERIOD})
@@ -952,9 +808,6 @@ def create_refresh_token(user: User, *, mfa_verified: bool = False) -> str:
         "sub": str(user.id),
         "email": user.email,
         "token_version": int(getattr(user, "token_version", 0) or 0),
-        # A refresh token is hordozza, hogy a munkamenet átment-e MFA-n. Enélkül a
-        # /auth/refresh minden tokenből MFA-zott access tokent gyártott, azaz egy
-        # MFA nélkül szerzett refresh token admin hozzáférésre volt váltható.
         "mfa": bool(mfa_verified),
         "iat": int(now.timestamp()),
         "exp": exp,
@@ -965,14 +818,7 @@ def create_refresh_token(user: User, *, mfa_verified: bool = False) -> str:
 
 
 def _client_ip(request: Request) -> str:
-    """A rate limitek kulcsa. Csak akkor bízunk a továbbított fejlécben, ha a kérés
-    igazoltan a saját proxynkon jött át (érvényes X-Myra-Proxy-Secret) — enélkül egy
-    közvetlenül az origin-hez forduló támadó tetszőleges IP-t hazudhatna, és ezzel az
-    összes rate limitet (bejelentkezés, reset, regisztráció) megkerülhetné."""
     if os.environ.get("TRUST_PROXY", "").lower() == "true" and getattr(request.state, "via_trusted_proxy", False):
-        # A fordított proxy (Caddy) a valódi kliens IP-jét teszi az x-forwarded-for
-        # fejlécbe, ezért a bal szélső érték itt megbízható. Tartaléknak az
-        # x-real-ip-t is elfogadjuk.
         forwarded = request.headers.get("x-forwarded-for", "") or request.headers.get("x-real-ip", "")
         if forwarded:
             return forwarded.split(",", 1)[0].strip()[:80]
@@ -1045,7 +891,6 @@ def _register_failure(request: Request, email: str) -> None:
 def _check_reg_limit(request: Request) -> None:
     if _is_testing():
         return
-    """IP-alapú regisztrációs limit: max REG_MAX regisztráció / REG_WINDOW_S másodperc."""
     ip = _client_ip(request)
     now = time.monotonic()
     s = _reg_attempts.get(ip)
@@ -1057,7 +902,6 @@ def _check_reg_limit(request: Request) -> None:
 
 
 def _record_reg(request: Request) -> None:
-    """Sikeres regisztráció rögzítése az IP-limithez."""
     ip = _client_ip(request)
     now = time.monotonic()
     s = _reg_attempts.get(ip) or {"count": 0, "first": now}
@@ -1173,9 +1017,6 @@ def _check_and_record_admin_action_limit(request: Request, admin_id: int, action
     _admin_action_attempts[key] = s
 
 
-# A két legdrágább végpont: a /chat/send minden hívása egy LLM-kérés RAG-kereséssel,
-# a /tts/speak minden hívása egy subprocess-ben futó Piper-szintézis. Rate limit nélkül
-# egy hitelesített felhasználó korlátlanul égetheti az API-keretet, illetve a CPU-t.
 _chat_send_attempts: dict[str, dict] = {}
 CHAT_SEND_WINDOW_S = 60
 CHAT_SEND_MAX = _env_int("CHAT_SEND_MAX", 20, 5, 120)
@@ -1184,9 +1025,6 @@ _tts_attempts: dict[str, dict] = {}
 TTS_WINDOW_S = 60
 TTS_MAX = _env_int("TTS_MAX", 30, 5, 200)
 
-# Helyi beszedfelismeres (diktalas). A hanganyag a sajat szerveren marad: a bongeszo
-# feltolti a felvetelt, itt fut a Whisper (faster-whisper, int8 CPU-n), es csak a
-# felismert szoveg megy vissza a feluletre.
 STT_ENABLED = os.environ.get("STT_ENABLED", "true").strip().lower() == "true"
 STT_MODEL = os.environ.get("STT_MODEL", "large-v3-turbo").strip() or "large-v3-turbo"
 STT_MODEL_DIR = Path(os.environ.get("STT_MODEL_DIR", str(DB_FILE_DIR / "stt")))
@@ -1210,7 +1048,6 @@ FORUM_POST_MAX = _env_int("FORUM_POST_MAX", 6, 2, 60)
 def _check_and_record_user_limit(
     store: dict, request: Request, user_id: int, window_s: int, max_count: int, detail: str
 ) -> None:
-    """Általános, (IP, user) kulcsú csúszóablakos limiter a meglévő minta szerint."""
     if _is_testing():
         return
     key = f"{_client_ip(request)}:{user_id}"
@@ -1251,8 +1088,6 @@ def _check_and_record_stt_limit(request: Request, user_id: int) -> None:
 
 
 def _load_stt_model():
-    """A Whisper-modell betoltese (eloszor, utana cache-bol). Az elso hivas letolti a
-    modellt az STT_MODEL_DIR mappaba, ami a /app/data koteten keresztul marad meg."""
     global _stt_model
     if _stt_model is not None:
         return _stt_model
@@ -1271,8 +1106,6 @@ def _load_stt_model():
 
 
 def _transcribe_with_stt(raw: bytes) -> str:
-    """A feltoltott hangfajl atirasa szovegge. A kodolast a faster-whisper a PyAV-val
-    vegzi, ezert kulon ffmpeg telepitese nem szukseges."""
     model = _load_stt_model()
     tmp = tempfile.NamedTemporaryFile(suffix=".audio", delete=False)
     try:
@@ -1294,8 +1127,6 @@ def _transcribe_with_stt(raw: bytes) -> str:
 
 
 async def _warm_stt_model():
-    """A modell a hatterben toltodik be (es az elso alkalommal le), hogy a kontener
-    indulasat ne tartsa fel."""
     if not STT_ENABLED:
         return
     try:
@@ -1422,24 +1253,11 @@ def _extract_pdf_text(path: Path) -> str:
 
 
 def _split_long_paragraph(paragraph: str, max_chars: int, overlap: int) -> list[str]:
-    """Hosszu bekezdes darabolasa SZOHATARON.
-
-    A korabbi valtozat pontos karakterpoziciokra vagott (paragraph[start:start+max_chars]),
-    ezert szo kozepen tort, es a bekezdes VEGEN gyakran par karakteres torzs maradt:
-    ".", "lja", "as).", "zsgalatat.". 2026-08-18-i ujraindexelesnel 3166 darabbol 108 volt
-    ilyen -- mindegyik szo szerint benne volt az elozo darabban is (a 80-as atfedes miatt),
-    vagyis tiszta zaj a vektorindexben. Itt szavankent epitunk, es a kovetkezo darab mindig
-    legalabb egy UJ szoval kezdodik, tehat csak-atfedes darab nem jon letre.
-    """
     words: list[str] = []
     for szo in paragraph.split():
         if len(szo) <= max_chars:
             words.append(szo)
         else:
-            # Egyetlen "szo" hosszabb a keretnel: URL, tablazat, vagy hibas PDF-kinyeres
-            # (szokozok nelkuli szoveg). Itt nincs szohatar, amin vaghatnank, tehat
-            # karakterre vagunk -- kulonben a darab tullepne a modell 128 tokenes ablakat,
-            # es megint csonkolva indexelodne.
             words.extend(szo[k:k + max_chars] for k in range(0, len(szo), max_chars))
     if not words:
         return []
@@ -1459,8 +1277,6 @@ def _split_long_paragraph(paragraph: str, max_chars: int, overlap: int) -> list[
         out.append(" ".join(current))
         if j >= len(words):
             break
-        # Atfedes: a kovetkezo darab az elozo utolso par szavaval indul, de a kezdopont
-        # mindig elorebb lep (s >= i+1), kulonben vegtelen ciklus lenne.
         s = j
         vissza = 0
         while s > i + 1 and vissza + len(words[s - 1]) + 1 <= overlap:
@@ -1471,11 +1287,6 @@ def _split_long_paragraph(paragraph: str, max_chars: int, overlap: int) -> list[
 
 
 def _merge_short_chunks(chunks: list[str], max_chars: int, min_chars: int) -> list[str]:
-    """A tul rovid darabokat beolvasztja az elozobe, ha belefernek.
-
-    Torolni nem szabad oket: a rovid darabok egy resze valodi, egyedi tartalom
-    (cimsor, felsorolas). Ha nem fer bele az elozobe, marad onalloan.
-    """
     if min_chars <= 0:
         return chunks
     out: list[str] = []
@@ -1493,7 +1304,7 @@ def _chunk_text(text: str, max_chars: Optional[int] = None, overlap: Optional[in
     max_chars = RAG_CHUNK_MAX_CHARS if max_chars is None else max_chars
     overlap = RAG_CHUNK_OVERLAP if overlap is None else overlap
     min_chars = RAG_CHUNK_MIN_CHARS if min_chars is None else min_chars
-    overlap = min(overlap, max(0, max_chars - 1))  # kulonben a ciklus nem halad
+    overlap = min(overlap, max(0, max_chars - 1))
     min_chars = min(min_chars, max_chars)
     text = _clean_pdf_text(text)
     if not text:
@@ -1551,11 +1362,6 @@ def _knowledge_terms(query: str, max_terms: int = 10) -> list[str]:
 
 
 def _build_ts_query(expanded_query: str, max_terms: int = 12) -> str:
-    """A websearch_to_tsquery a szavakat ES-sel kapcsolja ossze, ezert egy valodi
-    mondat sosem talalt: minden szonak szerepelnie kellett volna ugyanabban a
-    chunkban. Itt VAGY-ot epitunk, es a 7 karakternel hosszabb szavakat prefixkent
-    illesztjuk (a magyar stemmer kulon lexemat csinal az "ambivalencia" es az
-    "ambivalens" alakbol - prefix nelkul a ketto nem talalna egymasra)."""
     parts: list[str] = []
     for term in _knowledge_terms(expanded_query, max_terms=max_terms):
         clean = re.sub(r"[^\w\u00c0-\u017f]", "", term)
@@ -1732,18 +1538,13 @@ async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> 
                 WHERE vec.id IS NOT NULL OR txt.id IS NOT NULL
                 ORDER BY rrf DESC, kc.id ASC
                 LIMIT :pool
-            """)  # nosec B608 - EMBED_COL egesz szambol kepzett oszlopnev, a felhasznaloi adat parameterkent megy
+            """)
             res = await db.execute(stmt, {
                 "query_vector": query_vector_str,
                 "ts_query": _build_ts_query(expanded_query),
                 "pool": RAG_CANDIDATE_POOL,
             })
             rows = res.mappings().all()
-            # Ujrarangsorolas: a hibrid fuzio csak jeloltet valogat (vektortavolsag es
-            # kulcsszo-rang alapjan). A kereszt-kodolo ezzel szemben a kerdest es a
-            # reszletet EGYUTT olvassa, ezert olyan illeszkedest is lat, amit a ket
-            # kulon vektor nem. Ezert erdemes bo jeloltlistat felhozni (RAG_CANDIDATE_POOL)
-            # es csak utana szukiteni "limit" darabra.
             rerank_scores = None
             if RAG_RERANKER_MODEL and rows:
                 try:
@@ -1756,9 +1557,6 @@ async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> 
                     scores = await _rerank_scores(query, docs)
                     order = sorted(range(len(head)), key=lambda i: scores[i], reverse=True)
                     rows = [head[i] for i in order] + tail
-                    # A rangsoron kivul maradt jeloltek a lista vegere kerulnek, es
-                    # olyan pontszamot kapnak, ami a kuszob alatt van - igy csak
-                    # akkor jonnek szoba, ha a kuszob amugy sem szur.
                     lowest = min(scores) if scores else 0.0
                     rerank_scores = [scores[i] for i in order] + [lowest - 1.0] * len(tail)
                 except Exception as _e:
@@ -1773,17 +1571,7 @@ async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> 
                     best_dist = dist
                 if row["txt_rnk"] is not None:
                     txt_hits += 1
-                # Tavolsagszures. A RAG_VECTOR_MAX_DISTANCE eddig definialva volt, de
-                # sehol nem hasznaltuk: emiatt MINDIG a legjobb "limit" darab ment at,
-                # akarmilyen laza volt a talalat. Egy 2026-08-17-i meres szerint a valos
-                # uzeneteknel a best_dist 0.52-0.64 kozott mozgott (a jol illeszkedo
-                # warmup lekerdezes 0.259), vagyis fordulonkent ~5400 karakternyi, alig
-                # kapcsolodo szoveg terhelte a promptot. A kuszob feletti talalatok
-                # mostantol kimaradnak; ha nem marad egy sem, akkor nincs tudasanyag-blokk.
-                # Kikapcsolashoz: RAG_VECTOR_MAX_DISTANCE=1.0 a .env-ben.
                 if rerank_scores is not None:
-                    # Ujrarangsorolasnal a vektortavolsag mar nem dontesi alap: a
-                    # kereszt-kodolo pontszama pontosabb, es mas a skalaja.
                     if rerank_scores[row_idx] < RAG_RERANK_MIN_SCORE:
                         continue
                 elif dist is not None and dist > RAG_VECTOR_MAX_DISTANCE:
@@ -1833,7 +1621,7 @@ async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> 
         WHERE {" OR ".join(where_parts)}
         ORDER BY ({" + ".join(score_parts)}) DESC, id ASC
         LIMIT :limit
-    """)  # nosec B608
+    """)
     res = await db.execute(stmt, params)
     rows = res.mappings().all()
     return [
@@ -1873,7 +1661,6 @@ def _is_crisis_message(text: str) -> bool:
         "nembíromtovább", "nembiromtovabb", "nembíromeztmárelviselni",
         "nembiromeztmarelviselni", "nemakarokélni", "nemakarokelni",
     ]
-    # A sulyos jelzesek (pl. "végzek magammal") mindig bekapcsoljak a protokollt is.
     return (
         any(term in normalized for term in crisis_terms)
         or any(term in compact for term in compact_terms)
@@ -1881,10 +1668,6 @@ def _is_crisis_message(text: str) -> bool:
     )
 
 
-# Krizisertesites az adminnak (2026-10). Csak sulyos jelzesre: a "nem birom tovabb"
-# es a "nem tudom mit csinaljak" Myranal bekapcsolja a krizisprotokollt, de ertesitest
-# nem kuld, mert ezek gyakran hetkoznapi elakadasok. Felhasznalonkent cooldown, hogy egy
-# hosszabb krizisbeszelgetes ne arasszon el levelekkel.
 CRISIS_ALERT_ENABLED = os.environ.get("CRISIS_ALERT_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 CRISIS_ALERT_COOLDOWN_MIN = _env_int("CRISIS_ALERT_COOLDOWN_MIN", 360, 0, 10080)
 CRISIS_ALERT_EXCERPT_CHARS = _env_int("CRISIS_ALERT_EXCERPT_CHARS", 500, 50, 4000)
@@ -1907,8 +1690,6 @@ def _is_severe_crisis_message(text: str) -> bool:
 
 
 def _send_crisis_alert_email(user_name: str, user_email: str, user_id: int, excerpt: str, when_str: str) -> bool:
-    """Ertesites az adminnak sulyos krizisjelzesrol. A felhasznaloi szoveg csak a
-    leveltorzsbe kerul (fejlecbe soha), igy nincs header-injection kockazat."""
     if not GMAIL_USER or not GMAIL_APP_PASSWORD or not CRISIS_ALERT_EMAIL:
         logger.error("Krizisertesites: Gmail SMTP nincs beallitva")
         return False
@@ -1941,9 +1722,6 @@ felhasznalonkent legfeljebb {CRISIS_ALERT_COOLDOWN_MIN} percenkent egyszer jon."
 
 
 async def _maybe_crisis_alert(db: AsyncSession, user: "User", text: str) -> None:
-    """Sulyos krizisjelzesnel e-mail az adminnak es bejegyzes a biztonsagi esemenyek
-    koze. Az esemenybe szandekosan nem kerul uzenetszoveg: annak a fiok torlese utan
-    sem szabad az adatbazisban maradnia."""
     if not CRISIS_ALERT_ENABLED or not _is_severe_crisis_message(text):
         return
     now_mono = time.monotonic()
@@ -1982,8 +1760,6 @@ Kérdezz rá röviden a közvetlen biztonságra: egyedül van-e, van-e közvetle
 Ne adj módszert, ne részletezz önsértési módokat, ne vitatkozz, ne moralizálj, ne ígérj titoktartást."""
 
 
-# A futó háttértaskokra erős referenciát kell tartani, különben a GC menet közben
-# elviheti őket (asyncio csak gyenge referenciát tárol) — a feladat némán elhalna.
 _background_tasks: set[asyncio.Task] = set()
 
 
@@ -2122,10 +1898,6 @@ async def _run_startup_migrations() -> None:
         await conn.execute(sql_text("CREATE INDEX IF NOT EXISTS ix_security_events_created_at ON security_events (created_at DESC)"))
         try:
             async with conn.begin_nested():
-                # Uzenet-vektorok a jelentes szerinti felidezeshez. Kulon tabla, hogy a memoria
-                # kikapcsolasakor egyetlen DELETE-tel eltuntetheto legyen; az uzenet vagy a
-                # felhasznalo torlesekor kaszkadolva torlodik. RLS be, policy nelkul, mint a
-                # tobbi tablan: a Supabase REST API-n at nem olvashato.
                 await conn.execute(sql_text(
                     "CREATE TABLE IF NOT EXISTS chat_message_embeddings ("
                     " message_id VARCHAR(40) PRIMARY KEY REFERENCES chat_messages(id) ON DELETE CASCADE,"
@@ -2145,9 +1917,6 @@ async def _run_startup_migrations() -> None:
         await _reset_postgres_sequences(conn)
 
 
-# A users-re mutató gyerektáblák idegen kulcsainak ON DELETE CASCADE-re állítása.
-# A `forum_posts` eredetileg ondelete nélkül készült, ezért PostgreSQL-en a fióktörlés
-# ForeignKeyViolation-nel elbukott minden olyan felhasználónál, aki írt a fórumba.
 USER_FK_CASCADES = [
     ("chat_messages", "user_id", "users", "CASCADE"),
     ("forum_posts", "user_id", "users", "CASCADE"),
@@ -2156,7 +1925,6 @@ USER_FK_CASCADES = [
 
 
 async def _ensure_user_fk_cascade(conn) -> None:
-    """Idempotens: csak akkor cseréli a constraintet, ha még nem CASCADE."""
     if DB_DIALECT != "postgresql":
         return
     for table_name, column_name, ref_table, action in USER_FK_CASCADES:
@@ -2177,13 +1945,13 @@ async def _ensure_user_fk_cascade(conn) -> None:
             if row is None:
                 continue
             conname, confdeltype = row[0], row[1]
-            if confdeltype == "c":  # 'c' = CASCADE, már rendben van
+            if confdeltype == "c":
                 continue
             await conn.execute(sql_text(
-                f'ALTER TABLE {table_name} DROP CONSTRAINT "{conname}"'  # nosec B608
+                f'ALTER TABLE {table_name} DROP CONSTRAINT "{conname}"'
             ))
             await conn.execute(sql_text(
-                f"ALTER TABLE {table_name} "  # nosec B608
+                f"ALTER TABLE {table_name} "
                 f"ADD CONSTRAINT {table_name}_{column_name}_fkey "
                 f"FOREIGN KEY ({column_name}) REFERENCES {ref_table}(id) ON DELETE {action}"
             ))
@@ -2202,7 +1970,7 @@ async def _reset_postgres_sequences(conn) -> None:
                 COALESCE((SELECT MAX({column_name}) FROM {table_name}), 1),
                 (SELECT COUNT(*) > 0 FROM {table_name})
             )
-        """))  # nosec B608
+        """))
 
 
 async def get_db():
@@ -2245,21 +2013,12 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="A munkamenet lejárt. Jelentkezz be újra.")
     if user.is_admin and not payload.get("mfa"):
         raise HTTPException(status_code=401, detail="Admin belépéshez kétlépcsős azonosítás szükséges.")
-    # Karbantartás / karantén: egyetlen kapu az összes hitelesített végpont előtt.
-    # Korábban csak három helyen volt ellenőrizve (chat, checkin, live token), így
-    # a karantén alatt a fórum, a mérés és a profil műveletek nyitva maradtak.
-    # Az admin (te) mindig átjut, hogy fel tudd oldani.
     await _require_not_maintenance_for_user(user, db)
     return user
 
 
 async def require_admin(request: Request, user: User = Depends(get_current_user)) -> User:
     if not user.is_admin:
-        # Strukturalt biztonsagi jelzes a futtasideju figyelonek (ops/myra-watch.py).
-        # Ez a sor CSAK akkor keletkezik, ha ERVENYES token volt a keresben, ezert
-        # anonim keresekkel nem hamisithato. A figyelo ezt szamolja karantenjelnek,
-        # az anonim 401-et nem: igy egy bejelentkezes nelkuli tamado nem tudja
-        # nehany keresessel kivaltani a platform-szintu zarat.
         logger.warning(
             "MYRA_SECURITY_SIGNAL kind=admin_forbidden user_id=%s path=%s ip=%s",
             user.id,
@@ -2320,7 +2079,6 @@ async def get_setting(db: AsyncSession, key: str, default: str = "") -> str:
 
 
 async def get_settings(db: AsyncSession, defaults: dict[str, str]) -> dict[str, str]:
-    """Fetch related settings in one round trip on Supabase."""
     res = await db.execute(select(AppSetting).where(AppSetting.key.in_(defaults)))
     values = {row.key: row.value for row in res.scalars() if row.value is not None}
     return {key: values.get(key, default) for key, default in defaults.items()}
@@ -2328,9 +2086,6 @@ async def get_settings(db: AsyncSession, defaults: dict[str, str]) -> dict[str, 
 
 MAINTENANCE_MESSAGE = "A Myra jelenleg tervezett karbantartás miatt nem érhető el. Kérjük, próbáld meg később."
 
-# A karbantartás/karantén állapotot minden hitelesített kérés megnézi, ezért
-# rövid időre a folyamatban tartjuk. 5 másodperc: elég a felesleges DB-körök
-# kivédésére, és elég rövid ahhoz, hogy a feloldás azonnalinak tűnjön.
 MAINTENANCE_CACHE_TTL = float(os.environ.get("MAINTENANCE_CACHE_TTL", "5"))
 _maintenance_cache: dict[str, float] = {"value": 0.0, "at": 0.0}
 
@@ -2353,7 +2108,6 @@ async def is_maintenance(db: AsyncSession) -> bool:
 
 
 async def _require_not_maintenance_for_user(user: User, db: AsyncSession) -> None:
-    """Karbantartás alatt ne lehessen nem-admin munkamenetet használni vagy kiadni."""
     if not user.is_admin and await is_maintenance(db):
         raise HTTPException(status_code=503, detail=MAINTENANCE_MESSAGE)
 
@@ -2370,10 +2124,6 @@ async def set_setting(db: AsyncSession, key: str, value: str) -> None:
         db.add(AppSetting(key=key, value=value))
 
 
-# A felhasználóra mutató összes gyerektábla, a törlés helyes sorrendjében.
-# EGYETLEN forrás az igazságra: ha új, user_id-t tartalmazó tábla készül, ide kell felvenni,
-# és mind a három törlési útvonal (auth/delete-account, user/data-delete, admin/users/{id})
-# automatikusan helyesen fog viselkedni.
 USER_OWNED_MODELS = (
     UserProfile,
     ChatMessage,
@@ -2387,21 +2137,17 @@ USER_OWNED_MODELS = (
 
 
 async def _purge_user_data(db: AsyncSession, user_id: int) -> None:
-    """Töröl minden, a felhasználóhoz tartozó sort. A `users` sort NEM törli."""
     for model in USER_OWNED_MODELS:
         await db.execute(delete(model).where(model.user_id == user_id))
 
 
 async def _delete_user_completely(db: AsyncSession, user_id: int) -> None:
-    """Teljes fióktörlés: előbb minden gyerek sor, majd maga a felhasználó."""
     await _purge_user_data(db, user_id)
     await db.execute(delete(User).where(User.id == user_id))
     await db.flush()
 
 
 async def _rag_keepwarm_loop() -> None:
-    """4 percenként megérinti az embedding-modellt, hogy a lapjai ne swapoljanak ki
-    (kevés RAM-ú VM-en tétlenség után 30+ mp-es query-embedding tüskét okozna)."""
     while True:
         await asyncio.sleep(RAG_KEEPWARM_INTERVAL_S)
         try:
@@ -2428,7 +2174,6 @@ async def _warmup_rag_runtime() -> None:
 
 
 async def _warm_local_base_prompt_on_startup() -> None:
-    """A minden felhasználónál közös Myra-rendszerpromptot egyszer előtölti."""
     try:
         if not await _local_llm_config():
             return
@@ -2457,9 +2202,7 @@ async def lifespan(app: FastAPI):
             if res.scalar_one_or_none() is None:
                 db.add(AppSetting(key=k, value=v))
         await db.commit()
-    # A közös prefix a háttérben melegszik fel; az API indulását nem tartja fel.
     _spawn_background_task(_warm_local_base_prompt_on_startup())
-    # A helyi beszedfelismero modell is a hatterben toltodik be (eloszor le).
     _spawn_background_task(_warm_stt_model())
     async with SessionLocal() as db:
         kb_res = await db.execute(select(AppSetting).where(AppSetting.key == "kb_text"))
@@ -2563,14 +2306,11 @@ async def enforce_request_size_limit(request: Request, call_next):
             except ValueError:
                 return JSONResponse(status_code=400, content={"detail": "Érvénytelen Content-Length fejléc."})
         elif "chunked" in request.headers.get("transfer-encoding", "").lower():
-            # Content-Length nélküli (chunked) kérésnél a fenti ellenőrzés nem véd semmit,
-            # ezért itt streamelve számoljuk a bájtokat, és a limit felett megszakítjuk.
             body = bytearray()
             async for chunk in request.stream():
                 body.extend(chunk)
                 if len(body) > limit:
                     return JSONResponse(status_code=413, content={"detail": "A kérés túl nagy."})
-            # A már beolvasott törzs visszaadása a lejjebb futó rétegeknek.
             cached = bytes(body)
 
             async def _replay_receive():
@@ -2593,10 +2333,6 @@ async def add_security_headers(request: Request, call_next):
     return response
 
 
-# A healthcheck (docker HEALTHCHECK) az egyetlen olyan hívó, aminek loopbackről kell
-# átjutnia proxy-titok nélkül. Szűk útvonal-allowlist, hogy a loopback-kivétel ne legyen
-# általános megkerülési lehetőség, ha valaha lokális reverse proxy kerül a backend elé
-# (akkor ugyanis MINDEN kérés kliens IP-je 127.0.0.1 lenne).
 LOOPBACK_ALLOWED_PATHS = {"/api/config"}
 
 
@@ -2630,8 +2366,6 @@ async def verify_proxy_secret(request: Request, call_next):
             content={"detail": "Direct access to origin is forbidden."}
         )
 
-    # Innentől igazolt, hogy a kérés a saját proxynkon jött át — csak ekkor szabad
-    # megbízni a továbbított kliens-IP fejlécben (lásd _client_ip).
     request.state.via_trusted_proxy = True
     return await call_next(request)
 
@@ -2767,7 +2501,6 @@ class SettingsIn(BaseModel):
     profile_memory_enabled: Optional[bool] = None
     local_llm_enabled: Optional[bool] = None
     local_llm_model: Optional[str] = Field(None, max_length=160)
-    # Helyi modell mintavétele és gondolkodása: üres szöveg = nincs megadva (a llama-server models.ini értéke él).
     local_llm_temperature: Optional[str] = Field(None, max_length=12)
     local_llm_top_p: Optional[str] = Field(None, max_length=12)
     local_llm_top_k: Optional[str] = Field(None, max_length=12)
@@ -3007,8 +2740,6 @@ Myra-project csapat""", "plain", "utf-8")
 
 
 def _send_feedback_email(user_name: str, user_email: str, user_id: int, context: str, message: str) -> bool:
-    """Felhasználói visszajelzés továbbítása a fejlesztőnek. A felhasználói szöveg
-    kizárólag a levéltörzsbe kerül (fejlécbe soha), így nincs header-injection kockázat."""
     if not GMAIL_USER or not GMAIL_APP_PASSWORD:
         logger.error("Gmail SMTP credentials are not configured in .env")
         return False
@@ -3173,9 +2904,6 @@ async def _consume_mfa_challenge(db: AsyncSession, user: User, challenge_id: str
         raise HTTPException(status_code=429, detail="Túl sok hibás kódpróbálkozás. Kérj új kódot.")
     if not secrets.compare_digest(str(challenge.code_hash), _hash_mfa_code(challenge.id, code.strip())):
         challenge.attempts += 1
-        # FONTOS: itt commit kell, nem flush. A get_db() dependency a felszálló
-        # HTTPException hatására rollbackol, ami egy puszta flush() esetén eldobná a
-        # számláló növelését — a kísérletkorlát így sosem lépne életbe.
         await db.commit()
         raise HTTPException(status_code=400, detail="Hibás biztonsági kód.")
     challenge.consumed_at = _now()
@@ -3245,10 +2973,6 @@ async def auth_register(body: RegisterBody, request: Request, db: AsyncSession =
     await db.flush()
     _record_reg(request)
     
-    # FONTOS: itt sosem adunk mfa_verified=True-t. Ha az email az admin-allowlistán van,
-    # a fiók adminként jön létre, de a tokenje MFA nélkül nem használható — a get_current_user
-    # elutasítja, és a felhasználónak a normál bejelentkezésen (email-kódos MFA) kell átmennie.
-    # Enélkül aki elsőként regisztrál egy allowlistás címre, azonnal MFA-mentes admint kapna.
     access_token = create_access_token(user, mfa_verified=False)
     refresh_token = create_refresh_token(user)
     return {
@@ -3405,9 +3129,6 @@ async def auth_reset_password(body: ResetPasswordBody, request: Request, db: Asy
     token_str = body.token.strip()
     generic_error = "Hibás vagy lejárt biztonsági kód."
 
-    # A tokent MINDIG a megadott email-címhez kötve keressük: egy kód kizárólag arra a
-    # fiókra érvényes, amelyikre kiadták. Így a találgatásnak egy konkrét fiókot kell
-    # céloznia, és a per-token számláló (lent) 5 próba után elhalasztja a tokent.
     res = await db.execute(select(User).where(User.email == email))
     user = res.scalar_one_or_none()
 
@@ -3415,7 +3136,6 @@ async def auth_reset_password(body: ResetPasswordBody, request: Request, db: Asy
         _record_reset_failure(request)
         raise HTTPException(status_code=400, detail=generic_error)
 
-    # Lejárat: hiányzó token_expires_at esetén is elutasítunk (nincs "örökké élő" token).
     if not user.token_expires_at:
         _record_reset_failure(request)
         raise HTTPException(status_code=400, detail=generic_error)
@@ -3423,9 +3143,6 @@ async def auth_reset_password(body: ResetPasswordBody, request: Request, db: Asy
         user.token_expires_at.replace(tzinfo=timezone.utc)
         if user.token_expires_at.tzinfo is None else user.token_expires_at
     )
-    # A hibaágakon MINDENHOL commit kell, nem flush: a get_db() dependency a felszálló
-    # HTTPException hatására rollbackol, ami eldobná a számláló növelését / a token
-    # érvénytelenítését — a kísérletkorlát így sosem lépne életbe.
     if expires_at < datetime.now(timezone.utc):
         user.reset_token = None
         user.token_expires_at = None
@@ -3452,8 +3169,6 @@ async def auth_reset_password(body: ResetPasswordBody, request: Request, db: Asy
     user.reset_token = None
     user.token_expires_at = None
     user.reset_attempts = 0
-    # A jelszócsere érvénytelenít MINDEN korábbi munkamenetet — enélkül egy ellopott
-    # access token a jelszó megváltoztatása után is 7 napig élne tovább.
     user.token_version = int(user.token_version or 0) + 1
     await db.flush()
 
@@ -3576,7 +3291,6 @@ async def stt_transcribe(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Diktalas helyi beszedfelismeressel. A hanganyag nem hagyja el a szervert."""
     if not STT_ENABLED:
         raise HTTPException(status_code=503, detail="A helyi beszedfelismeres ki van kapcsolva.")
     await _require_not_maintenance_for_user(user, db)
@@ -3612,8 +3326,6 @@ async def auth_refresh(body: RefreshTokenBody, db: AsyncSession = Depends(get_db
         raise HTTPException(status_code=401, detail="Érvénytelen vagy lejárt refresh token.")
     if payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Hibás token típus.")
-    # A rotáció csak akkor véd, ha a már felhasznált tokent VISSZA IS utasítjuk:
-    # enélkül egy ellopott refresh token a lejáratáig korlátlanul újraváltható volt.
     incoming_jti = payload.get("jti")
     if incoming_jti and _is_jti_blacklisted(incoming_jti):
         raise HTTPException(status_code=401, detail="Ez a refresh token már fel lett használva. Jelentkezz be újra.")
@@ -3626,8 +3338,6 @@ async def auth_refresh(body: RefreshTokenBody, db: AsyncSession = Depends(get_db
     if int(payload.get("token_version", 0)) != int(user.token_version or 0):
         raise HTTPException(status_code=401, detail="A munkamenet lejárt.")
         
-    # Az MFA-státuszt a refresh tokenből örököljük, nem adjuk ingyen. Admin fiók
-    # MFA nélküli refresh tokent nem válthat be — annak a normál beléptetés az útja.
     session_mfa_verified = bool(payload.get("mfa"))
     if user.is_admin and not session_mfa_verified:
         raise HTTPException(status_code=401, detail="Admin munkamenet megújításához kétlépcsős azonosítás szükséges. Jelentkezz be újra.")
@@ -3672,9 +3382,6 @@ async def auth_totp_verify_setup(body: TotpVerifySetupBody, user: User = Depends
     if _totp_verify(dec_secret, body.code):
         user.totp_enabled = True
         user.mfa_enabled = True
-        # A kétlépcsős azonosítás bekapcsolása érvénytelenít minden korábbi munkamenetet
-        # (ugyanaz a logika, mint az email-MFA kapcsolónál) — különben egy korábban
-        # ellopott token a TOTP bekapcsolása után is élne.
         user.token_version = int(user.token_version or 0) + 1
         await db.flush()
         return {"ok": True, "detail": "A kétlépcsős azonosítás (TOTP) sikeresen aktiválva."}
@@ -3770,16 +3477,12 @@ class ProfileMemoryBody(BaseModel):
 
 @api.put("/user/memory")
 async def put_user_memory(body: ProfileMemoryBody, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """A profil-memoria be- es kikapcsolasa. Kikapcsolaskor a mar elkeszult
-    profilt is toroljuk: a hozzajarulas visszavonasa nem csak a jovore szol."""
     uid = user.id
     enabled = bool(body.enabled)
     user.profile_memory_enabled = enabled
     if not enabled:
         await db.execute(delete(UserProfile).where(UserProfile.user_id == uid))
         await _delete_message_embeddings(db, uid)
-    # Bekapcsolaskor azonnal elkeszul a visszamenoleges profil a korabbi meresekbol es
-    # beszelgetesekbol, nem csak a kovetkezo chat-uzenetnel. Hatterben fut, a valasz nem var ra.
     start_job = enabled and await _profile_feature_on(db)
     await db.commit()
     if start_job:
@@ -3825,8 +3528,6 @@ async def post_user_data_export(body: ExportDataBody, request: Request, user: Us
         "chat_messages": messages,
         "quiz_submissions": submissions,
         "goals": goals,
-        # Szarmaztatott adat, de attol meg szemelyes adat: az Art. 20 exportnak
-        # tartalmaznia kell, kulonben a felhasznalo nem latja, mit tart rola a rendszer.
         "derived_profile": ({
             "content": derived_profile.content,
             "generated_at": derived_profile.generated_at.isoformat() if derived_profile.generated_at else None,
@@ -3962,9 +3663,6 @@ async def codes_verify(body: CodeVerifyBody, user: User = Depends(get_current_us
         created_at=user.code_verified_at
     ))
 
-    # Az első sikeres kérdőív-kitöltés után már van állapotkód, tehát a helyi modell
-    # promptja értelmesen összerakható. Itt melegítjük elő a háttérben, hogy az első
-    # chat-üzenet már kész állapotból induljon — ne a chat megnyitásakor kelljen rá várni.
     _spawn_background_task(_warm_local_for_user_soon(user.id))
 
     return {"ok": True, "state_code": _sc_out(sc), "session_id": session_id}
@@ -4066,14 +3764,6 @@ NORM_VERSION = 2
 
 
 def _compute_norms(answers: List[int]) -> dict:
-    """A 21 kvízválaszból számolja a négy ESV-dimenzió normalizált értékét (v2, POMP).
-
-    Blokkok és nyers összegtartományok:
-      A: answers[0:6]   6 kérdés, 1-5  -> 6..30
-      P: answers[6:12]  6 kérdés, 1-5  -> 6..30 (fordított: magasabb válasz = gyengébb szabályozás)
-      H: answers[12:16] 4 kérdés, 1-5  -> 4..20
-      C: answers[16:21] 5 kérdés, 0-2  -> 0..10 (már v1-ben is teljes skálájú volt)
-    """
     xa = sum(answers[0:6])
     xp = sum(answers[6:12])
     xh = sum(answers[12:16])
@@ -4206,10 +3896,6 @@ async def quiz_delete_session(
     }
 
 
-# ---------------------------------------------------------------------------
-# Mikro-célok: a mérés leggyengébb skálája alapján javasolt apró, heti vállalások
-# ---------------------------------------------------------------------------
-
 GOAL_SCALE_LABELS = {"a": "érzelmi állapot", "p": "érzelemszabályozás", "h": "stresszterhelés", "c": "testi jelzések"}
 
 GOAL_TEMPLATES: dict[str, list[str]] = {
@@ -4247,7 +3933,6 @@ MAX_ACTIVE_GOALS = 3
 
 
 def _scale_badness(norms: dict) -> list[tuple[str, float]]:
-    """Skálák a „legrosszabb elöl” sorrendben. P fordított: alacsony norm = gyengébb szabályozás."""
     try:
         badness = {
             "a": float(norms.get("a", 0.0)),
@@ -4316,7 +4001,6 @@ def _goal_out(g: "UserGoal") -> dict:
     }
 
 
-# ---------------------------------------------------------------- PROFIL
 PROFILE_GENERATOR_PROMPT = """Klinikai dokumentacios segedkent dolgozol. A feladatod, hogy a megadott
 meresi adatokbol, celokbol es beszelgetes-reszletekbol tomor esetosszefoglalot irj a Myra
 szamara, hogy a kovetkezo beszelgetesekben folytonosan, a felhasznalo sajat nyelven
@@ -4366,16 +4050,10 @@ korabbi sikeres megkuzdes)
 """
 
 
-
-# A kiugras-szamitas a myra_beszelgetes_diagram v1.3 modszertanabol, valtoztatas
-# nelkul. Szandekosan nem LLM vegzi: longitudinalis eszkozben ket meresi pont
-# kulonbsege nem szarmazhat egy generator szorasabol.
 _WORD_CHAR_RE = re.compile(r"[^\W_]", re.UNICODE)
 
 
 def _word_count(text: str) -> int:
-    """Szo = whitespace-token, amiben van legalabb egy betu vagy szamjegy.
-    Az onallo irasjel es emoji nem szo."""
     return sum(1 for token in (text or "").split() if _WORD_CHAR_RE.search(token))
 
 
@@ -4390,8 +4068,6 @@ def _median(values: list[float]) -> float:
 
 
 def _split_sessions(messages: list[ChatMessage]) -> list[list[ChatMessage]]:
-    """Uj ules ott kezdodik, ahol az elozo uzenet ota eltelt ido meghaladja a
-    CONV_SESSION_GAP_MIN erteket."""
     sessions: list[list[ChatMessage]] = []
     current: list[ChatMessage] = []
     previous = None
@@ -4446,10 +4122,6 @@ def _arc_metrics(messages: list[ChatMessage]) -> dict:
         marked_sessions += 1
         positions.append(first_spike_at)
         after = user_counts[first_spike_at:]
-        # Levezetes: a kiugras utan meg legalabb ket felhasznaloi uzenet jott, es
-        # egyik sem kiugras tobbe - vagyis a sorozat visszatert a normal savba.
-        # (A diagram-eszkoz csak a kiugrast definialja; ez a resz sajat
-        # operacionalizacio, es ugyanazt a K kuszobot hasznalja.)
         if len(after) >= 2 and max(after) < CONV_SPIKE_K * med:
             settled += 1
         else:
@@ -4466,8 +4138,6 @@ def _arc_metrics(messages: list[ChatMessage]) -> dict:
 
 
 def _format_computed_block(subs: list, metrics: dict) -> str:
-    """A profil ket mezoje, kodbol szamolva. Ez a szoveg valtozatlanul kerul a
-    kesz profilba - az LLM nem irja at es nem is latja feladatkent."""
     lines = ["[MERESI IV]"]
     if not subs:
         lines.append("nincs adat")
@@ -4493,9 +4163,6 @@ def _format_computed_block(subs: list, metrics: dict) -> str:
     return "\n".join(lines)
 
 
-
-# A multra utalo fordulatok. Szandekosan bo lista es szandekosan olcso: egy
-# regex sosem fog annyiba kerulni, mint egy folosleges kereses.
 _PAST_REFERENCE_RE = re.compile(
     r"(m[úu]ltkor|kor[áa]bban|legut[óo]bb|eml[ée]ksz|r[ée]gebben|annak idej[ée]n"
     r"|m[úu]lt h[ée]ten|m[úu]lt h[óo]napban|tavaly|tegnap|el[őo]z[őo]leg"
@@ -4511,9 +4178,6 @@ def _is_past_reference(text: str) -> bool:
 
 
 def _message_embed_text(text: str) -> str:
-    """Az uzenet-vektor bemenete. Szimmetrikus (uzenet-uzenet) hasonlosaghoz az e5
-    mindket oldalon a "query: " elotagot ajanlja, igy az aktualis uzenet vektora a
-    tarolt vektorokkal kozvetlenul osszevetheto."""
     return f"{EMBED_QUERY_PREFIX}{(text or '')[:RECALL_EMBED_CHARS]}"
 
 
@@ -4522,9 +4186,6 @@ def _vec_literal(values: list[float]) -> str:
 
 
 def _sync_embed_batch(texts: list[str]) -> list[list[float]]:
-    """Kotegelt embedding a visszamenoleges feltolteshez. A gyorsitotarat szandekosan
-    megkeruli: a regi uzenetek ne szoritsak ki a tudasanyag-kereses cache-ebol a
-    gyakori kerdeseket. A normalizalas ugyanaz, mint a cache-elt utvonalon."""
     global _fastembed_model
     with _fastembed_lock:
         if _fastembed_model is None:
@@ -4543,8 +4204,7 @@ def _sync_embed_batch(texts: list[str]) -> list[list[float]]:
 async def _store_message_embedding(db: AsyncSession, message_id: str, user_id: int, emb: list[float]) -> None:
     if DB_DIALECT == "sqlite":
         return
-    # EMBED_COL egesz szambol kepzett oszlopnev, minden ertek parameterkent megy.
-    stmt = f"INSERT INTO chat_message_embeddings (message_id, user_id, {EMBED_COL}) VALUES (:mid, :uid, CAST(:vec AS vector)) ON CONFLICT (message_id) DO UPDATE SET {EMBED_COL} = EXCLUDED.{EMBED_COL}"  # nosec B608
+    stmt = f"INSERT INTO chat_message_embeddings (message_id, user_id, {EMBED_COL}) VALUES (:mid, :uid, CAST(:vec AS vector)) ON CONFLICT (message_id) DO UPDATE SET {EMBED_COL} = EXCLUDED.{EMBED_COL}"
     await db.execute(sql_text(stmt), {"mid": message_id, "uid": user_id, "vec": _vec_literal(emb)})
 
 
@@ -4558,10 +4218,6 @@ _backfill_lock = asyncio.Lock()
 
 
 async def _backfill_message_embeddings(user_id: Optional[int] = None) -> None:
-    """A bekapcsolt memoriaju felhasznalok korabbi uzeneteinek vektorositasa, kotegekben,
-    hatterben. Indulaskor es a memoria bekapcsolasakor fut. Minden koteg utan torli a
-    kozben kikapcsolt memoriaju felhasznalok vektorait, igy versenyhelyzetben sem marad
-    hozzajarulas nelkuli adat."""
     if DB_DIALECT == "sqlite" or not (RECALL_ENABLED and RECALL_VECTOR_ENABLED):
         return
     async with _backfill_lock:
@@ -4587,7 +4243,7 @@ async def _backfill_message_embeddings(user_id: Optional[int] = None) -> None:
                           {user_filter}
                         ORDER BY m.created_at ASC
                         LIMIT :lim
-                    """), params)  # nosec B608 - csak rogzitett szovegdarabok, az ertekek parameterek
+                    """), params)
                     rows = res.mappings().all()
                     if rows:
                         vectors = await asyncio.to_thread(
@@ -4615,7 +4271,6 @@ _HU_MONTHS = {
     "július": 7, "augusztus": 8, "szeptember": 9, "október": 10, "november": 11, "december": 12,
 }
 _HU_MONTH_RE = re.compile(r"\b(" + "|".join(_HU_MONTHS) + r")\w*", re.IGNORECASE)
-# Evszak -> (elso honap, honapok szama). Az "ősz" kizarja az "őszinte" szot, a "tél" a "telefon"-t.
 _HU_SEASON_RE = re.compile(
     r"\b(tavasz\w*|tavasszal|nyár\w*|nyar\w*|ősszel|ősz(?!int)\w*|télen|tél\b|téli\w*)",
     re.IGNORECASE,
@@ -4636,9 +4291,6 @@ def _season_key(word: str) -> str:
 
 
 def _parse_time_window(text: str, now: Optional[datetime] = None) -> Optional[tuple[datetime, datetime, str]]:
-    """Egyszeru magyar idohatarozo-felismeres a felidezeshez ("nyár elején",
-    "júniusban", "tavaly ősszel"). A legutobbi elmult elofordulast veszi, es
-    RECALL_TIME_PAD_DAYS nappal mindket iranyba kitagitja. Ha nincs ilyen, None."""
     if not text:
         return None
     now = _to_local(now or _now())
@@ -4672,7 +4324,6 @@ def _parse_time_window(text: str, now: Optional[datetime] = None) -> Optional[tu
     if start_month is None:
         return None
     year = now.year
-    # A legutobbi, mar elkezdodott elofordulas; "tavaly" eseten egy evvel korabbi.
     if (start_month, 1) > (now.month, now.day):
         year -= 1
     if last_year and year == now.year:
@@ -4694,13 +4345,6 @@ async def _recall_past_exchanges(
     time_window: Optional[tuple[datetime, datetime, str]] = None,
     context_message_ids: Optional[list[str]] = None,
 ) -> list[dict]:
-    """A felhasznalo KORABBI uleseibol keres sajat mondatokat, es mindegyikhez
-    odaveszi a ra kovetkezo Myra-valaszt. Az aktualis ules kimarad: az amugy is
-    ott van az elozmenyben.
-
-    Jeloltek ket uton jonnek: jelentes szerint (uzenet-vektor) es szoegyezessel
-    (magyar full-text). A vegso valogatast az ujrarangsorolo vegzi kuszobbel:
-    `explicit` (a felhasznalo a multra utalt) eseten lazabb, kulonben szigorubb."""
     if DB_DIALECT == "sqlite":
         return []
     myra_sub = """
@@ -4719,17 +4363,13 @@ async def _recall_past_exchanges(
         time_params = {"t0": time_window[0], "t1": time_window[1]}
     ctx_ids = [str(x) for x in (context_message_ids or []) if x]
     if query_emb is not None and RECALL_VECTOR_ENABLED:
-        # Felidezeskor a tema gyakran nem a mostani kerdesben van ("emlekszel a
-        # multkorira?"), hanem az ules korabbi uzeneteiben ("a rajztanaros esetrol").
-        # Ezek mar tarolt vektorait is lekerdezesnek hasznaljuk: a tavolsag a
-        # legkozelebbi lekerdezeshez mert ertek.
         if ctx_ids:
             dist_sql = f"""LEAST(
                        (e.{EMBED_COL} <=> CAST(:qv AS vector)),
                        COALESCE((SELECT MIN(e.{EMBED_COL} <=> c.{EMBED_COL})
                                    FROM chat_message_embeddings c
                                   WHERE c.user_id = :uid AND c.message_id = ANY(:ctx_ids)
-                                    AND c.{EMBED_COL} IS NOT NULL), 2.0))"""  # nosec B608 - EMBED_COL egesz szambol kepzett oszlopnev
+                                    AND c.{EMBED_COL} IS NOT NULL), 2.0))"""
         else:
             dist_sql = f"(e.{EMBED_COL} <=> CAST(:qv AS vector))"
         stmt = sql_text(f"""
@@ -4744,7 +4384,7 @@ async def _recall_past_exchanges(
               {time_sql}
             ORDER BY dist ASC
             LIMIT :pool
-        """)  # nosec B608 - EMBED_COL egesz szambol kepzett oszlopnev, a tobbi parameter
+        """)
         res = await db.execute(stmt, {
             "uid": user_id, "sid": session_id, "qv": _vec_literal(query_emb), "pool": RECALL_CANDIDATES,
             **({"ctx_ids": ctx_ids} if ctx_ids else {}),
@@ -4767,7 +4407,7 @@ async def _recall_past_exchanges(
             ORDER BY ts_rank_cd(to_tsvector('hungarian', u.text), to_tsquery('hungarian', :ts_query)) DESC,
                      u.created_at DESC
             LIMIT :pool
-        """)  # nosec B608 - csak rogzitett szovegdarab kerul bele, az ertekek parameterek
+        """)
         res = await db.execute(stmt, {
             "uid": user_id, "sid": session_id, "ts_query": ts_query,
             "min_len": RECALL_MIN_MESSAGE_CHARS, "pool": max(5, RECALL_CANDIDATES // 2),
@@ -4779,8 +4419,6 @@ async def _recall_past_exchanges(
     rows = [r for r in candidates.values() if len((r.get("user_text") or "").strip()) >= RECALL_MIN_MESSAGE_CHARS]
     if not rows:
         if time_window is not None:
-            # Az idoszakban nincs talalat: ujraprobalas idoszuro nelkul, hogy egy
-            # rosszul becsult idopont miatt ne vesszen el a tema.
             logger.info("recall_search time_window=%s miss", time_window[2])
             return await _recall_past_exchanges(
                 db, user_id, session_id, query, query_emb, explicit, None, context_message_ids,
@@ -4799,8 +4437,6 @@ async def _recall_past_exchanges(
             best_score = rows[0]["score"]
             passed = [r for r in rows if r["score"] >= min_score]
             if explicit:
-                # A nagyon kozeli vektortalalat elore kerul, akkor is, ha az
-                # ujrarangsorolo (magyarul gyenge) nem adott ra pozitiv pontot.
                 vec_strong = sorted(
                     (r for r in rows if r.get("dist") is not None
                      and r["dist"] <= RECALL_EXPLICIT_MAX_DIST),
@@ -4816,13 +4452,10 @@ async def _recall_past_exchanges(
             else:
                 rows.sort(key=lambda r: (r.get("dist") is None, r.get("dist") or 0.0))
     elif not explicit:
-        # Ujrarangsorolo nelkul nincs megbizhato kuszob, ezert magatol nem hoz elo emleket.
         rows = []
     kept = rows[:max_items]
     followups = 0
     if explicit and kept and RECALL_EXPLICIT_FOLLOWUPS > 0:
-        # A legjobb talalat utani felhasznaloi uzenetek ugyanabbol az ulesbol: a
-        # bejelentes ("ki akarom beszelni...") utan altalaban ott a tortenet maga.
         top = kept[0]
         stmt = sql_text(f"""
             SELECT u.id, u.created_at, u.text AS user_text, u.session_id, {myra_sub}
@@ -4834,7 +4467,7 @@ async def _recall_past_exchanges(
               AND length(u.text) >= :min_len
             ORDER BY u.created_at ASC
             LIMIT :n
-        """)  # nosec B608 - csak rogzitett szovegdarab kerul bele, az ertekek parameterek
+        """)
         res = await db.execute(stmt, {
             "uid": user_id, "tsid": top.get("session_id"), "tts": top.get("created_at"),
             "min_len": RECALL_MIN_MESSAGE_CHARS, "n": RECALL_EXPLICIT_FOLLOWUPS,
@@ -4845,7 +4478,6 @@ async def _recall_past_exchanges(
                 kept.append(dict(r))
                 have.add(r["id"])
                 followups += 1
-        # Idorendben olvasva a tortenet osszefuggo.
         kept.sort(key=lambda r: r.get("created_at") or datetime.min.replace(tzinfo=timezone.utc))
     vec_best = min((r["dist"] for r in candidates.values() if r.get("dist") is not None), default=None)
     logger.info(
@@ -4894,7 +4526,6 @@ def _build_recall_block(rows: list[dict], explicit: bool = True) -> str:
         when = _to_local(row.get("created_at"))
         stamp = when.strftime("%Y.%m.%d") if when else "?"
         user_text = (row.get("user_text") or "").strip()[:snippet_chars]
-        # Myra valaszabol eleg rovidebb resz: a felhasznalo szavai a fontosak.
         myra_text = (row.get("myra_text") or "").strip()[:RECALL_SNIPPET_CHARS]
         block = f"- {stamp} — a felhasználó: \"{user_text}\""
         if myra_text:
@@ -4907,7 +4538,6 @@ def _build_recall_block(rows: list[dict], explicit: bool = True) -> str:
 
 
 def _build_profile_block(profile: Optional["UserProfile"]) -> str:
-    """A promptba kerulo blokk. Ures, ha nincs profil vagy ki van kapcsolva."""
     if not PROFILE_ENABLED or profile is None or not (profile.content or "").strip():
         return ""
     content = profile.content.strip()[:PROFILE_MAX_CHARS]
@@ -4919,9 +4549,6 @@ def _build_profile_block(profile: Optional["UserProfile"]) -> str:
 
 
 async def _profile_feature_on(db: AsyncSession) -> bool:
-    """A funkcio ket kapcsolon mulik: az env (telepites szintu vegso kikapcsolo)
-    es az admin beallitas (uzemeltetes kozben allithato). Ha az env kikapcsolja,
-    az admin kapcsolo mar nem szamit."""
     if not PROFILE_ENABLED:
         return False
     value = await get_setting(db, "profile_memory_enabled", "true")
@@ -4934,9 +4561,6 @@ async def _get_user_profile(db: AsyncSession, user_id: int) -> Optional["UserPro
 
 
 async def _collect_profile_source(db: AsyncSession, user_id: int) -> tuple[str, int, int, list, list]:
-    """Forrasanyag a generalashoz: meresek idorendben, majd a beszelgetesek
-    legfrissebb resze. A vagas a REGI vegen tortenik, mert a friss anyag
-    informativabb; a meresi sor viszont mindig teljes, mert az roviden is elfer."""
     sub_res = await db.execute(
         select(QuizSubmission).where(QuizSubmission.user_id == user_id).order_by(QuizSubmission.created_at.asc())
     )
@@ -4989,7 +4613,6 @@ _profile_jobs_lock = threading.Lock()
 
 
 async def _regenerate_user_profile(user_id: int) -> Optional[str]:
-    """Teljes ujrageneralas a forrasbol. Sajat sessiont nyit, mert hatterben fut."""
     async with SessionLocal() as db:
         settings = await get_settings(db, {
             "llm_provider": "gemini",
@@ -5000,8 +4623,6 @@ async def _regenerate_user_profile(user_id: int) -> Optional[str]:
             return None
         owner = await db.get(User, user_id)
         if owner is None or not owner.profile_memory_enabled:
-            # Hozzajarulas nelkul nem keszul profil - akkor sem, ha az admin
-            # inditja. A kapcsolo a felhasznaloe.
             return None
         source, msg_count, sub_count, messages, subs = await _collect_profile_source(db, user_id)
         if msg_count == 0 and sub_count == 0:
@@ -5015,7 +4636,6 @@ async def _regenerate_user_profile(user_id: int) -> Optional[str]:
             [], source,
         )
         written = _clean_llm_reply(raw, context="profile")
-        # A szamitott blokk elsobbseget elvez: ha a keret szuk, az LLM-resz vagodik.
         remaining = max(0, PROFILE_MAX_CHARS - len(computed) - 2)
         content = (computed + "\n\n" + written[:remaining]).strip()
         profile = await _get_user_profile(db, user_id)
@@ -5046,8 +4666,6 @@ async def _run_profile_job(user_id: int) -> None:
 
 
 async def _maybe_refresh_profile(db: AsyncSession, user: "User", profile: Optional["UserProfile"]) -> None:
-    """Elavult-e a profil. Szandekosan NEM blokkolja a valaszt: a mostani forduló
-    meg a regi (vagy hianyzo) profillal megy ki, az ujragenerlas hatterben fut."""
     if not PROFILE_ENABLED or not user.profile_memory_enabled:
         return
     user_id = user.id
@@ -5165,11 +4783,6 @@ async def goals_delete(goal_id: int, user: User = Depends(get_current_user), db:
     return {"ok": True}
 
 
-# ---------------------------------------------------------------------------
-# Szöveges eredmény-értelmezés: determinisztikus, sávonkénti magyarázatok
-# (szándékosan nem LLM-alapú: reprodukálható, és nem "hallucinálhat")
-# ---------------------------------------------------------------------------
-
 SCALE_INTERPRETATION: dict[str, dict] = {
     "a": {
         "label": "A – Érzelmi állapot",
@@ -5261,10 +4874,6 @@ async def quiz_interpretation(user: User = Depends(get_current_user), db: AsyncS
     }
 
 
-# ---------------------------------------------------------------------------
-# Szakember részére készült PDF-kivonat a mérési előzményekről
-# ---------------------------------------------------------------------------
-
 REPORT_FONT_DIR = ROOT_DIR / "assets" / "fonts"
 REPORT_MAX_SESSIONS = 24
 
@@ -5281,21 +4890,19 @@ def _report_date(dt: Optional[datetime]) -> str:
     return value.strftime("%Y.%m.%d.")
 
 
-# Aurora Blue palettából származtatott nyomtatási színek (design_guidelines.json / theme.ts)
-_R_NAVY = (10, 35, 64)          # Deep Navy #0A2340
-_R_NAVY_DARK = (5, 17, 31)      # Primary Dark #05111F
-_R_CYAN = (87, 199, 255)        # Aurora Cyan #57C7FF
-_R_BLUE = (29, 142, 216)        # Action Blue #1D8ED8
-_R_VIOLET = (139, 143, 232)     # Aurora köd-lila
-_R_TEXT = (13, 31, 53)          # textPrimary
-_R_TEXT_SOFT = (74, 93, 115)    # textSecondary
-_R_BG_SOFT = (234, 247, 255)    # accentSoft háttér #EAF7FF
+_R_NAVY = (10, 35, 64)
+_R_NAVY_DARK = (5, 17, 31)
+_R_CYAN = (87, 199, 255)
+_R_BLUE = (29, 142, 216)
+_R_VIOLET = (139, 143, 232)
+_R_TEXT = (13, 31, 53)
+_R_TEXT_SOFT = (74, 93, 115)
+_R_BG_SOFT = (234, 247, 255)
 _R_ROW_ALT = (244, 249, 252)
 _R_RULE = (206, 228, 242)
 
 
 class _EsvReportPDF(FPDF):
-    """Myra Project arculatú kivonat: lábléc oldalszámmal."""
 
     def footer(self):
         try:
@@ -5312,10 +4919,6 @@ class _EsvReportPDF(FPDF):
 
 def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], titles: dict[str, StateCode]) -> bytes:
     pdf = _EsvReportPDF(format="A4")
-    # fpdf2 alapból PDF 1.3-at deklarál, de a fejléc-sáv helyi átlátszósággal dolgozik
-    # (local_context fill_opacity, azaz ExtGState /ca-/CA) — ez csak PDF 1.4+-ban szabványos.
-    # Az 1.3-as deklaráció mellett néhány szigorúbb olvasó (nem minden) üres/hibás oldalt
-    # renderelhet, ezért a valós fájlformátumnak megfelelően emeljük a verziót.
     pdf.pdf_version = "1.7"
     pdf.alias_nb_pages()
     pdf.set_auto_page_break(auto=True, margin=20)
@@ -5339,7 +4942,6 @@ def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], t
         pdf.line(pdf.l_margin, pdf.get_y() + 0.6, pdf.l_margin + epw, pdf.get_y() + 0.6)
         pdf.ln(3.2)
 
-    # --- Aurora fejléc-sáv (a webes ContentBackground nyomtatási megfelelője) ---
     band_h = 40.0
     pdf.set_fill_color(*_R_NAVY_DARK)
     pdf.rect(0, 0, pdf.w, band_h, style="F")
@@ -5380,7 +4982,6 @@ def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], t
     pdf.cell(epw, 6, "Szakember részére készült kivonat · Érzelem–Stressz–Viselkedés (ESV) modell",
              new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
-    # --- Kiemelt figyelmeztetés — szándékosan minden tartalom előtt ---
     pdf.set_y(band_h + 8)
     warn_y0 = pdf.get_y()
     warn_bar_w = 1.6
@@ -5389,9 +4990,6 @@ def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], t
     warn_pad_v = 3.2
     warn_text_w = epw - warn_pad_left - warn_pad_right
     warn_header = "FONTOS FIGYELMEZTETÉS"
-    # Négy különálló, tematikusan csoportosított mondat a korábbi egy tömb bekezdés helyett:
-    # (1) mi ez, (2) mit nem helyettesít / mire nem alkalmas, (3) adatforrás + ki értelmezze,
-    # (4) miért készült. Ugyanaz a tartalom, csak olvashatóbb tagolásban.
     warn_paragraphs = [
         "Nem diagnózis, nem orvostechnikai eszköz. Az ESV25 Inventory a Myra Project önismereti, "
         "edukációs célú önbecslő kérdőíve.",
@@ -5402,7 +5000,6 @@ def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], t
         "A kivonat a felhasználó saját kezdeményezésére készült.",
     ]
 
-    # 1) magasság előmérése (dry run), hogy a háttérdoboz és a sáv pontosan illeszkedjen a szöveghez
     pdf.set_xy(pdf.l_margin + warn_pad_left, warn_y0 + warn_pad_v)
     pdf.set_font("Manrope", "B", 9)
     warn_header_h = pdf.multi_cell(warn_text_w, 6.0, warn_header, dry_run=True, output="HEIGHT")
@@ -5412,11 +5009,9 @@ def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], t
     )
     warn_total_h = warn_pad_v * 2 + warn_header_h + 1.6 + warn_body_h
 
-    # 2) háttérdoboz a teljes szélességben, a sáv és a szöveg alatt
     pdf.set_fill_color(*_R_BG_SOFT)
     pdf.rect(pdf.l_margin, warn_y0, epw, warn_total_h, style="F")
 
-    # 3) a tényleges szöveg — minden (tördelt) sorban behúzva a sáv mellől, nem csak az elsőben
     pdf.set_xy(pdf.l_margin + warn_pad_left, warn_y0 + warn_pad_v)
     pdf.set_font("Manrope", "B", 9)
     pdf.set_text_color(*_R_NAVY)
@@ -5428,14 +5023,12 @@ def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], t
         pdf.set_x(pdf.l_margin + warn_pad_left)
         pdf.multi_cell(warn_text_w, 4.9, p, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
-    # 4) kiemelő sáv a bal szélen, a teljes doboz magasságában — utoljára rajzolva, de a szöveg már nem ér hozzá
     pdf.set_fill_color(*_R_CYAN)
     pdf.rect(pdf.l_margin, warn_y0, warn_bar_w, warn_total_h, style="F")
 
     pdf.set_y(warn_y0 + warn_total_h)
     pdf.ln(4)
 
-    # --- Meta blokk ---
     pdf.set_text_color(*_R_TEXT)
     meta_rows = [
         ("Név:", user.name or "-"),
@@ -5498,7 +5091,6 @@ def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], t
         new_x=XPos.LMARGIN, new_y=YPos.NEXT,
     )
 
-    # --- Teljes módszertani transzparencia ---
     section("Módszertan és pontozás")
     pdf.set_font("Manrope", "", 8.8)
     pdf.set_text_color(52, 72, 94)
@@ -5575,7 +5167,6 @@ def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], t
         new_x=XPos.LMARGIN, new_y=YPos.NEXT,
     )
 
-    # --- Legutóbbi mérés értelmezése ---
     latest = sessions[-1]
     interpretation = _build_interpretation(latest.norms or {}, titles.get(latest.code))
     section(f"A legutóbbi mérés értelmezése ({_report_date(latest.created_at)})")
@@ -5626,8 +5217,6 @@ def _build_professional_report_pdf(user: User, sessions: list[QuizSubmission], t
     pdf.ln(2)
     pdf.set_font("Manrope", "", 8.2)
     pdf.set_text_color(52, 72, 94)
-    # Rövid visszautalás a dokumentum eleji figyelmeztetésre — nem szó szerinti megismétlése annak
-    # (lásd _R_CYAN sávos FONTOS FIGYELMEZTETÉS blokk a dokumentum tetején).
     pdf.multi_cell(
         epw, 4.6,
         "A fenti értelmezésre is érvényes a dokumentum elején olvasható figyelmeztetés: önbeszámolón "
@@ -5706,13 +5295,10 @@ def _build_state_block(sc: StateCode, user_name: str = "") -> str:
 
 
 def _local_history_window(history: List[dict], total: int) -> List[dict]:
-    """Lépcsőzetesen csúszó ablak a helyi modellnek: az első megtartott üzenet abszolút
-    sorszáma LOCAL_HISTORY_STEP többszöröse, így az ablak eleje csak minden
-    STEP-edik üzenetnél mozdul, közben a prompt eleje változatlan marad."""
     n = len(history)
     if n == 0:
         return history
-    offset = max(0, total - n)  # history[0] abszolút sorszáma a sessionben
+    offset = max(0, total - n)
     if total > LOCAL_HISTORY_MIN:
         start_abs = ((total - LOCAL_HISTORY_MIN) // LOCAL_HISTORY_STEP) * LOCAL_HISTORY_STEP
     else:
@@ -5722,7 +5308,6 @@ def _local_history_window(history: List[dict], total: int) -> List[dict]:
 
 
 def _build_local_turn_block(code_verified_at: Optional[datetime], kb_text: str, recall_block: str, final_note: str) -> str:
-    """A fordulónként változó kontextus a helyi modell utolsó üzenetébe."""
     now_utc = _now()
     now = _to_local(now_utc)
     months = ["január", "február", "március", "április", "május", "június",
@@ -5767,8 +5352,6 @@ def _local_pacing_fix(text: str) -> str:
 
 
 def _build_local_system_prompt(system_prompt: str, sc: StateCode, user_name: str, stable_context: str) -> str:
-    """A helyi modell állandó rendszerpromptja: csak olyasmi, ami fordulóról fordulóra
-    nem változik, hogy a helyi szerver gyorsítótárból vehesse."""
     parts = [_local_common_prefix(system_prompt), "", _build_state_block(sc, user_name)]
     parts += [
         "",
@@ -5780,14 +5363,6 @@ def _build_local_system_prompt(system_prompt: str, sc: StateCode, user_name: str
         "szövege a [FELHASZNÁLÓ] sor után következik, időbélyeggel; a saját válaszaid elejére soha ne "
         "tegyél időbélyeget.",
     ]
-    # A célok és a profil SZÁNDÉKOSAN a legvégén vannak, a gyorsítótár stabilitása miatt.
-    # A modellszerver a prompt-gyorsítótárból a leghosszabb AZONOS prefixet használja újra.
-    # Ha az ingadozó blokkok (profil-újragenerálás, cél felvétele/törlése) középen állnának,
-    # minden változásuk a MÖGÖTTÜK lévő teljes promptot érvénytelenítené. Így a stabil
-    # prefix (admin-prompt + hossz-szabály + állapotkód + olvasási útmutató) akkor is
-    # gyorsítótárazva marad, ha a profil időközben megváltozott. Ugyanaz a tanulság, mint
-    # a felhős vonalnál, ahol a rendszerprompt szándékosan a legvégén áll
-    # (lásd _build_system_prompt kommentjét).
     if stable_context.strip():
         parts += ["", stable_context]
     return "\n".join(parts)
@@ -5837,15 +5412,6 @@ def _build_system_prompt(
         "egyszerűen csak küldd el a tiszta válaszodat.\n"
     )
     
-    # A sorrend szándékos: az adminban beállított rendszerprompt a LEGVÉGÉN áll.
-    #
-    # Miért: 2026-08-12 11:31-től (a tudásanyag újraindexelése óta) minden egyes
-    # fordulóban ~5 400 karakternyi PDF-részlet kerül ebbe a blokkba; azelőtt üres
-    # volt. Amíg a prompt legelöl állt, a modell utolsóként PDF-szöveget olvasott,
-    # és pont a korlátozó szabályok estek ki: a 2026-08-16-i beszélgetésben a
-    # hosszarány-szabály 11/11 válaszban sérült, és 7/11 válasz kérdéssel zárult,
-    # holott a prompt ezt kifejezetten tiltja. A sorrend megfordításával a
-    # rendszerprompt az utolsó szó.
     parts = []
     if kb_text.strip():
         parts += ["TUDÁSANYAG (csak felismeréshez, soha ne idézd):", kb_text, ""]
@@ -5853,9 +5419,6 @@ def _build_system_prompt(
     if extra_context.strip():
         parts += ["", extra_context]
     parts += ["", system_prompt]
-    # Csak egy-egy fordulora szolo, szukre szabott kiegeszites (pl. a felhasznalo
-    # kifejezett felidezesi kerese). Szandekosan a rendszerprompt UTAN all, mert
-    # kulonben a rendszerprompt altalanos szabalyai elnyomjak.
     if final_note.strip():
         parts += ["", final_note]
     return "\n".join(parts)
@@ -5864,8 +5427,6 @@ def _build_system_prompt(
 FASTEMBED_MODEL_NAME = os.environ.get("FASTEMBED_MODEL_NAME", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 _fastembed_model = None
 _fastembed_lock = threading.Lock()
-# LRU-korlátos cache: korlát nélkül minden egyedi kérdés embeddingje (~3 KB) örökre
-# bent maradt, ami kevés RAM-ú VM-en lassú memóriaszivárgás volt.
 FASTEMBED_CACHE_MAX_ENTRIES = _env_int("FASTEMBED_CACHE_MAX_ENTRIES", 2000, 100, 50000)
 _fastembed_cache_lock = threading.Lock()
 _fastembed_embedding_cache: "OrderedDict[str, list[float]]" = OrderedDict()
@@ -5874,7 +5435,6 @@ _fastembed_embedding_cache: "OrderedDict[str, list[float]]" = OrderedDict()
 def _sync_get_fastembed_embedding(text: str) -> list[float]:
     global _fastembed_model
     norm = re.sub(r"\s+", " ", text).strip().lower()
-    # A cache-t több worker szál is eléri (asyncio.to_thread), ezért zárral védjük.
     with _fastembed_cache_lock:
         cached = _fastembed_embedding_cache.get(norm)
         if cached is not None:
@@ -5908,9 +5468,6 @@ _reranker_lock = threading.Lock()
 
 
 def _sync_rerank_scores(query: str, documents: list[str]) -> list[float]:
-    """Kereszt-kodolo pontszamok. A modell lusta toltodik, es egy peldany
-    szolgal ki minden kerest - a betoltes 1 GB korul van, tobb peldany
-    feleslegesen vinne a memoriat."""
     global _reranker_model
     with _reranker_lock:
         if _reranker_model is None:
@@ -5926,14 +5483,11 @@ async def _rerank_scores(query: str, documents: list[str]) -> list[float]:
     return await asyncio.to_thread(_sync_rerank_scores, query, documents)
 
 
-
 def _llm_remaining_budget(deadline: float) -> float:
-    """Hátralévő idő a teljes LLM-keretből; 0 vagy kevesebb esetén nincs újrapróbálkozás."""
     return deadline - time.monotonic()
 
 
 async def _local_llm_config() -> str:
-    """A bekapcsolt helyi modell neve, vagy üres szöveg, ha nincs bekapcsolva."""
     try:
         async with SessionLocal() as db:
             s = await get_settings(db, {"local_llm_enabled": "false", "local_llm_model": ""})
@@ -5944,10 +5498,6 @@ async def _local_llm_config() -> str:
     return model if s.get("local_llm_enabled") == "true" and model else ""
 
 
-# Helyi modell mintavétele és gondolkodása az admin felületről (nincs újraindítás, nem érinti
-# a prompt gyorsítótárát). Üres vagy hibás érték esetén a mező kimarad a kérésből, és a
-# llama-server saját (models.ini) értéke érvényes. A kontextusméret (c) és a gondolkodási
-# keret (reasoning-budget) indítási paraméter, azokat a kérés nem tudja módosítani.
 _LOCAL_SAMPLING_LIMITS = {
     "local_llm_temperature": ("temperature", float, 0.0, 2.0, "Hőmérséklet"),
     "local_llm_top_p": ("top_p", float, 0.0, 1.0, "Top-p"),
@@ -5957,7 +5507,6 @@ _LOCAL_SAMPLING_LIMITS = {
 
 
 def _parse_local_sampling_value(key: str, raw: Optional[str]):
-    """A beállítás számértéke, vagy None, ha üres / nem szám / kívül esik a tartományon."""
     _name, typ, lo, hi, _label = _LOCAL_SAMPLING_LIMITS[key]
     text = (raw or "").strip().replace(",", ".")
     if not text:
@@ -5972,8 +5521,6 @@ def _parse_local_sampling_value(key: str, raw: Optional[str]):
 
 
 async def _local_sampling() -> dict:
-    """A megadott helyi értékek a kéréshez: temperature, top_p, top_k, min_p és
-    chat_template_kwargs.enable_thinking (csak amit az admin megadott)."""
     try:
         async with SessionLocal() as db:
             raw = await get_settings(db, {**{key: "" for key in _LOCAL_SAMPLING_LIMITS}, "local_llm_thinking": ""})
@@ -5992,12 +5539,10 @@ async def _local_sampling() -> dict:
 
 
 async def _ollama_list_models() -> tuple[bool, list[dict]]:
-    """A helyi szerverre letöltött modellek (név, méret GB-ban). (elérhető-e, lista)"""
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(6, connect=OLLAMA_CONNECT_TIMEOUT_S)) as client:
             r = await client.get(f"{OLLAMA_BASE_URL}/api/tags", headers=_local_llm_headers())
             if r.status_code != 200:
-                # llama.cpp (llama-server): nincs /api/tags, az OpenAI-féle /v1/models listáz.
                 r2 = await client.get(f"{OLLAMA_BASE_URL}/v1/models", headers=_local_llm_headers())
                 if r2.status_code != 200:
                     return False, []
@@ -6014,17 +5559,12 @@ async def _ollama_list_models() -> tuple[bool, list[dict]]:
         return False, []
 
 
-# Folyamatos kiírás: a /chat/send-stream ide teszi a visszahívót, a helyi modell hívása
-# pedig minden új darab után a tisztított, eddigi teljes szöveggel hívja meg. Csak a
-# memóriában él, kéréshez kötve; máshol (háttérfeladatok, sima /chat/send) üres.
 _chat_stream_sink: ContextVar[Optional[Callable[[str], None]]] = ContextVar("_chat_stream_sink", default=None)
 
 
 async def _call_local_llm_stream(
     model: str, system_prompt: str, history: List[dict], user_message: str, sink: Callable[[str], None],
 ) -> str:
-    """Ugyanaz a kérés, mint a _call_llm_provider("ollama", ...), csak stream=True-val:
-    az üzenetek szó szerint egyeznek, így a helyi szerver gyorsítótára ugyanúgy talál."""
     msgs = [{"role": "system", "content": system_prompt}] if system_prompt.strip() else []
     for m in history:
         msgs.append({"role": m["role"], "content": m["text"]})
@@ -6072,13 +5612,6 @@ async def _call_local_llm_stream(
     return content
 
 
-# --- helyi modell: a folyamatban levo kerések szamlalasa ---------------------------
-#
-# A llama-server EGY slotot szolgal ki (parallel = 1). Egy hatterbeli elotoltes tobb
-# ezer token feldolgozasa, ezert ha eppen fut, a felhasznalo kerdese MOGÉ kerulne es
-# perceket varna. Ezert a _warm_local_for_user addig nem indul el, amig ez a szamlalo
-# nem nulla. (A szamlalo a valasz-elkeszites teljes ideje alatt no, beleertve a
-# felhos vonalra esest is, mert a felhasznalo mindkét esetben var.)
 _local_chat_inflight = 0
 
 
@@ -6099,13 +5632,6 @@ async def _call_llm(
     provider: str, model: str, api_key: str, system_prompt: str, history: List[dict], user_message: str,
     allow_local: bool = False, local_override: Optional[tuple] = None,
 ) -> str:
-    """Ha a hívó engedi (allow_local) és az admin bekapcsolta a helyi modellt, először azt
-    kérdezzük, a local_override-ban kapott (rendszerprompt, előzmények, üzenet)
-    hármassal, ha van. Ha a helyi gép nem érhető el vagy hibázik, a beállított
-    API-szolgáltató válaszol az eredeti, teljes prompttal, és egy ideig
-    (OLLAMA_DOWN_COOLDOWN_S) nem is próbálkozunk újra a helyi géppel. A háttérfeladatok
-    (profil, napi összegzés) nem kérik a helyi modellt, hogy ne lökjék ki a chat
-    gyorsítótárát."""
     global _ollama_down_until
     if provider != "ollama" and allow_local:
         local_model = await _local_llm_config()
@@ -6130,7 +5656,6 @@ async def _call_llm(
                     local_model, provider, model, exc.detail,
                 )
                 if sink is not None:
-                    # A félbemaradt helyi szöveg eltűnik; az API-válasz egyben érkezik.
                     sink("")
     reply = await _call_llm_provider(provider, model, api_key, system_prompt, history, user_message)
     if allow_local:
@@ -6145,22 +5670,10 @@ _local_common_warmed_key = ""
 
 
 def _local_common_prefix(system_prompt: str) -> str:
-    """A MINDEN felhasználónál és MINDEN fordulóban azonos rendszerprompt-előtag,
-    pontosan úgy, ahogy a _build_local_system_prompt kezdi.
-
-    Ez az egyetlen igazságforrás: a rendszerprompt építése ÉS az előmelegítés is ezt
-    használja. Azért kritikus, mert a modellszerver gyorsítótára TOKEN-SOROZAT
-    egyezést kér: ha a melegített szöveg akár egyetlen karakterben eltér attól, amit a
-    valódi kérés küld, a melegítés használhatatlan, és a modell a teljes promptot
-    újraolvassa. (2026-10-13-ig pontosan ez volt a hiba: a melegítés a NYERS
-    system_prompt-ot küldte, a valódi kérés viszont a _local_pacing_fix-elt változatot,
-    ezért a kettő már ~250 token után eltért, és a fix rész soha nem került a
-    gyorsítótárba.)"""
     return f"{_local_pacing_fix(system_prompt)}\n\n{LOCAL_PACING_RULE}"
 
 
 async def _warm_local_common_prompt(system_prompt: str) -> None:
-    """A közös, változatlan rendszerprompt-prefixet modellenként és verziónként egyszer melegíti fel."""
     global _local_common_warmed_key
     prefix = _local_common_prefix(system_prompt)
     if not prefix.strip():
@@ -6179,11 +5692,6 @@ async def _warm_local_common_prompt(system_prompt: str) -> None:
 
 
 async def _warm_local_llm(system_prompt: str, history: List[dict], delay_s: float = 0.0) -> bool:
-    """Előtöltés: a helyi modell feldolgozza a prompt állandó elejét (rendszerprompt +
-    előzmények) egyetlen tokennyi válasszal, hogy a felhasználó első üzenete már a
-    gyorsítótárból induljon. Ugyanazt a végpontot és üzenetformát használja, mint a
-    valódi kérés, különben nem egyezne az előtag. Ha egy másik előtöltés fut, kivárja a
-    sorát (nem marad ki); ugyanazt az előtagot viszont nem tölti elő kétszer."""
     if delay_s > 0:
         await asyncio.sleep(delay_s)
     model = await _local_llm_config()
@@ -6234,12 +5742,6 @@ LOCAL_WARM_WAIT_MAX_S = _env_int("LOCAL_WARM_WAIT_MAX_S", 120, 0, 3600)
 
 
 async def _warm_local_for_user_soon(user_id: int, delay_s: float = 2.0) -> None:
-    """Rövid késleltetéssel indított előmelegítés.
-
-    A /codes/verify válaszának elküldése után a get_db dependency még COMMITOL, ezért
-    az azonnali előmelegítés még a state_code ELŐTTI állapotot olvasná, és üresen
-    térne vissza. Ezért várunk egy kicsit, majd ugyanazt tesszük, mint a chat
-    megnyitásakor."""
     try:
         await asyncio.sleep(max(0.0, delay_s))
     except Exception:  # noqa: BLE001
@@ -6248,9 +5750,6 @@ async def _warm_local_for_user_soon(user_id: int, delay_s: float = 2.0) -> None:
 
 
 async def _warm_local_for_user(user_id: int) -> None:
-    """Előmelegítés a háttérben. Egyszerre csak egy futhat, és nem száll be egy
-    folyamatban lévő felhasználói kérés elé (a llama-server egy slotot szolgál ki,
-    parallel = 1, ezért az előmelegítés perceket késleltetné a választ)."""
     if _local_chat_inflight > 0:
         waited = 0.0
         while _local_chat_inflight > 0 and waited < LOCAL_WARM_WAIT_MAX_S:
@@ -6260,7 +5759,6 @@ async def _warm_local_for_user(user_id: int) -> None:
             logger.info("helyi elotoltes kihagyva: folyamatban levo keres (user=%s)", user_id)
             return
     if _local_warm_serial.locked():
-        # Már melegít valaki mást: nem torlódunk; a következő chat-megnyitás újrapróbálja.
         logger.info("helyi elotoltes kihagyva: mar fut egy elotoltes (user=%s)", user_id)
         return
     async with _local_warm_serial:
@@ -6268,8 +5766,6 @@ async def _warm_local_for_user(user_id: int) -> None:
 
 
 async def _warm_local_for_user_locked(user_id: int) -> None:
-    """A chat megnyitásakor (checkin) a felhasználó saját állandó promptját tölti elő,
-    pontosan úgy összerakva, ahogy a /chat/send a helyi modellnek küldi."""
     try:
         if not await _local_llm_config():
             return
@@ -6332,17 +5828,12 @@ async def _call_llm_provider(provider: str, model: str, api_key: str, system_pro
                  "openrouter": "OpenRouter"}.get(provider, provider)
         headers = {"Content-Type": "application/json"}
         if api_key:
-            # Üres kulccsal a "Bearer " fejléc érvénytelen (httpx LocalProtocolError),
-            # a helyi Ollama pedig nem is kér kulcsot.
             headers["Authorization"] = f"Bearer {api_key}"
         if provider == "openrouter":
-            # Az OpenRouter ezekbol azonositja az alkalmazast a sajat statisztikaiban.
             headers["HTTP-Referer"] = "https://myra-project.hu"
             headers["X-Title"] = "Myra"
         is_local = provider == "ollama"
         local_sampling = await _local_sampling() if is_local else {}
-        # Helyi modellnél nem ismétlünk: egy perceken át futó kérés megismétlése csak
-        # tovább tartana, a visszaesést a hívó (_call_llm) intézi.
         max_retries = 1 if is_local else 3
         last_error = ""
         r = None
@@ -6363,9 +5854,6 @@ async def _call_llm_provider(provider: str, model: str, api_key: str, system_pro
                         json={"model": model, "messages": msgs, **local_sampling},
                     )
             except (httpx.TimeoutException, httpx.TransportError) as exc:
-                # A korábbi kód CSAK a hibás HTTP-státuszokat próbálta újra: egy timeout
-                # vagy megszakadt kapcsolat kivételként repült ki, és azonnal 502 lett
-                # belőle, egyetlen újrapróbálkozás nélkül.
                 r = None
                 last_error = f"{type(exc).__name__}: {exc}"
                 logger.warning("LLM halozati hiba (%s, %d/%d): %s", provider, attempt + 1, max_retries, last_error)
@@ -6376,12 +5864,8 @@ async def _call_llm_provider(provider: str, model: str, api_key: str, system_pro
             if r.status_code == 200:
                 data = r.json()
                 if data.get("error"):
-                    # Az OpenRouter a tovabbitott szolgaltato hibajat 200-as valaszban is
-                    # visszaadhatja.
                     last_error = str(data["error"])[:300]
                     break
-                # Gondolkodo modelleknel a content lehet null vagy ures: ilyenkor ujraprobaljuk,
-                # hogy ne keruljon ures Myra-valasz a beszelgetesbe.
                 content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
                 if content.strip():
                     return content.strip()
@@ -6439,9 +5923,6 @@ async def _call_llm_provider(provider: str, model: str, api_key: str, system_pro
                         json={"systemInstruction": {"parts": [{"text": system_prompt}]}, "contents": contents},
                     )
             except (httpx.TimeoutException, httpx.TransportError) as exc:
-                # A korábbi kód CSAK a hibás HTTP-státuszokat próbálta újra: egy timeout
-                # vagy megszakadt kapcsolat kivételként repült ki, és azonnal 502 lett
-                # belőle, egyetlen újrapróbálkozás nélkül.
                 r = None
                 last_error = f"{type(exc).__name__}: {exc}"
                 logger.warning("LLM halozati hiba (%s, %d/%d): %s", provider, attempt + 1, max_retries, last_error)
@@ -6468,18 +5949,12 @@ async def _call_llm_provider(provider: str, model: str, api_key: str, system_pro
     raise HTTPException(status_code=400, detail=f"Ismeretlen LLM provider: {provider}")
 
 
-# A modell idonkent atveszi az elozmeny formatumat, es sajat idobelyeggel vagy
-# formatum-tormelekkel kezdi a valaszt (2026-08-17-i felhasznaloi teszt: ket idobelyeg,
-# egy "</div>", egy U+2060). A korabbi egyszeri re.sub csak AZ ELSO elotagot vitte el,
-# ezert ha a modell kettot irt egymas utan, a masodik bennmaradt. Most ismetelve vagunk.
 _TS_PREFIX_RX = re.compile(r"^\s*\[\s*\d{4}\.\d{2}\.\d{2}\.?\s+\d{1,2}[:.]\d{2}(?:[:.]\d{2})?\s*\]?\s*")
 _MARKUP_PREFIX_RX = re.compile(r"^\s*</?[a-zA-Z][a-zA-Z0-9-]*\s*/?>\s*")
 _INVISIBLE_RX = re.compile(r"[\u200b-\u200f\u2060\ufeff]")
 
 
 def _strip_reply_prefixes(raw: Any) -> str:
-    """A _clean_llm_reply tisztítása naplózás nélkül; a folyamatos kiírás a félkész
-    szövegre is ezt hívja, hogy a felhasználó ne lássa felvillanni az időbélyeget."""
     text = _INVISIBLE_RX.sub("", str(raw).strip())
     while True:
         stripped = _MARKUP_PREFIX_RX.sub("", _TS_PREFIX_RX.sub("", text))
@@ -6490,12 +5965,6 @@ def _strip_reply_prefixes(raw: Any) -> str:
 
 
 def _clean_llm_reply(raw: Any, context: str = "chat") -> str:
-    """Levagja a valasz elejerol az atszivargott formatumot.
-
-    Szandekosan NEM naplozunk uzenettartalmat, csak a tenyt es a levagott karakterszamot.
-    Igy merheto, hogy a bemeneti oldali javitas (idobelyeg csak a felhasznalon) utan
-    probalkozik-e meg a modell: ha a "reply_cleaned" sorok elfogynak, kesz vagyunk.
-    """
     original = str(raw).strip()
     text = _strip_reply_prefixes(original)
     if text != original:
@@ -6508,11 +5977,6 @@ def _format_chat_history_for_llm(messages: list[ChatMessage]) -> list[dict]:
     used_chars = 0
     selected = list(messages[-CHAT_HISTORY_MAX_MESSAGES:])
     for m in reversed(selected):
-        # Idobelyeg CSAK a felhasznaloi uzeneteken. Amig Myra sajat korabbi valaszai is
-        # "[2026.08.17 19:20] " elotaggal jottek vissza a kontextusba, a modell azt olvasta
-        # ki beloluk, hogy "igy irok en", es sajat idobelyeggel kezdte a valaszt. A szogletes
-        # zarojel mostantol kizarolag a felhasznalo oldalan jelenik meg.
-        # Masodperc: azonos percbe eso ket uzenetnel enelkul nem allapithato meg a sorrend.
         ts_str = (
             _to_local(m.created_at).strftime("%Y.%m.%d %H:%M:%S")
             if (m.created_at and m.role == "user") else ""
@@ -6597,8 +6061,6 @@ async def chat_send(
     if body.session_id and body.session_id != active_session_id:
         raise HTTPException(status_code=403, detail="Ez a mérési session már lezárt, csak olvasható.")
 
-    # Idaig 3 DB-lekerdezes futott (maintenance_mode, StateCode, QuizSubmission)
-    # merooora nelkul - egy lassu kapcsolat itt eddig lathatatlan volt.
     mark_timing("preflight", request_started)
 
     phase_started = time.perf_counter()
@@ -6618,11 +6080,6 @@ async def chat_send(
     res = await db.execute(
         select(ChatMessage)
         .where(ChatMessage.user_id == user.id, ChatMessage.session_id == active_session_id)
-        # Egy fordulo felhasznaloi es Myra-uzenete ugyanabban a tranzakcioban, AZONOS
-        # idobelyeggel kerul be. A korabbi "id desc" masodlagos rendezes (veletlen uuid)
-        # emiatt veletlenszeruen felcserelte oket, es a modell a kerdest a sajat valasza
-        # UTAN latta, ezert neha ujra megvalaszolta az elozo kerdest. Visszaforditas utan
-        # a "role asc" a felhasznalot teszi elore.
         .order_by(ChatMessage.created_at.desc(), ChatMessage.role.asc())
         .limit(CHAT_HISTORY_MAX_MESSAGES)
     )
@@ -6634,8 +6091,6 @@ async def chat_send(
     if RAG_CHAT_CHUNKS > 0 and kb_query:
         retrieved_chunks = await search_pdf_knowledge(db, kb_query, limit=RAG_CHAT_CHUNKS)
     else:
-        # RAG_CHAT_CHUNKS=0 esetén a keresést át is ugorjuk: így nemcsak a prompt
-        # rövidül, hanem a kérésenkénti 2-8 másodperc RAG-idő is elmarad.
         retrieved_chunks = []
     mark_timing("rag", phase_started)
     retrieved_kb_context = _build_retrieved_kb_context(retrieved_chunks)
@@ -6665,15 +6120,9 @@ async def chat_send(
         clean_text = (text or "").strip()
         prev_user_msgs = [m for m in db_history if m.role == "user"][-RECALL_CONTEXT_MESSAGES:]
         prev_user_texts = [m.text for m in prev_user_msgs]
-        # Ha az elozo forduloban a multra kerdezett, a ravezeto kerdesek ("es az mikor
-        # volt?", "idezz belole") is felidezesnek szamitanak.
         recall_explicit = _is_past_reference(clean_text) or any(
             _is_past_reference(t) for t in prev_user_texts[-1:]
         )
-        # Felidezeskor a "mirol is beszeltunk multkor?" tipusu kerdes onmagaban nem
-        # hordoz temat; azt az ules korabbi uzenetei adjak ("a rajztanaros esetrol").
-        # Ezert explicit felidezesnel a kereses es az ujrarangsorolas is a mostani es
-        # az ules utolso nehany felhasznaloi uzenetebol indul.
         recall_query = clean_text
         recall_ctx_ids: list[str] = []
         if recall_explicit and prev_user_msgs:
@@ -6693,12 +6142,9 @@ async def chat_send(
         if RECALL_VECTOR_ENABLED and DB_DIALECT != "sqlite":
             try:
                 query_emb = await _get_fastembed_embedding(_message_embed_text(clean_text))
-                # A korabbi uzenetek tarolt vektorai kulon lekerdezeskent mennek be
-                # (recall_ctx_ids), igy a mostani uzenet vektora eleg.
                 recall_emb = query_emb
             except Exception as _e:
                 logger.warning(f"uzenet-vektor hiba: {_e}")
-        # Rovid, tartalom nelkuli uzenetnel ("igen", "koszi") Myra magatol nem keres emleket.
         if recall_explicit or len(clean_text) >= RECALL_MIN_MESSAGE_CHARS * 3:
             try:
                 async with db.begin_nested():
@@ -6766,7 +6212,7 @@ async def chat_send(
                 select(func.count()).select_from(ChatMessage).where(
                     ChatMessage.user_id == user.id, ChatMessage.session_id == active_session_id,
                 )
-            ) or 0) - 1  # a most mentett felhasznaloi uzenet nelkul
+            ) or 0) - 1
             local_kb = "\n\n".join(part for part in [crisis_context, _local_kb_text(retrieved_chunks)] if part)
             local_history = _format_local_history(db_history)
             local_override = (
@@ -6806,14 +6252,11 @@ async def chat_send(
     await db.flush()
     mark_timing("reply_db", phase_started)
     if local_override is not None:
-        # A következő helyi kérés ezt a két üzenetet szó szerint így kapja vissza.
         _remember_local_sent(str(user_msg.id), local_override[2])
         _remember_local_sent(str(ai_msg.id), str(raw_reply))
 
     history_chars = sum(len(item["text"]) for item in history)
     total_s = time.perf_counter() - request_started
-    # A fazisok atfedesmentesek, ezert az "other" az, ami egyik merooora ala sem esett.
-    # Ha ez nagy, akkor a lassulas olyan helyen van, ahol meg nincs meres.
     other_s = max(0.0, total_s - sum(timings.values()))
     logger.info(
         "chat_timing provider=%s model=%s total=%.2fs preflight=%.2fs settings=%.2fs rag=%.2fs "
@@ -6855,12 +6298,6 @@ async def chat_send_stream(
     request: Request,
     authorization: Optional[str] = Header(None),
 ):
-    """Ugyanaz, mint a /chat/send, de a válasz szövege íródás közben, SSE-ben érkezik
-    ("text" esemény: az eddigi teljes, tisztított szöveg), a végén pedig a /chat/send
-    válaszával azonos "done" esemény jön. Hibánál "error" esemény jön státusszal.
-    A hitelesítés rövid saját munkamenettel fut, hogy a hiba még rendes HTTP-kódként
-    (401/503) menjen ki, és ne tartson nyitva adatbázis-kapcsolatot a kiírás alatt.
-    A válasz akkor is elkészül és mentődik, ha a kliens közben megszakad."""
     async with SessionLocal() as auth_db:
         auth_user = await get_current_user(authorization, auth_db)
         user_id = auth_user.id
@@ -6892,12 +6329,10 @@ async def chat_send_stream(
     _spawn_background_task(run())
 
     async def events():
-        # Azonnali első bájt: a proxyk így rögtön átengedik a fejlécet.
         yield ": ok\n\n"
         while True:
             kind, payload = await queue.get()
             if kind == "text":
-                # Ha közben több darab is összegyűlt, elég a legfrissebbet küldeni.
                 while not queue.empty():
                     nxt = queue.get_nowait()
                     if nxt[0] != "text":
@@ -6938,13 +6373,7 @@ CHECKIN_INSTRUCTION = (
 
 @api.post("/chat/checkin")
 async def chat_checkin(request: Request, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """Proaktív Myra-nyitány: ha a felhasználó pár nap kihagyás után tér vissza, Myra kérdez vissza elsőként.
-
-    Szándékosan „best effort”: ha bármelyik feltétel nem teljesül, üres választ ad, sosem hibázik a felületen.
-    """
     _check_and_record_chat_limit(request, user.id)
-    # A chat megnyitásakor a háttérben előtöltjük a helyi modellt (ha be van kapcsolva),
-    # hogy az első üzenetnél már ne kelljen a teljes állandó promptot feldolgozni.
     _spawn_background_task(_warm_local_for_user(user.id))
     if not user.is_admin and await is_maintenance(db):
         return {"message": None}
@@ -6988,7 +6417,6 @@ async def chat_checkin(request: Request, user: User = Depends(get_current_user),
     if not any(m.role == "user" for m in db_history):
         return {"message": None}
     if len(db_history) >= 2 and db_history[-1].role == "assistant" and db_history[-2].role == "assistant":
-        # Az előző check-inre még nem érkezett válasz — ne halmozzunk.
         return {"message": None}
     if _message_age_days(now, db_history[-1].created_at) < float(checkin_days):
         return {"message": None}
@@ -7084,8 +6512,6 @@ async def admin_delete_code(code: str, _: User = Depends(require_admin), db: Asy
 
 
 SUGGESTED_MODELS = {
-    # 2026 oktoberi allapot, a szolgaltatok sajat modellistai alapjan. A mezobe
-    # barmilyen mas modellnev is beirhato; ez csak a legordulo lista.
     "openai": [
         "gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
         "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
@@ -7160,7 +6586,6 @@ async def admin_get_settings(_: User = Depends(require_admin), db: AsyncSession 
         "ollama_models": ollama_models,
         "ollama_base_url": OLLAMA_BASE_URL,
         "local_llm_fallback_active": local_enabled and time.monotonic() < _ollama_down_until,
-        # Az env a vegso kikapcsolo: ha az tiltja, a kapcsolo nem is jelenik meg.
         "profile_memory_available": PROFILE_ENABLED,
         "profile_memory_enabled": await _profile_feature_on(db),
     }
@@ -7208,11 +6633,7 @@ async def admin_update_settings(body: SettingsIn, request: Request, admin: User 
     if body.local_llm_thinking is not None:
         await set_setting(db, "local_llm_thinking", body.local_llm_thinking.strip().lower())
     if body.local_llm_enabled is not None or body.local_llm_model is not None:
-        # Új beállításnál azonnal próbálja a helyi gépet, ne várja ki a hibaszünetet.
         _ollama_down_until = 0.0
-        # Mentéskor nincs előtöltés: a csak alappromptos előtöltés lefoglalta a szervert,
-        # és kiszorította a felhasználó saját előtöltését (az az alappromptot is tartalmazza,
-        # a chat megnyitásakor fut).
     await _admin_audit(db, admin, request, "admin.settings.update")
     return {"ok": True}
 
@@ -7426,8 +6847,6 @@ async def admin_set_maintenance(body: MaintenanceModeBody, request: Request, adm
     val = "true" if body.maintenance_mode else "false"
     await set_setting(db, "maintenance_mode", val)
     if not body.maintenance_mode:
-        # Kézi kikapcsolás a karantént is feloldja, különben a figyelő
-        # állapota és a tényleges állapot szétcsúszna.
         await set_setting(db, "quarantine_active", "false")
         await set_setting(db, "quarantine_until", "")
     await db.commit()
@@ -7435,8 +6854,6 @@ async def admin_set_maintenance(body: MaintenanceModeBody, request: Request, adm
     await _admin_audit(db, admin, request, "admin.maintenance.toggle", f"enabled={val}")
     return {"ok": True, "maintenance_mode": body.maintenance_mode}
 
-
-# ---------------------------------------------------------------- karantén
 
 class SecurityActionBody(BaseModel):
     current_password: str = Field(min_length=1, max_length=128)
@@ -7448,8 +6865,6 @@ _QUARANTINE_DEFAULTS = {
     "quarantine_reason": "",
     "quarantine_at": "",
     "quarantine_source": "",
-    # A figyelo KUSZOB-alapu karantenjat ennyi idopont utan magatol feloldja.
-    # Az "azonnal" jelzesu karantennal ures marad (kezi feloldas kell).
     "quarantine_until": "",
     "maintenance_mode": "false",
     "watch_heartbeat": "",
@@ -7475,7 +6890,6 @@ async def admin_security_state(
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """A karantén állapota + a legutóbbi biztonsági események, egy körben."""
     s = await get_settings(db, _QUARANTINE_DEFAULTS)
     limit = max(1, min(int(limit or 50), 200))
 
@@ -7494,7 +6908,6 @@ async def admin_security_state(
     )
     counts = {row[0] or "info": int(row[1]) for row in res2.all()}
 
-    # A figyelő percenként frissíti a szívdobbanást; ha régi, nem fut.
     heartbeat = s.get("watch_heartbeat", "")
     watch_age_s = None
     if heartbeat:
@@ -7531,7 +6944,6 @@ async def admin_security_release(
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Karantén feloldása: a platform újra kiszolgálja a felhasználókat."""
     if not verify_password(body.current_password, admin.password_hash):
         await _admin_audit(db, admin, request, "admin.security.release.denied", "reason=bad_password")
         raise HTTPException(status_code=400, detail="Hibás jelszó.")
@@ -7561,7 +6973,6 @@ async def admin_security_quarantine(
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Kézi karantén: ugyanaz, mintha a figyelő kapcsolta volna be."""
     if not verify_password(body.current_password, admin.password_hash):
         await _admin_audit(db, admin, request, "admin.security.quarantine.denied", "reason=bad_password")
         raise HTTPException(status_code=400, detail="Hibás jelszó.")
@@ -7570,8 +6981,6 @@ async def admin_security_quarantine(
     await set_setting(db, "quarantine_reason", reason)
     await set_setting(db, "quarantine_at", _now().strftime("%Y-%m-%d %H:%M:%S"))
     await set_setting(db, "quarantine_source", "admin")
-    # A kezi karanten szandekosan idokorlat nelkul zarul: azt csak kezi
-    # feloldas oldja, nem a figyelo automatikus idozitoje.
     await set_setting(db, "quarantine_until", "")
     await set_setting(db, "maintenance_mode", "true")
     db.add(SecurityEvent(
@@ -7595,7 +7004,6 @@ async def admin_security_clear_events(
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Eseménylista ürítése. A karantén állapotát nem érinti."""
     if not verify_password(body.current_password, admin.password_hash):
         await _admin_audit(db, admin, request, "admin.security.events.clear.denied", "reason=bad_password")
         raise HTTPException(status_code=400, detail="Hibás jelszó.")
@@ -7633,8 +7041,6 @@ async def _delayed_down():
     await asyncio.sleep(1.0)
     logger.info("Emergency system shutdown (docker compose down) triggered via admin API.")
     async with httpx.AsyncClient(timeout=10.0) as proxy_client:
-        # A frontend statikus fajl (a Caddy szolgalja ki a /srv/myra mappabol), nem
-        # konténer — csak a backendet kell leallitani.
         for container in ["myra-backend"]:
             try:
                 resp = await proxy_client.post(f"{DOCKER_SOCKET_PROXY_URL}/containers/{container}/stop")
@@ -7733,12 +7139,6 @@ async def admin_list_users(_: User = Depends(require_admin), db: AsyncSession = 
 
 @api.get("/admin/stats")
 async def admin_stats(_: User = Depends(require_admin)):
-    """Forgalmi statisztika a Caddy hozzaferesi naplojabol.
-
-    A szamokat a gazdagép oldali osszesito (ops/myra-stats.py, percenkenti timer)
-    irja a backend/data/statisztika.json fajlba, itt csak kiszolgaljuk. Igy a
-    konténernek nem kell naplofajlt olvasnia, a backend valaszideje nem valtozik,
-    es a naplo feldolgozasa sem terheli a webszervert."""
     ut = ROOT_DIR / "data" / "statisztika.json"
     if not ut.is_file():
         return {"ok": False, "hiba": "meg nincs osszesites (fut-e a myra-stats.timer?)"}
@@ -7874,8 +7274,6 @@ async def admin_download_sessions(user_id: int, _: User = Depends(require_admin)
         ] + list(answers)
         writer.writerow(row)
     output.seek(0)
-    # A felhasználói név nyersen nem kerülhet HTTP-fejlécbe: ékezetes karakternél a
-    # latin-1 kódolás hibázik (500), idézőjelnél pedig szétesik a fejléc.
     safe_name = re.sub(r"[^A-Za-z0-9_-]", "_", u.name or "")[:40].strip("_") or "felhasznalo"
     filename = f"myra_meresek_{safe_name}_{user_id}.csv"
     return StreamingResponse(
@@ -7902,8 +7300,6 @@ async def admin_get_user_profile(user_id: int, _: User = Depends(require_admin),
 
 @api.post("/admin/users/{user_id}/profile/regenerate")
 async def admin_regenerate_user_profile(user_id: int, request: Request, admin: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    """Kezi ujrageneralas. Szandekosan szinkron: az admin itt latni akarja az
-    eredmenyt, nem csak azt, hogy elindult."""
     await _admin_audit(db, admin, request, "user.profile.regenerate", f"user {user_id}")
     await db.commit()
     content = await _regenerate_user_profile(user_id)
@@ -7946,13 +7342,7 @@ async def admin_delete_user(user_id: int, request: Request, admin: User = Depend
     return {"ok": True}
 
 
-# Postgres/Supabase eseten a szerveren orankent futo pg_dump (myra-backup.sh) mentesei
-# csak olvashato koteten erkeznek ide; a gomb a legfrissebb "userdata" mentest adja ki.
-# Ez a teljes adatbazis a knowledge_chunks tabla TARTALMA nelkul (a tudasbazis a PDF-ekbol
-# ujraindexelheto). Uj dumpot nem keszit, es a napi tar.gz-t (abban az .env is benne van)
-# szandekosan nem szolgalja ki.
 BACKUP_DIR = Path(os.environ.get("BACKUP_DIR", "/app/backups"))
-# Egy ekkora valaszt a bongeszo meg jol kezel; e folott a mentest a szerverrol kell levenni.
 BACKUP_MAX_BYTES = int(os.environ.get("BACKUP_MAX_BYTES", "4400000"))
 
 
@@ -8038,10 +7428,6 @@ async def start_leaderboard_session(
     body: GameSessionStartBody,
     user: User = Depends(get_current_user),
 ):
-    """A játék indításakor hívandó. A visszaadott, egyszer használatos tokent kell
-    a /leaderboard/submit hívásnál visszaküldeni a pontszámmal együtt. Ezt a
-    backend generálja és tárolja - a kliens nem tudja saját maga előállítani,
-    szemben a korábbi, kliens-oldalon is kiszámolható SHA-256 aláírással."""
     now = time.time()
     _prune_game_sessions(now)
     token = secrets.token_urlsafe(32)
@@ -8117,8 +7503,6 @@ async def get_leaderboard(_: User = Depends(get_current_user), db: AsyncSession 
         
         game_list = []
         for rank, (entry, user) in enumerate(rows, 1):
-            # Becenév híján SOHA ne a valódi nevet mutassuk: a ranglista minden
-            # bejelentkezett felhasználó számára látható.
             name = user.nickname.strip() if (user.nickname and user.nickname.strip()) else "Névtelen játékos"
             game_list.append({
                 "rank": rank,
@@ -8196,8 +7580,6 @@ async def update_forum_profile(body: ForumProfileUpdate, user: User = Depends(ge
 
 @api.get("/forum/latest")
 async def get_forum_latest(_: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """A legfrissebb fórumposzt időpontja. A menüben megjelenő jelzéshez kell:
-    a kliens ezt veti össze a helyben tárolt "utoljára megnéztem" időponttal."""
     res = await db.execute(select(func.max(ForumPost.created_at)))
     latest = res.scalar()
     return {"latest": latest.isoformat() if latest else None}
@@ -8283,8 +7665,6 @@ async def post_feedback(
     background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
 ):
-    """A felületen lévő visszajelzés gomb végpontja. A levelet háttérfeladatban küldi,
-    hogy a felhasználó ne várjon az SMTP-re."""
     _check_and_record_user_limit(
         _feedback_attempts, request, user.id, FEEDBACK_WINDOW_S, FEEDBACK_MAX,
         "Túl sok visszajelzés rövid idő alatt. Kérlek, várj egy kicsit.",
@@ -8308,15 +7688,11 @@ async def public_config(db: AsyncSession = Depends(get_db)):
     return {
         "app_name": "Myra-project",
         "global_notice_text": s.get("global_notice_text", ""),
-        # A frontend ebből tudja, hogy karbantartás/karantén van, és rendes
-        # képernyőt tud mutatni a 503-as hibák helyett.
         "maintenance_mode": s.get("maintenance_mode") == "true",
     }
 
 
 app.include_router(api)
-# A localhost origin csak fejlesztői módban engedélyezett — élesben nincs rá szükség,
-# és felesleges támadási felület.
 _CORS_KWARGS = {
     "allow_origins": [
         "https://www.myra-project.hu",

@@ -1,15 +1,3 @@
-"""
-Autentikációs folyamat integrációs tesztek a Myra API-hoz.
-
-Ellenőrzi:
-- Sikeres regisztráció
-- Duplikált email regisztráció elutasítása
-- Sikeres bejelentkezés
-- Hibás jelszó elutasítása
-- Token érvényesség (Authorization: Bearer <token>)
-- /api/auth/me endpoint
-- Jelszóváltás (/api/auth/change-password)
-"""
 import os
 import sys
 import uuid
@@ -19,7 +7,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 
 def _unique_email() -> str:
-    """Egyedi teszt email generálása ütközések elkerülésére."""
     return f"test_{uuid.uuid4().hex[:12]}@example.com"
 
 
@@ -29,9 +16,6 @@ NEW_PASSWORD = "NewSecure!2026x"
 
 @pytest.fixture
 async def registered_user(client):
-    """
-    Regisztrál egy új felhasználót és visszaadja az email-t, jelszót és a regisztrációs választ.
-    """
     email = _unique_email()
     resp = await client.post("/api/auth/register", json={
         "email": email,
@@ -51,7 +35,6 @@ async def registered_user(client):
 
 @pytest.fixture
 async def auth_token(registered_user):
-    """Egy bejelentkezett felhasználó access tokenje."""
     data = registered_user["data"]
     assert data is not None, "A regisztráció sikertelen volt, nem lehet tokent kinyerni"
     return data["access_token"]
@@ -59,7 +42,6 @@ async def auth_token(registered_user):
 
 @pytest.mark.anyio
 async def test_register_success(client):
-    """Sikeres regisztráció a kötelező mezőkkel."""
     email = _unique_email()
     resp = await client.post("/api/auth/register", json={
         "email": email,
@@ -78,7 +60,6 @@ async def test_register_success(client):
 
 @pytest.mark.anyio
 async def test_register_without_accepted_terms_rejected(client):
-    """Regisztráció elfogadott feltételek nélkül elutasításra kerül."""
     email = _unique_email()
     resp = await client.post("/api/auth/register", json={
         "email": email,
@@ -93,7 +74,6 @@ async def test_register_without_accepted_terms_rejected(client):
 
 @pytest.mark.anyio
 async def test_register_duplicate_email_rejected(client):
-    """Duplikált email regisztráció elutasításra kerül."""
     email = _unique_email()
     resp1 = await client.post("/api/auth/register", json={
         "email": email,
@@ -121,7 +101,6 @@ async def test_register_duplicate_email_rejected(client):
 
 @pytest.mark.anyio
 async def test_register_short_password_rejected(client):
-    """Túl rövid jelszóval történő regisztráció elutasításra kerül (min 8 karakter)."""
     email = _unique_email()
     resp = await client.post("/api/auth/register", json={
         "email": email,
@@ -136,7 +115,6 @@ async def test_register_short_password_rejected(client):
 
 @pytest.mark.anyio
 async def test_login_success(client, registered_user):
-    """Sikeres bejelentkezés regisztrált felhasználóval."""
     resp = await client.post("/api/auth/login", json={
         "email": registered_user["email"],
         "password": registered_user["password"],
@@ -149,7 +127,6 @@ async def test_login_success(client, registered_user):
 
 @pytest.mark.anyio
 async def test_login_wrong_password_rejected(client, registered_user):
-    """Hibás jelszóval történő bejelentkezés 401-es hibát ad."""
     resp = await client.post("/api/auth/login", json={
         "email": registered_user["email"],
         "password": "TeljesenHibasJelszo!2026",
@@ -159,7 +136,6 @@ async def test_login_wrong_password_rejected(client, registered_user):
 
 @pytest.mark.anyio
 async def test_login_nonexistent_email_rejected(client):
-    """Nem létező email címmel történő bejelentkezés 401-es hibát ad."""
     resp = await client.post("/api/auth/login", json={
         "email": "nemletezo@example.com",
         "password": TEST_PASSWORD,
@@ -169,7 +145,6 @@ async def test_login_nonexistent_email_rejected(client):
 
 @pytest.mark.anyio
 async def test_auth_me_with_valid_token(client, registered_user, auth_token):
-    """A /api/auth/me endpoint valid tokennel visszaadja a felhasználó adatait."""
     resp = await client.get(
         "/api/auth/me",
         headers={"Authorization": f"Bearer {auth_token}"},
@@ -182,14 +157,12 @@ async def test_auth_me_with_valid_token(client, registered_user, auth_token):
 
 @pytest.mark.anyio
 async def test_auth_me_without_token_rejected(client):
-    """A /api/auth/me endpoint token nélkül 401-es hibát ad."""
     resp = await client.get("/api/auth/me")
     assert resp.status_code == 401, f"Várt 401, kapott: {resp.status_code}"
 
 
 @pytest.mark.anyio
 async def test_auth_me_with_invalid_token_rejected(client):
-    """A /api/auth/me endpoint érvénytelen tokennel 401-es hibát ad."""
     resp = await client.get(
         "/api/auth/me",
         headers={"Authorization": "Bearer this.is.not.a.valid.token"},
@@ -199,7 +172,6 @@ async def test_auth_me_with_invalid_token_rejected(client):
 
 @pytest.mark.anyio
 async def test_auth_me_with_malformed_auth_header(client):
-    """Hibás Authorization header formátum (Bearer nélkül) 401-es hibát ad."""
     resp = await client.get(
         "/api/auth/me",
         headers={"Authorization": "Basic dXNlcjpwYXNz"},
@@ -209,7 +181,6 @@ async def test_auth_me_with_malformed_auth_header(client):
 
 @pytest.mark.anyio
 async def test_change_password_success(client):
-    """Sikeres jelszóváltás helyes régi jelszóval."""
     email = _unique_email()
     reg_resp = await client.post("/api/auth/register", json={
         "email": email,
@@ -237,7 +208,6 @@ async def test_change_password_success(client):
 
 @pytest.mark.anyio
 async def test_change_password_wrong_current_rejected(client, auth_token):
-    """Jelszóváltás hibás jelenlegi jelszóval elutasításra kerül."""
     resp = await client.post(
         "/api/auth/change-password",
         json={
@@ -251,7 +221,6 @@ async def test_change_password_wrong_current_rejected(client, auth_token):
 
 @pytest.mark.anyio
 async def test_change_password_same_as_current_rejected(client):
-    """Jelszóváltás ahol az új jelszó megegyezik a jelenlegivel, elutasításra kerül."""
     email = _unique_email()
     reg_resp = await client.post("/api/auth/register", json={
         "email": email,
@@ -277,7 +246,6 @@ async def test_change_password_same_as_current_rejected(client):
 
 @pytest.mark.anyio
 async def test_change_password_without_auth_rejected(client):
-    """Jelszóváltás autentikáció nélkül 401-es hibát ad."""
     resp = await client.post(
         "/api/auth/change-password",
         json={
@@ -290,7 +258,6 @@ async def test_change_password_without_auth_rejected(client):
 
 @pytest.mark.anyio
 async def test_login_after_password_change(client):
-    """Jelszóváltás után az új jelszóval be lehet jelentkezni."""
     email = _unique_email()
     original_pw = "Original!Pass2026"
     changed_pw = "Changed!Pass2026x"

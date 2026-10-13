@@ -40,8 +40,6 @@ type Settings = {
   local_llm_fallback_active: boolean;
 };
 
-/** A `GET /api/admin/security` valasza. A figyelo (ops/myra-watch.py) es a
- *  backend is ide ir; ez a kepernyo csak megjeleniti. */
 type SecurityEvent = {
   id: number;
   created_at: string | null;
@@ -65,9 +63,6 @@ type SecurityState = {
   events: SecurityEvent[];
 };
 
-/** A `GET /api/admin/stats` valasza. A szamokat a szerveren futó összesítő
- *  (ops/myra-stats.py) irja a Caddy hozzaferesi naplojabol; ez a kepernyo csak
- *  megjeleniti. „frontend" = statikus fajlok, „backend" = /api alatti keresek. */
 type StatsBucket = {
   total: number;
   sikeres: number;
@@ -93,7 +88,6 @@ type TrafficStats = {
   fail2ban?: Record<string, { most: number; osszesen: number }>;
 };
 
-/** Ennyi masodperc utan tekintjuk halottnak a figyelot (5 perces koteg + tartalek). */
 const WATCH_STALE_SECONDS = 600;
 
 const PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "groq", "cerebras", "mistral", "openrouter", "ollama"];
@@ -106,8 +100,6 @@ const PASSWORD_MAX_CHARS = 128;
 export default function AdminSettingsScreen() {
   useAuthGuard();
   const { token, user, logout } = useAuth();
-  // Az admin token 1 oraig ervenyes. Lejarat utan minden betoltes 401-et kapna (es a figyelo
-  // ezt szamolja), ezert az elso 401 utan leallitjuk a lekeréseket, es ujra-bejelentkezest kerunk.
   const [expired, setExpired] = useState(false);
   const expiredRef = useRef(false);
   const adminGet = useCallback(async (path: string) => {
@@ -234,7 +226,6 @@ export default function AdminSettingsScreen() {
       const r = await adminGet("/api/admin/security");
       if (r && r.ok) setSec(await r.json());
     } catch {
-      /* a biztonsagi panel sosem torheti el a kepernyot */
     } finally {
       setSecLoading(false);
     }
@@ -248,7 +239,6 @@ export default function AdminSettingsScreen() {
       const r = await adminGet("/api/admin/stats");
       if (r && r.ok) setStats(await r.json());
     } catch {
-      /* a forgalmi panel sosem torheti el a kepernyot */
     } finally {
       setStatsLoading(false);
     }
@@ -256,7 +246,6 @@ export default function AdminSettingsScreen() {
 
   useEffect(() => { loadStats(); }, [loadStats]);
 
-  /** Kozos vaz a harom karanten-muvelethez: jelszo -> POST -> ujratoltes. */
   const securityAction = async (path: string, body: Record<string, unknown>, okMsg: string) => {
     if (!secPassword.trim()) {
       setErr("A muvelethez add meg az admin jelszavadat.");

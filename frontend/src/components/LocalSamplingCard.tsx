@@ -5,21 +5,6 @@ import { authedFetch } from "@/src/auth/AuthContext";
 import { T } from "@/src/components/Typography";
 import { theme } from "@/src/theme";
 
-/**
- * Helyi modell mintavétele és gondolkodása (hőmérséklet, top-p, top-k, min-p, enable_thinking)
- * az admin felületről.
- *
- * Önálló kártya: saját betöltéssel és mentéssel, a /api/admin/settings végpontot használja,
- * és csak ezeket a mezőket küldi el, így más beállítást nem érint.
- * Mentés után azonnal érvényes, nincs szükség a modell újraindítására.
- * Üres mező = nincs megadva, ilyenkor a llama-server models.ini értéke él.
- *
- * Használat az admin-settings.tsx-ben, a helyi modell kártya alatt:
- *   import LocalSamplingCard from "@/src/components/LocalSamplingCard";
- *   ...
- *   <LocalSamplingCard token={token} />
- */
-
 type Props = { token: string | null | undefined; initial?: Record<string, any> | null };
 
 const FIELDS = [
@@ -32,14 +17,12 @@ const FIELDS = [
 type Key = (typeof FIELDS)[number]["key"];
 type Values = Record<Key, string> & { local_llm_thinking: string };
 
-/** Gondolkodás (enable_thinking): üres = a szerver alapértéke, "false" = kikapcsolva, "true" = bekapcsolva. */
 const THINKING_OPTIONS = [
   { value: "", label: "Alapérték" },
   { value: "false", label: "Kikapcsolva" },
   { value: "true", label: "Bekapcsolva" },
 ] as const;
 
-/** Tizedesvessző és lebegőpontos hibák nélkül: 0,6 + 0,1 = 0,7. */
 function nudge(raw: string, delta: number, min: number, max: number, fallback: number): string {
   const current = parseFloat((raw || "").replace(",", "."));
   const base = Number.isFinite(current) ? current : fallback;
@@ -64,8 +47,6 @@ function fromSettings(d: Record<string, any> | null | undefined): Values {
   };
 }
 
-/** Az értékeket a szülő oldal már betöltött beállításaiból veszi (`initial`),
- *  ezért betöltéskor nem küld külön admin kérést. */
 export default function LocalSamplingCard({ token, initial }: Props) {
   const [values, setValues] = useState<Values>(() => fromSettings(initial));
   const [saving, setSaving] = useState(false);

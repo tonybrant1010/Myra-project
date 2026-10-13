@@ -1,58 +1,4 @@
 #!/usr/bin/env python3
-"""Myra futasideju figyelo es karanten - v2.
-
-Mit csinal:
-  - olvassa a `docker events` folyamot (parancsinditas konteneren belul, OOM,
-    varatlan leallas, ujrainditas, idegen kontener indulasa),
-  - olvassa a backend konteneri logjat es mintakat keres benne,
-  - percenkent ellenorzi a vedett fajlok (server.py, .env, compose) ujjlenyomatat,
-  - minden talalatot beir a `security_events` tablaba, hogy az admin feluleten
-    latszodjon akkor is, ha nem vagy gep kozelben,
-  - sulyos jelnel KARANTENBA zarja a platformot (maintenance_mode = true),
-  - emailt kuld: a sulyos eseteket azonnal, a tobbit idokozonkent kotegelve.
-
-Mit jelent a karanten:
-  A backend a nem-admin keresekre 503-at ad, amig te fel nem oldod az admin
-  feluleten. A backend TOVABB FUT, tehat te be tudsz lepni
-  akkor is, ha eppen nem vagy a gep kozeleben. Semmit nem allitunk le.
-
-Mit szandekosan NEM csinal: nem all le semmi, nem tilt IP-t, nem ir at semmit.
-
-MI ZAR KARANTENBA (2026-10-13 ota ket kategoria):
-
-  1. AZONNALI jel - nincs idokorlat, csak te oldod fel: vedett fajl
-     ujjlenyomatanak valtozasa, engedely nelkuli `docker exec`, nem a compose
-     altal inditott kontener. Ezek kivulrol nem hamisithatok, csak a szerver
-     meghekkelese utan keletkeznek, ezert itt a szigorubb reakcio a helyes.
-
-  2. KUSZOB-ALAPU jel - darabszam + ablak + KULONBOZO FORRAS-IP-ek minimuma:
-     proxy-titok nelkuli kopogtatas, sikertelen belepesek, hitelesitett
-     admin-muvelet elutasitasa. Egy tamado EGYETLEN IP-rol riasztast valt ki,
-     de nem tud karantenba zarni: ahhoz legalabb MYRA_KUSZOB_IP_* kulonbozo
-     forras kell. Azert fontos, mert a karanten platform-szintu - ha egyetlen
-     forras kivalthatja, akkor a vedelemmel eppen a tamado zarja ki a
-     felhasznalokat (nehany keresessel).
-
-  A kuszob-alapu karanten KARANTEN_TTL_MIN perc utan magatol feloldodik, hacsak
-  nem jon ujabb jel. Az azonnali jelzesu karanten nem oldodik fel magatol.
-
-  Anonim keres (ervenyes token nelkul) az admin utvonalon CSAK riasztas:
-  karanten nem jar erte. A karanten jele a HITELESITETT, de elutasitott
-  admin-muvelet, amit a backend sajat, strukturált soraval jelez
-  (MYRA_SECURITY_SIGNAL kind=admin_forbidden).
-
-Fuggosegek: csak a Python standard konyvtar. Nincs pip install.
-Az adatbazisba a `docker exec ... psql` uton ir, igy akkor is mukodik,
-ha a backend eppen beragadt.
-
-Hasznalat:
-  myra-watch.py                  # figyelo mod (systemd ezt inditja)
-  myra-watch.py --alapvonal      # a vedett fajlok ujjlenyomatanak rogzitese
-  myra-watch.py --szunet 60      # 60 percre felfuggeszti a karantent (karbantartas)
-  myra-watch.py --szunet 0       # a szunet azonnali vege
-  myra-watch.py --mentes 5       # 5 perces ablak a mentes sajat pg_dump-janak
-  myra-watch.py --teszt          # teszt esemeny + teszt email
-"""
 
 import base64
 import hashlib
@@ -71,10 +17,7 @@ from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from urllib.parse import unquote, urlparse
 
-# ----------------------------------------------------------------- beallitasok
 
-# A projekt gyokere: a szkript sajat helyebol vezetjuk le (ops/ szulomappaja),
-# igy mindegy, melyik felhasznalo home-jaban van.
 MYRA_DIR = os.environ.get(
     "MYRA_DIR", os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
@@ -87,29 +30,12 @@ ALAPVONAL_FAJL = os.path.join(OPS_DIR, "integritas.json")
 SZUNET_FAJL = os.path.join(OPS_DIR, "karanten-szunet")
 MENTES_FAJL = os.path.join(OPS_DIR, "mentes-fut")
 
-# Ennyi masodpercenkent megy ki legfeljebb egy osszefoglalo email.
 KOTEG_MASODPERC = int(os.environ.get("MYRA_WATCH_BATCH_S", "300"))
-# Egy emailbe legfeljebb ennyi esemeny kerul, a tobbi csak szamkent.
 MAX_ESEMENY_EMAILBEN = 40
-# A vedett fajlokat ennyi masodpercenkent nezzuk meg.
 INTEGRITAS_MASODPERC = int(os.environ.get("MYRA_WATCH_INTEGRITY_S", "60"))
-# Ennyi naposnal regebbi esemenyeket takaritunk.
 MEGORZES_NAP = int(os.environ.get("MYRA_WATCH_RETENTION_D", "30"))
-# Ha "0", a figyelo sosem zar karantenba (csak riaszt) - a regi viselkedes.
 KARANTEN_BE = os.environ.get("MYRA_WATCH_QUARANTINE", "1") not in ("0", "false", "no")
 
-# Kuszobok: (esemenyszam, ablak masodpercben, MINIMUM KULONBOZO FORRAS-IP).
-#
-# A karanten platform-szintu, fail-closed kapcsolo. Ha egyetlen forras
-# kivalthatja, akkor a vedelmet a tamado kapja a kezebe: nehany keresessel
-# kizarhatja az osszes felhasznalot. Ezert a kuszob-alapu jeleknel nem eleg a
-# darabszam, kell hozza legalabb ennyi KULONBOZO forras-IP is. Egy tamado egy
-# IP-rol igy riasztast kelt, de nem zar; elosztott (tobb forrasu) zaj eseten a
-# karanten valtozatlanul bekapcsol.
-#
-# Az "azonnal" jelzesekre (vedett fajl valtozasa, engedely nelkuli docker exec,
-# idegen kontener) ez nem vonatkozik: azok azonnal es IP-diverzitas nelkul
-# zarnak, mert kivulrol nem hamisithatok.
 KUSZOB = {
     "proxy-kopogtatas": (
         int(os.environ.get("MYRA_KUSZOB_PROXY", "25")), 600,
@@ -125,25 +51,12 @@ KUSZOB = {
     ),
 }
 
-# A kuszob-alapu karanten ennyi perc utan magatol feloldodik (0 = nincs
-# automatikus feloldas). Az azonnali jelzesu karantenra nem vonatkozik.
 KARANTEN_TTL_MIN = int(os.environ.get("MYRA_KARANTEN_TTL_MIN", "30"))
 
-# A compose altal inditott kontenereken kivul ezek sem szamitanak idegennek.
 SAJAT_KONTENEREK = {
     x.strip() for x in os.environ.get("MYRA_SAJAT_KONTENEREK", "").split(",") if x.strip()
 }
 
-# A vedett fajlok. Ezek megvaltozasa azonnali karanten.
-#
-# A figyelo sajat maga es a TELEPITETT systemd unit is vedett: enelkul a karanten
-# vezerlojet integritas-esemeny nelkul lehetne lecserelni, azaz a vedelmet
-# megkerulni. FIGYELEM: ezert a myra-watch.py feltoltese ELOTT mindig indits
-# szunetet (--szunet), kulonben maga a csere valt ki azonnali karantent;
-# a csere utan pedig rögzits uj alapvonalat (--alapvonal).
-#
-# A repoban levo ops/myra-watch.service csak sablon: NEM ez fut, ezert nem is
-# vedett. Amit a rendszer tenylegesen futtat, az a telepitetett unit alabb.
 UNIT_FAJL = os.environ.get(
     "MYRA_WATCH_UNIT", "/etc/systemd/system/myra-watch.service"
 )
@@ -153,10 +66,6 @@ VEDETT_FAJLOK = [
     os.path.join(MYRA_DIR, "docker-compose.yml"),
     os.path.join(MYRA_DIR, "docker-compose.override.yml"),
     os.path.join(OPS_DIR, "myra-watch.py"),
-    # 2026-10-13: a bejovo forgalom es a vedelem kulcsfajljai is vedettek. A root-only
-    # fajlokat (pl. a Caddy titka) a _ujjlenyomat meret+ido alapon figyeli. A
-    # /etc/wireguard/wg0.conf szandekosan NINCS itt: a /etc/wireguard konyvtar 0700-as
-    # root-mappa, ezert a figyelo (myra-admin) meg stat-olni sem tudja.
     os.path.join(OPS_DIR, "myra-stats.py"),
     os.path.join(OPS_DIR, "myra-backup.sh"),
     "/etc/caddy/Caddyfile",
@@ -173,23 +82,9 @@ VEDETT_FAJLOK = [
     UNIT_FAJL,
 ]
 
-# A backend logjaban ezeket keressuk.
-# (minta, cimke, sulyossag, karanten_tipus)
-#   sulyossag: "info" | "warn" | "critical"
-#   karanten_tipus: None = csak riaszt
-#                   "azonnal" = azonnali karanten
-#                   kulcs a KUSZOB-bol = szamlalunk, kuszob + IP-diverzitas felett karanten
-#
-# FONTOS a sorrend: a hitelesitett admin-jelzes mintaja ELORRE kerul, es az
-# anonim 401 kulon, karanten nelkuli mintat kap. Igy egy bejelentkezes nelkuli
-# keres nem tudja kivaltani a platformzart.
 LOG_MINTAK = [
-    # Hitelesitett, de elutasitott admin muvelet. Ezt a sort a backend csak
-    # akkor irja ki, ha ERVENYES token volt a keresben (server.py require_admin),
-    # tehat bizonyitek-alapu: anonim keresekkel nem hamisithato.
     (re.compile(r"MYRA_SECURITY_SIGNAL kind=admin_forbidden"),
      "elutasitott admin muvelet (hitelesitett)", "warn", "elutasitott-admin"),
-    # Anonim koppintas az admin utvonalakra (nincs token): scanner-zaj, csak riaszt.
     (re.compile(r'"(POST|GET|DELETE|PUT|PATCH) /api/admin/[^"]*" 401'),
      "anonim koppintas admin utvonalra (nincs token)", "info", None),
     (re.compile(r"Unauthorized direct access attempt"),
@@ -206,35 +101,26 @@ LOG_MINTAK = [
      "sebessegkorlat / brute-force", "warn", None),
 ]
 
-# Ezeket a log sorokat sosem jelentjuk (zaj).
 LOG_KIVETELEK = [
-    re.compile(r'GET /api/config HTTP/1\.1" 200'),          # healthcheck
-    re.compile(r"passlib\.handlers\.bcrypt"),               # ismert, artalmatlan
+    re.compile(r'GET /api/config HTTP/1\.1" 200'),
+    re.compile(r"passlib\.handlers\.bcrypt"),
     re.compile(r"error reading bcrypt version"),
     re.compile(r"module 'bcrypt' has no attribute"),
     re.compile(r"_load_backend_mixin"),
     re.compile(r"site-packages/passlib"),
 ]
 
-# A healthcheck is exec_create esemenyt general - ezt kiszurjuk.
 EXEC_KIVETELEK = [
     re.compile(r"urllib\.request\.urlopen"),
     re.compile(r"api/config"),
     re.compile(r"pg_isready"),
 ]
 
-# A figyelo maga is `docker exec ... psql`-lel ir az adatbazisba, ami szinten
-# exec_create esemeny. Hogy ne zarja karantenba onmagat, minden sajat psql
-# hivasba beleteszi ezt az inditasonkent generalt jelzot, es csak azt engedi at.
-# Random, tehat nem lehet "kivulrol" utanozni a jelszo ismerete nelkul.
 WATCH_JELZO = f"myra_watch_{secrets.token_hex(8)}"
 EXEC_KIVETELEK.append(re.compile(re.escape(WATCH_JELZO)))
 
-# -------------------------------------------------------------------- segedek
-
 
 def _env_beolvas(utvonal):
-    """Egyszeru KEY=VALUE olvaso, hogy ne kelljen kettezni a titkokat."""
     ertekek = {}
     try:
         with open(utvonal, "r", encoding="utf-8") as f:
@@ -256,13 +142,6 @@ CIMZETT = ENV.get("MYRA_ALERT_EMAIL") or GMAIL_USER
 
 
 def _pg_adatok():
-    """A psql felhasznalo/adatbazis a db kontener sajat kornyezetebol.
-
-    Az .env DATABASE_URL-je szandekosan NEM forras: az a Supabase-re mutat
-    (postgres.<projekt> szerepnevvel), a helyi kontener viszont a compose
-    override sajat POSTGRES_USER/POSTGRES_DB ertekeivel fut. A `docker inspect`
-    nem general exec esemenyt, tehat a figyelo nem riasztja magat vele.
-    """
     user, db = "myra", "myra"
     nyers = os.environ.get("MYRA_DB_URL", "")
     if nyers:
@@ -283,7 +162,6 @@ def _pg_adatok():
                     k, v = sor.split("=", 1)
                     kornyezet[k] = v
             user = kornyezet.get("POSTGRES_USER") or user
-            # Ha nincs POSTGRES_DB, a Postgres a felhasznalo nevevel egyezo db-t hoz letre.
             db = kornyezet.get("POSTGRES_DB") or user
     except Exception as e:  # noqa: BLE001
         print(f"[watch] db kornyezet olvasasi hiba: {e}", file=sys.stderr)
@@ -293,11 +171,6 @@ def _pg_adatok():
 PG_USER, PG_DB = _pg_adatok() if os.environ.get("MYRA_DB_MOD", "supabase").strip().lower() == "docker" else ("myra", "myra")
 
 
-# 2026-10: a backend a Supabase-t hasznalja, helyi adatbazis nincs.
-# MYRA_DB_MOD=supabase (alapertelmezes): a figyelo a hoszt psql-jevel, halozaton
-# at irja a Supabase-t, a .env DATABASE_URL-je alapjan. A jelszo kornyezeti
-# valtozoban megy at (PGPASSWORD), nem a parancssorban, igy a `ps` sem latja.
-# MYRA_DB_MOD=docker: a regi viselkedes (docker exec myra-db psql).
 DB_MOD = os.environ.get("MYRA_DB_MOD", "supabase").strip().lower()
 
 
@@ -322,7 +195,6 @@ SB_CONNINFO, SB_ENV = _supabase_kapcsolat() if DB_MOD == "supabase" else (None, 
 
 
 def _psql_parancs(extra):
-    """A psql parancs eleje a valasztott mod szerint."""
     if DB_MOD == "supabase":
         return ["psql", SB_CONNINFO] + extra, SB_ENV
     return ["docker", "exec", "-i", DB_KONTENER, "psql", "-U", PG_USER, "-d", PG_DB] + extra, None
@@ -351,8 +223,6 @@ def email_kuld(targy, torzs):
         return False
 
 
-# ---------------------------------------------------------------- adatbazis
-
 DDL = """
 CREATE TABLE IF NOT EXISTS app_settings (
     key VARCHAR(60) PRIMARY KEY,
@@ -378,12 +248,10 @@ def _b64(s):
 
 
 def _sz(s):
-    """Szoveg literal SQL-be, base64-en keresztul. Igy nincs idezojel-gond."""
     return f"convert_from(decode('{_b64(s)}','base64'),'UTF8')"
 
 
 def psql(sql):
-    """SQL futtatasa a db konteneren belul. True, ha sikerult."""
     parancs, kornyezet = _psql_parancs(
         ["-v", "ON_ERROR_STOP=1", "-v", f"{WATCH_JELZO}=1", "-q", "-f", "-"]
     )
@@ -416,16 +284,6 @@ def esemeny_ment(e):
 
 
 def karanten_be(ok, tipus, azonnali=False):
-    """maintenance_mode = true + a karanten allapot rogzitese. Idempotens.
-
-    `tipus` az esemeny kategoriaja (ez kerul a quarantine_source mezobe),
-    `azonnali` pedig az, hogy a jel az "azonnali" osztalyba tartozik-e.
-
-    Idokorlat: a KUSZOB-alapu karanten KARANTEN_TTL_MIN perc utan magatol
-    feloldodik (lasd _auto_feloldas), hogy egy elosztott zaj-burst ne
-    eredmenyezzen vegtelen kiesest. Az "azonnali" jelzesu karanten (meghekkelt
-    szerver, engedely nelkuli exec) idokorlat NELKUL zarva marad, amig te fel
-    nem oldod."""
     if azonnali or KARANTEN_TTL_MIN <= 0:
         until = ""
     else:
@@ -460,8 +318,6 @@ def karanten_aktiv_e():
         return False
 
 
-# A karanten allapotanak rovid ideig tarto cache-e: egy esemeny-ontes
-# (pl. scanner) ne generaljon adatbazis-lekerdezest soronkent.
 _karanten_cache = {"ertek": False, "at": 0.0}
 KARANTEN_CACHE_S = 10.0
 
@@ -477,8 +333,6 @@ def _karanten_aktiv_cached():
 
 
 def _beallitas_olvas(kulcs):
-    """Egy app_settings ertek kiolvasása. A kulcs fix, de ugyanugy base64-en
-    keresztul megy az SQL-be, mint az iras (nincs idezojel-gond)."""
     parancs, kornyezet = _psql_parancs(
         ["-t", "-A", "-v", f"{WATCH_JELZO}=1",
          "-c", f"SELECT value FROM app_settings WHERE key = {_sz(kulcs)}"]
@@ -491,10 +345,6 @@ def _beallitas_olvas(kulcs):
 
 
 def _auto_feloldas():
-    """A KUSZOB-alapu karanten idokorlatanak lejartakor magatol felold.
-
-    Az "azonnal" jelzesu karantennal nincs quarantine_until, ezert az itt
-    soha nem oldodik fel - azt csak az admin felulet (jelszo) oldja."""
     if not karanten_aktiv_e():
         return False
     until = _beallitas_olvas("quarantine_until")
@@ -544,15 +394,10 @@ def takaritas():
     psql(f"DELETE FROM security_events WHERE created_at < now() - interval '{MEGORZES_NAP} days';")
 
 
-# ------------------------------------------------------------------- szunet
-
-# A szunet felső korlatta: a karanten felfuggesztese karbantartasra valo, nem
-# tartos kikapcsolas. Minden szunet bekerul az esemenynaploba.
 SZUNET_MAX_PERC = int(os.environ.get("MYRA_SZUNET_MAX", "480"))
 
 
 def szunet_aktiv_e():
-    """Karbantartasi ablak: ilyenkor riasztunk, de nem zarunk karantenba."""
     try:
         with open(SZUNET_FAJL, "r", encoding="utf-8") as f:
             veg = float(f.read().strip())
@@ -574,21 +419,11 @@ def szunet_allit(perc):
         print(f"[watch] Karanten felfuggesztve {perc} percre (max {SZUNET_MAX_PERC}).")
     else:
         print("[watch] Karanten-szunet vege.")
-    # Audit: minden felfuggesztes lathato legyen az admin feluleten es emailben.
     _esemeny(
         "szunet",
         f"karanten-szunet: {perc} perc" if perc > 0 else "karanten-szunet vege",
         "", "warn", None,
     )
-
-
-# --------------------------------------------------------------- mentesi ablak
-#
-# A myra-backup oranként `docker exec myra-db pg_dump`-ot futtat. Ez kivulrol
-# megkulonbozhetetlen egy adatlopasi kiserlettol, ezert a mentes a sajat
-# futasa elott ide bejelentkezik. Szandekosan szuk: CSAK a db kontener
-# pg_dump hivasa mehet at nemán, es csak az ablakon belul. Minden mas exec
-# - beleertve a pg_dump-ot barmikor mashol - tovabbra is azonnali karanten.
 
 
 def mentes_folyamatban():
@@ -606,9 +441,6 @@ def mentes_allit(perc):
     print(f"[watch] Mentesi ablak {perc} percre nyitva.")
 
 
-# --------------------------------------------------------------- integritas
-
-
 def _ujjlenyomat(utvonal):
     h = hashlib.sha256()
     try:
@@ -619,9 +451,6 @@ def _ujjlenyomat(utvonal):
     except FileNotFoundError:
         return "nincs"
     except PermissionError:
-        # Root-only fajl (pl. /etc/caddy/myra.env, /etc/wireguard/wg0.conf): a tartalmat
-        # nem tudjuk hashelni, de a meret es a modositas ideje az illetetlen modositast
-        # igy is megfogja.
         try:
             s = os.stat(utvonal)
             return f"stat:{s.st_size}:{int(s.st_mtime)}"
@@ -651,9 +480,6 @@ def alapvonal_olvas():
 
 
 def _alapvonal_ment(adat):
-    """Az ujjlenyomat-alapvonal visszairasa. Csak a NEM biztonsagi jelzesu
-    valtozasnal hasznaljuk, hogy ne ismetlodjön az info-esemeny minden
-    ujrainditasnal."""
     try:
         os.makedirs(OPS_DIR, exist_ok=True)
         with open(ALAPVONAL_FAJL, "w", encoding="utf-8") as f:
@@ -680,9 +506,6 @@ def _integritas_ciklus():
             if uj == regi:
                 continue
             if regi == "nincs" and uj != "nincs":
-                # Uj vedett fajl jelent meg (pl. bovitettuk a vedett listat).
-                # Ez nem behatolas jele, ezert csak rogzitjuk - kulonben minden
-                # lista-bovites azonnali karantent valtana ki.
                 _esemeny(
                     "integritas",
                     f"uj vedett fajl rogzitve: {os.path.basename(utvonal)}",
@@ -699,10 +522,8 @@ def _integritas_ciklus():
                     "critical",
                     "azonnal",
                 )
-            alapvonal[utvonal] = uj  # csak egyszer jelentjuk
+            alapvonal[utvonal] = uj
 
-
-# --------------------------------------------------------------------- olvasok
 
 SOR = queue.Queue(maxsize=5000)
 SZAMLALOK = {kulcs: deque() for kulcs in KUSZOB}
@@ -710,7 +531,6 @@ SZAMLALO_ZAR = threading.Lock()
 
 
 def _folyam_olvas(parancs, feldolgozo, nev):
-    """Egy kulso parancs kimenetet olvassa vegtelenul, ujrainditassal."""
     while True:
         try:
             proc = subprocess.Popen(
@@ -729,9 +549,6 @@ def _folyam_olvas(parancs, feldolgozo, nev):
         time.sleep(10)
 
 
-# A forras-IP kinyerese a log sorbol: a strukturált jelzesbol (ip=...) vagy az
-# uvicorn access-log sorabol ("1.2.3.4:5678 - \"GET ..."). Ha nem sikerul, a jel
-# szamit, de az IP-diverzitashoz nem jarul hozza.
 _IP_SIGNAL_RX = re.compile(r"\bip=([0-9a-fA-F\.:]{3,45})")
 _IP_ACCESS_RX = re.compile(r"\s([0-9a-fA-F\.:]{3,45}):\d+ - \"")
 
@@ -742,9 +559,6 @@ def _sor_ip(sor):
 
 
 def _kuszob_atlepve(kulcs, ip=""):
-    """Sliding window szamlalo. True, ha az ablakban elerte a kuszobot ES a jel
-    legalabb a megkivant szamu KULONBOZO forras-IP-rol erkezett. Egyetlen forras
-    igy nem tudja karantenba zarni a platformot."""
     darab, ablak, min_ip = KUSZOB[kulcs]
     mostanra = time.time()
     with SZAMLALO_ZAR:
@@ -758,17 +572,12 @@ def _kuszob_atlepve(kulcs, ip=""):
 
 
 def _esemeny(tipus, cimke, reszlet, sulyossag="info", karanten_tipus=None, ip=""):
-    """Egyetlen belepesi pont: osztalyoz, dont a karantenrol, sorba tesz."""
     karanten = False
     if KARANTEN_BE and karanten_tipus:
         if karanten_tipus == "azonnal":
             karanten = True
         elif karanten_tipus in KUSZOB:
             if _karanten_aktiv_cached():
-                # Mar karantenban vagyunk: nem szamolunk tovabb. Kulonben a
-                # karanten sajat magat tartana fenn (a zar alatti 401/503
-                # valaszok is illeszkednenek a mintakra), es feloldas utan
-                # nehany keresessel azonnal vissza is zarulna.
                 cimke = f"{cimke} (mar karantenban, nem szamol)"
             else:
                 karanten = _kuszob_atlepve(karanten_tipus, ip)
@@ -813,8 +622,7 @@ def docker_esemeny_feldolgozo(sor):
         if any(k.search(parancs) for k in EXEC_KIVETELEK):
             return
         if nev == DB_KONTENER and parancs.lstrip().startswith("pg_dump") and mentes_folyamatban():
-            return  # az oránkénti mentes sajat pg_dump-ja, bejelentkezett ablakon belul
-        # Parancsinditas konteneren belul: ezt csak ember csinalja.
+            return
         _esemeny(
             "exec",
             f"parancsinditas a(z) {nev} konteneren belul",
@@ -824,7 +632,6 @@ def docker_esemeny_feldolgozo(sor):
         )
 
     elif akcio == "start":
-        # A compose minden altala inditott konteneren otthagyja ezt a cimket.
         if attrs.get("com.docker.compose.project"):
             return
         if nev in SAJAT_KONTENEREK:
@@ -860,8 +667,6 @@ def log_feldolgozo(sor):
             _esemeny(tipus, cimke, sor, sulyossag, karanten_tipus, _sor_ip(sor))
             return
 
-
-# ------------------------------------------------------------------ osszegzes
 
 AZONNALI_TIPUSOK = {"oom", "die-hiba"}
 
@@ -940,8 +745,6 @@ def fociklus():
             szivdobbanas()
             kovetkezo_urites = time.time() + KOTEG_MASODPERC
 
-        # A KUSZOB-alapu karanten idokorlatanak ellenorzese (30 masodpercenkent).
-        # Az "azonnal" jelzesu karantent ez nem erinti.
         if time.time() >= kovetkezo_feloldas:
             try:
                 _auto_feloldas()

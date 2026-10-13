@@ -138,8 +138,6 @@ export default function LoginScreen() {
         cache: "no-store",
         credentials: "omit",
         headers: { "Content-Type": "application/json" },
-        // Az email kötelező: a backend a kódot ehhez a fiókhoz kötve ellenőrzi,
-        // így egy találgatott kód nem illeszkedhet más felhasználó tokenjére.
         body: JSON.stringify({ email: trimmedEmail, token: resetCode.trim(), new_password: newPassword }),
       });
       const data = await response.json().catch(() => ({}));

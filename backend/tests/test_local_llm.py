@@ -1,4 +1,3 @@
-"""A helyi modell (llama-server) promptépítő segédfüggvényei és a folyamatos kiírás."""
 import datetime
 import os
 import sys
@@ -99,7 +98,6 @@ def test_local_history_window_moves_in_steps(monkeypatch):
     assert len(server._local_history_window(hist[:30], 30)) == 30
     w = server._local_history_window(hist, 50)
     assert len(w) == 26 and w[0]["text"] == "24"
-    # Ha a lekérdezett előzmény rövidebb, mint a teljes beszélgetés, az eltolást figyelembe veszi.
     w2 = server._local_history_window(hist[10:], 50)
     assert w2[0]["text"] == "24"
 

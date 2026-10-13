@@ -21,9 +21,6 @@ import TopBar from "@/src/components/TopBar";
 import ContentBackground from "@/src/components/ContentBackground";
 import type { ViewStyle } from "react-native";
 
-/** A `backdropFilter` bongeszos CSS-tulajdonsag: RN Web futasidoben atengedi a DOM-nak,
- *  a ViewStyle tipus viszont nem ismeri, ezert a `tsc --noEmit` elhasal rajta. Igy a
- *  vizualis hatas megmarad, a tipusellenorzes pedig tiszta. */
 const webBlur = (px: number) => ({ backdropFilter: `blur(${px}px)` }) as ViewStyle;
 
 

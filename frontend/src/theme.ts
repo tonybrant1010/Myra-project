@@ -1,22 +1,5 @@
 import { Platform } from "react-native";
 
-/**
- * Színpaletta.
- *
- * Weben a mód-függő tokenek nem fix értéket, hanem CSS-változót kapnak
- * (`var(--myra-...)`). A változók konkrét értékét az app/+html.tsx definiálja,
- * nappali és éjszakai változatban. A váltás így egyetlen attribútum átbillentése
- * a <html> elemen (lásd src/themeMode.ts), és nem igényel JS újrarenderelést —
- * ami azért létfontosságú, mert a képernyők modulszintű `StyleSheet.create`-et
- * használnak, ami importáláskor egyszer fut le.
- *
- * Ezt a React Native Web és az expo-linear-gradient is szándékosan támogatja:
- * mindkettőben van egy `isWebColor` ellenőrzés, ami a `var(`-ral KEZDŐDŐ
- * stringet érintetlenül továbbengedi a CSS-be. FONTOS: a `var(` csak a string
- * ELEJÉN állhat — `"rgba(var(--x), 0.5)"` már nem menne át.
- *
- * Natívon nincs CSS-változó, ezért ott a nappali paletta fix értékei érvényesek.
- */
 const mod = <T,>(webValue: T, nativeValue: T): T =>
   Platform.OS === "web" ? webValue : nativeValue;
 
@@ -31,22 +14,12 @@ export const theme = {
   surfaceGlassStrong: mod("var(--myra-glass-strong)", "rgba(255,255,255,0.15)"),
 
 
-  // FIGYELEM: a `primary` szándékosan NEM mód-függő. Három, egymásnak ellentmondó
-  // szerepben használjuk: gomb HÁTTERE (confirmGo), gomb KERETE (confirmCancel), és
-  // sötét SZÖVEG világos kártyán. Ha éjszakára világosra váltanánk, a rajta ülő
-  // fehér gombfelirat olvashatatlanná válna; ha sötétebbre, a szöveg tűnne el.
-  // A megoldás: az érték marad, a néhány szöveg-használat pedig textPrimary-t kap.
   primary: "#071b30",
   primaryDark: mod("var(--myra-primary-dark)", "#030c16"),
   primarySoft: mod("var(--myra-primary-soft)", "#0f2d4e"),
-  // A kiemelő színek szándékosan azonosak mindkét módban: a türkiz/kék paletta
-  // sötét háttéren is jól olvasható, a fölösleges eltérés csak kockázat lenne.
   secondary: "#7ea3ff",
   accent: "#4fd1c5",
   accentDeep: "#2baba0",
-  // FIGYELEM: az accentSoft 41 helyen VILÁGOS SZÖVEG sötét felületen (feliratok,
-  // ikonok, a welcome oldali e-mail cím) és csak 1 helyen háttér. Éjszakára sötétre
-  // váltani hiba volt: a szöveg eltűnt. Marad világos mindkét módban.
   accentSoft: "#e6fffa",
   info: "#4299e1",
   warm: "#ecc94b",
@@ -54,11 +27,9 @@ export const theme = {
   violet: "#9f7aea",
 
 
-  // Ez a három a világos kártyákon ülő szöveg, éjszaka ezek fordulnak meg.
   textPrimary: mod("var(--myra-text-primary)", "#0d1f35"),
   textSecondary: mod("var(--myra-text-secondary)", "#4a5d73"),
   textMuted: mod("var(--myra-text-muted)", "#718096"),
-  // A sötét háttéren ülő szöveg mindkét módban világos marad.
   textOnDark: "#f7fafc",
 
 
@@ -72,10 +43,6 @@ export const theme = {
   white: "#FFFFFF",
 };
 
-/**
- * A ContentBackground színátmenetének négy megállója. Éjszakai módban a negyedik
- * (eddig majdnem fehér) megálló is besötétedik — ez adja a látvány nagy részét.
- */
 export const backgroundGradient: [string, string, string, string] = [
   mod("var(--myra-grad-1)", "#04101D"),
   mod("var(--myra-grad-2)", "#08223B"),

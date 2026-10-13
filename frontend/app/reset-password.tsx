@@ -50,7 +50,6 @@ export default function ResetPasswordScreen() {
         cache: "no-store",
         credentials: "omit",
         headers: { "Content-Type": "application/json" },
-        // Az email kötelező: a backend a kódot ehhez a fiókhoz kötve ellenőrzi.
         body: JSON.stringify({ email: email.trim(), token, new_password: password }),
       });
 

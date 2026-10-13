@@ -1,15 +1,3 @@
-"""
-Regressziós tesztek a 2026-07-27-i átvizsgálás során javított hibákra.
-
-Fedett hibák:
-  H1   – a fióktörlés elbukott, ha a felhasználónak volt fórum-bejegyzése (GDPR Art. 17)
-  H2   – a jelszó-visszaállító kód nem volt fiókhoz kötve, és nem volt kísérletszámlálója
-  H2b  – a nyers, tárolt token-hash közvetlenül elfogadott tokenként működött
-  H3   – a jelszó-visszaállítás nem érvénytelenítette a meglévő munkameneteket
-
-Fontos: ezek a tesztek csak akkor érnek valamit, ha a conftest.py bekapcsolja a
-`PRAGMA foreign_keys=ON`-t — enélkül az SQLite csendben átengedi a H1-es hibát.
-"""
 import os
 import sys
 import uuid
@@ -57,16 +45,8 @@ async def _create_forum_post(client, headers) -> None:
     assert post.status_code == 200, f"Fórum-bejegyzés sikertelen: {post.text}"
 
 
-# ---------------------------------------------------------------- H1
-
-
 @pytest.mark.anyio
 async def test_delete_account_succeeds_with_forum_post(client):
-    """H1: fórum-bejegyzéssel rendelkező felhasználó fiókja is törölhető.
-
-    A javítás előtt ez PostgreSQL-en ForeignKeyViolation-nel bukott el (500), mert a
-    forum_posts.user_id FK-n nem volt ON DELETE, és egyik törlési útvonal sem takarította.
-    """
     email = _unique_email()
     token = await _register(client, email)
     headers = {"Authorization": f"Bearer {token}"}
@@ -84,7 +64,6 @@ async def test_delete_account_succeeds_with_forum_post(client):
 
 @pytest.mark.anyio
 async def test_data_delete_removes_forum_posts(client):
-    """H1: a /user/data-delete sem hagyhat árva fórum-bejegyzést (GDPR Art. 17)."""
     email = _unique_email()
     token = await _register(client, email)
     headers = {"Authorization": f"Bearer {token}"}
@@ -103,16 +82,7 @@ async def test_data_delete_removes_forum_posts(client):
         assert orphans == [], f"{len(orphans)} árva fórum-bejegyzés maradt a törlés után"
 
 
-# ---------------------------------------------------------------- H2 / H2b / H3
-
-
 async def _issue_reset_token(client, email: str) -> tuple[str, str]:
-    """Kiváltja a reset-kód generálását.
-
-    A nyílt kódot a levélküldő függvény kifigyelésével szerezzük meg (a hash-ből
-    visszafejteni 10^6 HMAC-számítás lenne — lassú és felesleges).
-    Visszaadja: (nyílt kód, adatbázisban tárolt hash).
-    """
     captured: dict[str, str] = {}
 
     def _capture(to_email: str, token: str):
@@ -127,18 +97,12 @@ async def _issue_reset_token(client, email: str) -> tuple[str, str]:
         stored = (await db.execute(select(User.reset_token).where(User.email == email))).scalar_one()
     assert stored, "Nem jött létre reset token"
     assert captured.get("code"), "A reset-kód nem került kiküldésre"
-    # Ellenőrizzük, hogy a tárolt érték tényleg a kód email-hez kötött hashe.
     assert _hash_reset_token(captured["code"], email) == stored
     return captured["code"], stored
 
 
 @pytest.mark.anyio
 async def test_reset_token_hash_is_not_accepted_as_token(client):
-    """H2b: a tárolt hash NEM használható közvetlenül tokenként.
-
-    A javítás előtt a lekérdezés `reset_token.in_([token_hash, token_str])` volt, így aki
-    el tudta olvasni az adatbázis-oszlopot, az a tárolt értéket beküldve átvette a fiókot.
-    """
     email = _unique_email()
     await _register(client, email)
     _code, stored_hash = await _issue_reset_token(client, email)
@@ -156,7 +120,6 @@ async def test_reset_token_hash_is_not_accepted_as_token(client):
 
 @pytest.mark.anyio
 async def test_reset_token_is_bound_to_the_requesting_account(client):
-    """H2: az egyik felhasználónak kiadott kód nem használható egy másik fiókra."""
     victim_email = _unique_email()
     attacker_email = _unique_email()
     await _register(client, victim_email)
@@ -164,7 +127,6 @@ async def test_reset_token_is_bound_to_the_requesting_account(client):
 
     victim_code, _victim_hash = await _issue_reset_token(client, victim_email)
 
-    # Ugyanaz a kód a támadó saját címére: nem szabad illeszkednie.
     await _issue_reset_token(client, attacker_email)
     resp = await client.post("/api/auth/reset-password", json={
         "email": attacker_email,
@@ -176,7 +138,6 @@ async def test_reset_token_is_bound_to_the_requesting_account(client):
 
 @pytest.mark.anyio
 async def test_reset_token_dies_after_five_wrong_attempts(client):
-    """H2: a token 5 hibás próbálkozás után érvénytelenné válik."""
     email = _unique_email()
     await _register(client, email)
     real_code, _stored_hash = await _issue_reset_token(client, email)
@@ -187,7 +148,6 @@ async def test_reset_token_dies_after_five_wrong_attempts(client):
             "email": email, "token": wrong_code, "new_password": NEW_PASSWORD,
         })
 
-    # A hatodik próbálkozás a HELYES kóddal már nem mehet át.
     resp = await client.post("/api/auth/reset-password", json={
         "email": email, "token": real_code, "new_password": NEW_PASSWORD,
     })
@@ -198,11 +158,6 @@ async def test_reset_token_dies_after_five_wrong_attempts(client):
 
 @pytest.mark.anyio
 async def test_password_reset_invalidates_existing_sessions(client):
-    """H3: a sikeres jelszó-visszaállítás után a régi access token érvénytelen.
-
-    A javítás előtt a reset nem növelte a token_version-t, így egy ellopott token
-    a jelszócsere után is 7 napig élt tovább.
-    """
     email = _unique_email()
     old_token = await _register(client, email)
     old_headers = {"Authorization": f"Bearer {old_token}"}
@@ -224,19 +179,14 @@ async def test_password_reset_invalidates_existing_sessions(client):
 
 @pytest.mark.anyio
 async def test_reset_password_requires_email(client):
-    """H2: az email mező kötelező — enélkül a kód bármelyik fiókra illeszkedhetne."""
     resp = await client.post("/api/auth/reset-password", json={
         "token": "123456", "new_password": NEW_PASSWORD,
     })
     assert resp.status_code == 422, f"Az email nélküli kérés átment: {resp.status_code}"
 
 
-# ---------------------------------------------------------------- M1
-
-
 @pytest.mark.anyio
 async def test_registration_never_returns_mfa_verified_token(client):
-    """M1: a regisztrációnál kiadott token sosem lehet MFA-verifikáltnak jelölve."""
     import jwt as _jwt
     from server import JWT_ALG, JWT_SECRET
 

@@ -1,4 +1,3 @@
-"""Mikro-célok, proaktív Myra check-in és szakemberi PDF-összefoglaló tesztjei."""
 import datetime
 import os
 import sys
@@ -106,7 +105,6 @@ async def test_goal_suggestions_focus_and_dedupe():
     assert len(suggestions) == 3
     assert suggestions[0]["scale"] == "h"
     assert suggestions[1]["scale"] == "h"
-    # Már elfogadott szöveget nem javasol újra
     existing = {s["text"] for s in suggestions}
     again = _goal_suggestions_for(NORMS_H_WORST, "seed-1", existing)
     assert not ({s["text"] for s in again} & existing)
@@ -130,7 +128,6 @@ async def test_goals_crud_flow():
     assert r.status_code == 200
     assert len(r.json()["created"]) == 2
 
-    # Max 3 aktív cél: 2 aktív + 2 új = túl sok
     r = client.post("/api/goals", headers=headers, json={"items": [
         {"text": "Extra cél egy", "scale": "a"},
         {"text": "Extra cél kettő", "scale": "a"},
@@ -317,19 +314,16 @@ async def test_report_pdf_generation():
     from pypdf import PdfReader
     import io as _io
     raw = "".join(page.extract_text() for page in PdfReader(_io.BytesIO(r.content)).pages)
-    text = " ".join(raw.split())  # sortörések normalizálása
-    # Helyes megnevezés: az ESV25 Inventory mér, a Myra Project keretében
+    text = " ".join(raw.split())
     assert "ESV25 Inventory" in text
     assert "MYRA PROJECT" in text
-    # A kiemelt figyelmeztetés minden érdemi tartalom ELŐTT áll
     assert "FIGYELMEZTETÉS" in text
     assert "orvostechnikai" in text
     assert text.index("FIGYELMEZTETÉS") < text.index("Mérési előzmények")
-    # POMP-transzparencia
     assert "Percent of Maximum Possible" in text
     assert "Módszertan" in text
     assert "STAI" in text and "PHQ-15" in text
-    assert "0,91" in text  # Cronbach-alfa értékek
+    assert "0,91" in text
     assert "elméleti alapon rögzítettek" in text
 
 
@@ -365,7 +359,6 @@ async def test_interpretation_endpoint_bands():
     assert r.status_code == 200
     data = r.json()
     by_key = {s["key"]: s for s in data["scales"]}
-    # NORMS_H_WORST: a=0.2 -> 1. sáv, p=0.9 -> 4. sáv, h=0.8 -> 3. sáv, c=0.1 -> 1. sáv
     assert by_key["a"]["band"] == 1
     assert by_key["p"]["band"] == 4
     assert by_key["p"]["band_label"] == "erős érzelemszabályozás"
@@ -390,7 +383,6 @@ async def test_interpretation_requires_measurement():
 @pytest.mark.anyio
 async def test_report_pdf_contains_interpretation():
     await _seed_user(85)
-    # Második mérés, hogy a változás-szekció is bekerüljön
     async with TestingSessionLocal() as db:
         db.add(QuizSubmission(
             id="goal-session-85-b", user_id=85,

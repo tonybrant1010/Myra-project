@@ -1,11 +1,3 @@
-"""Embedding-modell erőforrás- és sebességmérő.
-
-Futtatás a szerveren (a backend konténerben, az app-ot nem érinti):
-    docker exec -it myra-backend python scripts/bench_embed.py
-    docker exec -it myra-backend python scripts/bench_embed.py sentence-transformers/paraphrase-multilingual-mpnet-base-v2
-
-Figyelem: új modellnév megadásakor a modell letöltődik a konténerbe (mpnet ~1 GB).
-"""
 import os
 import resource
 import sys

@@ -27,8 +27,6 @@ export default function TopBar({ title, showBack, backPath, rightLabel, rightAct
   const [menuOpen, setMenuOpen] = useState(false);
   const [forumUnread, setForumUnread] = useState(false);
 
-  // A TopBar minden kepernyon ott van, tehat minden navigalaskor ujra lefut.
-  // Ez eleg frissesseg a jelzeshez, es nem kell hozza idozito.
   const checkForum = useCallback(async () => {
     if (!token) return;
     try {
@@ -39,7 +37,6 @@ export default function TopBar({ title, showBack, backPath, rightLabel, rightAct
       const seen = await getForumSeenAt();
       setForumUnread(latest > seen);
     } catch {
-      // A jelzes nem kritikus: halozati hiba eseten egyszeruen nem mutatunk pottyot.
     }
   }, [token]);
 

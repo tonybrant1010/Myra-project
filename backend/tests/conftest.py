@@ -18,9 +18,6 @@ engine = create_async_engine(TEST_DATABASE_URL, echo=False)
 
 @event.listens_for(engine.sync_engine, "connect")
 def _enforce_sqlite_foreign_keys(dbapi_connection, _connection_record):
-    """SQLite alapból NEM kényszeríti ki az idegen kulcsokat, az éles PostgreSQL viszont igen.
-    Enélkül a tesztek nem veszik észre a hiányzó ON DELETE / hiányzó gyerektábla-törlés hibákat
-    — pontosan ez engedte át a fórum-bejegyzéssel rendelkező felhasználók törlésének hibáját."""
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.close()
@@ -46,7 +43,6 @@ def anyio_backend():
 
 @pytest.fixture(autouse=True)
 def configure_rate_limits(request):
-    """Automatikusan beállítja a rate limit környezeti változót a tesztfájl alapján."""
     if "test_security.py" in request.node.fspath.strpath:
         os.environ.pop("DISABLE_RATE_LIMITS", None)
     else:
@@ -67,7 +63,6 @@ async def init_db():
 
 @pytest.fixture
 async def client(init_db):
-    """Async HTTP kliens a FastAPI app teszteléséhez."""
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as ac:
         yield ac

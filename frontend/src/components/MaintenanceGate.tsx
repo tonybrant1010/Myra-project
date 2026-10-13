@@ -10,9 +10,6 @@ const DEFAULT_MESSAGE =
   "A Myra jelenleg tervezett karbantartás miatt nem érhető el. Kérjük, próbáld meg később.";
 const POLL_MS = 60000;
 
-// Karbantartás alatt a nem-admin felhasználók csak ezt a tájékoztató oldalt látják.
-// Az állapotot a nyilvános /api/config adja, és bármelyik 503-as válasz azonnal bekapcsolja.
-// A bejelentkezés és a jelszó-visszaállítás elérhető marad, hogy az admin be tudjon lépni.
 export default function MaintenanceGate({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   const pathname = usePathname() || "/";
@@ -41,7 +38,6 @@ export default function MaintenanceGate({ children }: { children: React.ReactNod
     };
   }, [check]);
 
-  // Ha a karbantartás véget ér, újratöltjük az oldalt, hogy minden adat frissen betöltődjön.
   useEffect(() => {
     if (wasOn.current && !on && Platform.OS === "web" && typeof window !== "undefined") {
       window.location.reload();

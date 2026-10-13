@@ -1,19 +1,4 @@
 #!/usr/bin/env python3
-"""Myra forgalmi statisztika osszesito.
-
-A Caddy hozzaferesi naplojat (JSON sorok) dolgozza fel NOVEKVO modon: fajlonkent
-eltarolja a mar feldolgozott byte-offszetet, ezert percenkent lefutva is olcso.
-
-Kimeneet: backend/data/statisztika.json  (ezt szolgalja ki a backend /api/admin/stats)
-
-Ket kategoria:
-  - frontend: minden nem /api/ alatti keres (statikus fajlok)
-  - backend:  /api/ alatti keres
-Es harom kimenetel:
-  - sikeres     : 2xx/3xx
-  - elutasitott : 4xx (beleertve 401/403/429)
-  - szerverhIBA : 5xx
-"""
 import json
 import os
 import re
@@ -25,7 +10,7 @@ from pathlib import Path
 
 LOG_DIR = Path("/var/log/caddy")
 NAPLO_MINTA = re.compile(r"^myra-access.*\.log$")
-GYOKER = Path(__file__).resolve().parent.parent          # ~/myra
+GYOKER = Path(__file__).resolve().parent.parent
 ADAT = GYOKER / "backend" / "data"
 ALLAPOT = ADAT / ".statisztika-allapot.json"
 KIMENET = ADAT / "statisztika.json"
@@ -34,7 +19,6 @@ TOP_DB = 10
 
 
 def _nap(ts: str) -> str:
-    """Caddy idobelyeg (ISO 8601, UTC) -> napi kulcs HHHH-NN-HH."""
     try:
         return datetime.fromisoformat(ts.replace("Z", "+00:00")).strftime("%Y-%m-%d")
     except Exception:
@@ -54,8 +38,8 @@ def _uj_nap() -> dict:
         "frontend_total": 0, "frontend_sikeres": 0, "frontend_elutasitott": 0,
         "api_total": 0, "api_sikeres": 0, "api_elutasitott": 0,
         "kodok": {},
-        "ipk": {},       # elutasitott keresek IP-nkent (csak a toplistahoz)
-        "utak": {},      # keresek utvonalankent (csak a toplistahoz)
+        "ipk": {},
+        "utak": {},
     }
 
 
@@ -76,7 +60,6 @@ def _feldolgoz() -> dict:
         return {"hiba": f"nincs naplokonyvtar: {LOG_DIR}"}
 
     elerheto = sorted(p for p in LOG_DIR.iterdir() if NAPLO_MINTA.match(p.name))
-    # A regi fajlok bejegyzeset kidobjuk, hogy az allapot ne hizjon.
     for nev in list(fajlok):
         if nev not in {p.name for p in elerheto}:
             fajlok.pop(nev, None)
@@ -88,7 +71,6 @@ def _feldolgoz() -> dict:
         except OSError:
             continue
         offszet = int(fajlok.get(ut.name, 0))
-        # Forgatas/uj fajl: ha kisebb lett, elorol kezdjuk.
         if offszet > meret:
             offszet = 0
         if offszet == meret:
@@ -98,7 +80,7 @@ def _feldolgoz() -> dict:
                 fh.seek(offszet)
                 for sor in fh:
                     if not sor.endswith("\n"):
-                        break  # felig irt sor: legkozelebb folytatjuk
+                        break
                     offszet += len(sor.encode("utf-8", errors="replace"))
                     feldolgozott += 1
                     try:
@@ -167,8 +149,6 @@ def _top(d: dict, darab: int = TOP_DB) -> list:
 
 
 def _fail2ban() -> dict:
-    """A bortonok es a jelenleg tiltott IP-k szama. Root nelkul csak olvashato
-    naplobol/parancsbol; ha nem elerheto, ures marad (nem hiba)."""
     ki = {}
     try:
         lista = subprocess.run(["fail2ban-client", "status"], capture_output=True,

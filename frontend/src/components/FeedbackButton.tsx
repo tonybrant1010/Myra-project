@@ -16,13 +16,10 @@ import { theme } from "@/src/theme";
 const FEEDBACK_MAX_CHARS = 2000;
 
 type Props = {
-  /** Honnan érkezett a visszajelzés — ez kerül a fejlesztőnek küldött levélbe. */
   context: "chat" | "live";
   label?: string;
 };
 
-/** Kis, feltűnésmentes visszajelzés gomb + űrlap. A felhasználók az e-mailt és a
- *  fórumot elfelejtik; ez ott van, ahol épp használják a rendszert. */
 export default function FeedbackButton({ context, label = "Visszajelzés" }: Props) {
   const { token } = useAuth();
   const [open, setOpen] = useState(false);

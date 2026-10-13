@@ -1,33 +1,4 @@
 #!/usr/bin/env python3
-"""Myra backend deploy fusttesztel es automatikus visszaallassal.
-
-A `docker compose up -d --build backend` helyett ezt futtasd. Amit csinal:
-
-  1. elmenti a jelenlegi image-et `myra-backend:rollback` neven,
-  2. ujraepiti es elinditja a backendet,
-  3. megvarja, amig a konteneri healthcheck "healthy" lesz (a RAG warmup ~7 perc),
-  4. vegigpingeli a fontos vegpontokat a konteneren BELULROL,
-  5. ha barmelyik nem azt adja, amit kell: VISSZAALL a mentett image-re,
-  6. mindket esetben kuld egy emailt.
-
-A fuggetlen otlet: hitelesites nelkul is meg lehet allapitani, hogy egy vegpont
-LETEZIK-e. Ha letezik es vedett, 401-et ad. Ha nincs meg, 404-et. Pontosan ez a
-kulonbseg fogta volna meg a 2026-08-14-i esetet, amikor a /api/forum/latest
-egy elavult server.py-jal eltunt a rendszerbol.
-
-FONTOS a "unhealthy" allapotrol (2026-08-16-i javitas):
-A server.py lifespan-jeben a `await _warmup_rag_runtime()` a `yield` ELOTT fut,
-ezert az uvicorn ~7 percig egyaltalan nem fogad kapcsolatot. A compose
-healthcheckje kozben 30 mp-enkent probalkozik, 3 sikertelen probalkozas utan
-pedig a Docker "unhealthy"-re allitja a konteneri allapotat -- vagyis kb. 90
-masodperccel minden egyes indulas utan, teljesen egeszseges build eseten is.
-Az "unhealthy" a Dockerben NEM vegallapot: a probak tovabb futnak, es az elso
-sikeres probanal visszavalt "healthy"-re. Ezert itt az "unhealthy" varakozasra
-ok, nem visszaallasra. Csak ezek jelentenek valodi bukast: a konteneri leall,
-ujraindulasi hurokba kerul, vagy lejar az idokeret.
-
-Fuggosegek: csak a Python standard konyvtar. A titkokat a ~/myra/.env-bol olvassa.
-"""
 
 import os
 import smtplib
@@ -43,28 +14,11 @@ KONTENER = "myra-backend"
 IMAGE = "myra-backend"
 ROLLBACK_TAG = "myra-backend:rollback"
 
-# A warmup hossza a VM memorianyomasatol fugg es eleg szelesen ingadozik:
-# 439 mp (2026-08-13) es 596.6 mp (2026-08-16) is volt mar, az utobbi eseten a
-# konteneri 720 mp-nel lett healthy. A 900 mp-es regi keret ezt meg elbirta, de
-# csak 180 mp tartalekkal -- egy lassabb induals mar hamis visszaallast okozott
-# volna. Az idotullepes itt vegso vedohalo: a valodi bukast (leallas,
-# ujrainditasi hurok) a ciklus kulon, azonnal eszreveszi, ezert a bo keret nem
-# keslelteti a hibafelismerest, csak a ritka "elindult, de sosem lesz kesz"
-# esetben var tovabb.
 HEALTH_TIMEOUT_S = int(os.environ.get("MYRA_HEALTH_TIMEOUT_S", "1800"))
 HEALTH_POLL_S = 10
-# Ennyi masodpercenkent irunk ki egy "meg megy" sort, hogy ne tunjon lefagyottnak.
 HALADAS_S = 60
-# A server.py "RAG warmup kesz: ..." vagy "RAG warmup figyelmeztetes: ..." sort ir
-# ki, amikor a warmup lefutott. Ez a fajl szandekosan ekezet nelkuli, a logban
-# viszont ekezetes a szoveg -- ezert csak az ekezet elotti reszre illesztunk.
 WARMUP_JELEK = ("RAG warmup k", "RAG warmup figyelmeztet")
 
-# (metodus, utvonal, vart statusz)
-#   200 = nyilvanos
-#   401 = letezik, de hitelesitest kivan   <- ez bizonyitja, hogy a route megvan
-#   405 = letezik, de mas metodussal
-#   404 = NINCS MEG a route                <- ez a regresszio jele
 ELLENORZESEK = [
     ("GET", "/api/config", 200),
     ("GET", "/api/auth/me", 401),
@@ -77,7 +31,6 @@ ELLENORZESEK = [
     ("GET", "/api/chat/send", 405),
     ("GET", "/api/auth/login", 405),
     ("GET", "/api/tts/speak", 405),
-    # Negativ kontroll: ha EZ nem 404, akkor a teszt maga romlott el.
     ("GET", "/api/ez-a-vegpont-soha-nem-letezett", 404),
 ]
 
@@ -172,7 +125,6 @@ def kimenet(parancs):
 
 
 def kontener_allapot():
-    """(futasi allapot, health allapot, ujrainditasok szama) egy hivasbol."""
     nyers = kimenet(["docker", "inspect", "--format",
                      "{{.State.Status}}|{{.State.Health.Status}}|{{.RestartCount}}",
                      KONTENER])
@@ -188,12 +140,6 @@ def warmup_lefutott():
 
 
 def varj_healthre():
-    """Megvarja, amig a konteneri healthy lesz.
-
-    Az "unhealthy" itt SZANDEKOSAN nem bukas: a warmup alatt minden egeszseges
-    indulas atmegy rajta (lasd a modul tetejen levo magyarazatot). Valodi bukas
-    csak a leallas, az ujrainditasi hurok es az idotullepes.
-    """
     kezdet = time.time()
     hatarido = kezdet + HEALTH_TIMEOUT_S
     utolso_allapot = ""
@@ -221,7 +167,6 @@ def varj_healthre():
             print("[deploy] %4d mp | a konteneri healthy." % eltelt)
             return True
 
-        # Ezek valodi bukasok.
         if futas in ("exited", "dead"):
             print("[deploy] A konteneri leallt (%s), nincs ertelme tovabb varni." % futas)
             return False
@@ -268,7 +213,6 @@ def visszaallas():
 def main():
     print("[deploy] Indul: %s" % most())
 
-    # 1. Mentes. Ha nincs meg image (elso futas), ezt atugorjuk.
     van_rollback = bool(kimenet(["docker", "images", "-q", IMAGE]))
     if van_rollback:
         fut(["docker", "tag", IMAGE + ":latest", ROLLBACK_TAG])
@@ -276,7 +220,6 @@ def main():
     else:
         print("[deploy] Nincs meglevo image, visszaallas nem lesz lehetseges.")
 
-    # 2. Epites es inditas.
     if fut(["docker", "compose", "build", "backend"]).returncode != 0:
         email_kuld("[Myra] Deploy MEGHIUSULT - build hiba",
                    "A `docker compose build backend` hibaval allt le.\n"
@@ -286,7 +229,6 @@ def main():
 
     fut(["docker", "compose", "up", "-d", "backend"])
 
-    # 3. Varakozas.
     print("[deploy] Varakozas a healthcheckre (a RAG warmup ~7 perc)...")
     if not varj_healthre():
         if van_rollback:
@@ -300,7 +242,6 @@ def main():
                        most()))
         return 1
 
-    # 4. Fustteszt.
     print("[deploy] Fustteszt indul.")
     rendben, naplo = fustteszt()
 

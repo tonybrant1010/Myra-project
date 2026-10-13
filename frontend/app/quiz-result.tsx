@@ -66,7 +66,6 @@ export default function QuizResultScreen() {
         const data = await r.json();
         setInterpretation(data || null);
       } catch {
-        // az értelmezés opcionális kiegészítés — hiba esetén nem jelenik meg
       }
     })();
   }, [token]);
@@ -81,7 +80,6 @@ export default function QuizResultScreen() {
         setFocusLabel(data.focus_scale_label || "");
         setGoalSlots(Math.max(0, (data.max_active || 0) - (data.active_count || 0)));
       } catch {
-        // a céljavaslat opcionális — hiba esetén egyszerűen nem jelenik meg
       }
     })();
   }, [token]);
@@ -112,7 +110,6 @@ export default function QuizResultScreen() {
         setGoalsSavedCount((data.created || []).length);
       }
     } catch {
-      // csendes hiba — a felhasználó később a főoldalról is próbálkozhat
     } finally {
       setGoalsSaving(false);
     }
