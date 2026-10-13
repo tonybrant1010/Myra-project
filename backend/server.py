@@ -733,7 +733,7 @@ def _totp_generate_secret(length: int = 20) -> str:
 def _totp_hotp(secret_b32: str, counter: int) -> str:
     padded = secret_b32.upper() + "=" * (-len(secret_b32) % 8)
     key = base64.b32decode(padded)
-    digest = _hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+    digest = _hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()  # nosec B303
     offset = digest[-1] & 0x0F
     code_int = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
     return str(code_int % (10 ** TOTP_DIGITS)).zfill(TOTP_DIGITS)
@@ -1538,7 +1538,7 @@ async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> 
                 WHERE vec.id IS NOT NULL OR txt.id IS NOT NULL
                 ORDER BY rrf DESC, kc.id ASC
                 LIMIT :pool
-            """)
+            """)  # nosec B608 - EMBED_COL egesz szambol kepzett oszlopnev, a felhasznaloi adat parameterkent megy
             res = await db.execute(stmt, {
                 "query_vector": query_vector_str,
                 "ts_query": _build_ts_query(expanded_query),
@@ -1621,7 +1621,7 @@ async def search_pdf_knowledge(db: AsyncSession, query: str, limit: int = 5) -> 
         WHERE {" OR ".join(where_parts)}
         ORDER BY ({" + ".join(score_parts)}) DESC, id ASC
         LIMIT :limit
-    """)
+    """)  # nosec B608
     res = await db.execute(stmt, params)
     rows = res.mappings().all()
     return [
@@ -1948,10 +1948,10 @@ async def _ensure_user_fk_cascade(conn) -> None:
             if confdeltype == "c":
                 continue
             await conn.execute(sql_text(
-                f'ALTER TABLE {table_name} DROP CONSTRAINT "{conname}"'
+                f'ALTER TABLE {table_name} DROP CONSTRAINT "{conname}"'  # nosec B608
             ))
             await conn.execute(sql_text(
-                f"ALTER TABLE {table_name} "
+                f"ALTER TABLE {table_name} "  # nosec B608
                 f"ADD CONSTRAINT {table_name}_{column_name}_fkey "
                 f"FOREIGN KEY ({column_name}) REFERENCES {ref_table}(id) ON DELETE {action}"
             ))
@@ -1970,7 +1970,7 @@ async def _reset_postgres_sequences(conn) -> None:
                 COALESCE((SELECT MAX({column_name}) FROM {table_name}), 1),
                 (SELECT COUNT(*) > 0 FROM {table_name})
             )
-        """))
+        """))  # nosec B608
 
 
 async def get_db():
@@ -4204,7 +4204,7 @@ def _sync_embed_batch(texts: list[str]) -> list[list[float]]:
 async def _store_message_embedding(db: AsyncSession, message_id: str, user_id: int, emb: list[float]) -> None:
     if DB_DIALECT == "sqlite":
         return
-    stmt = f"INSERT INTO chat_message_embeddings (message_id, user_id, {EMBED_COL}) VALUES (:mid, :uid, CAST(:vec AS vector)) ON CONFLICT (message_id) DO UPDATE SET {EMBED_COL} = EXCLUDED.{EMBED_COL}"
+    stmt = f"INSERT INTO chat_message_embeddings (message_id, user_id, {EMBED_COL}) VALUES (:mid, :uid, CAST(:vec AS vector)) ON CONFLICT (message_id) DO UPDATE SET {EMBED_COL} = EXCLUDED.{EMBED_COL}"  # nosec B608
     await db.execute(sql_text(stmt), {"mid": message_id, "uid": user_id, "vec": _vec_literal(emb)})
 
 
@@ -4243,7 +4243,7 @@ async def _backfill_message_embeddings(user_id: Optional[int] = None) -> None:
                           {user_filter}
                         ORDER BY m.created_at ASC
                         LIMIT :lim
-                    """), params)
+                    """), params)  # nosec B608 - csak rogzitett szovegdarabok, az ertekek parameterek
                     rows = res.mappings().all()
                     if rows:
                         vectors = await asyncio.to_thread(
@@ -4369,7 +4369,7 @@ async def _recall_past_exchanges(
                        COALESCE((SELECT MIN(e.{EMBED_COL} <=> c.{EMBED_COL})
                                    FROM chat_message_embeddings c
                                   WHERE c.user_id = :uid AND c.message_id = ANY(:ctx_ids)
-                                    AND c.{EMBED_COL} IS NOT NULL), 2.0))"""
+                                    AND c.{EMBED_COL} IS NOT NULL), 2.0))"""  # nosec B608 - EMBED_COL egesz szambol kepzett oszlopnev
         else:
             dist_sql = f"(e.{EMBED_COL} <=> CAST(:qv AS vector))"
         stmt = sql_text(f"""
@@ -4384,7 +4384,7 @@ async def _recall_past_exchanges(
               {time_sql}
             ORDER BY dist ASC
             LIMIT :pool
-        """)
+        """)  # nosec B608 - EMBED_COL egesz szambol kepzett oszlopnev, a tobbi parameter
         res = await db.execute(stmt, {
             "uid": user_id, "sid": session_id, "qv": _vec_literal(query_emb), "pool": RECALL_CANDIDATES,
             **({"ctx_ids": ctx_ids} if ctx_ids else {}),
@@ -4407,7 +4407,7 @@ async def _recall_past_exchanges(
             ORDER BY ts_rank_cd(to_tsvector('hungarian', u.text), to_tsquery('hungarian', :ts_query)) DESC,
                      u.created_at DESC
             LIMIT :pool
-        """)
+        """)  # nosec B608 - csak rogzitett szovegdarab kerul bele, az ertekek parameterek
         res = await db.execute(stmt, {
             "uid": user_id, "sid": session_id, "ts_query": ts_query,
             "min_len": RECALL_MIN_MESSAGE_CHARS, "pool": max(5, RECALL_CANDIDATES // 2),
@@ -4467,7 +4467,7 @@ async def _recall_past_exchanges(
               AND length(u.text) >= :min_len
             ORDER BY u.created_at ASC
             LIMIT :n
-        """)
+        """)  # nosec B608 - csak rogzitett szovegdarab kerul bele, az ertekek parameterek
         res = await db.execute(stmt, {
             "uid": user_id, "tsid": top.get("session_id"), "tts": top.get("created_at"),
             "min_len": RECALL_MIN_MESSAGE_CHARS, "n": RECALL_EXPLICIT_FOLLOWUPS,
