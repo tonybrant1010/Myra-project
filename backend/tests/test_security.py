@@ -14,11 +14,9 @@ from server import (
     _hash_reset_token,
     _admin_action_attempts,
     _check_and_record_admin_action_limit,
-    _check_and_record_live_token_limit,
     _check_and_record_mfa_issue_limit,
     _cleanup_piper_cache,
     _diagnostic_file_status,
-    _live_token_attempts,
     _mfa_issue_attempts,
     _prune_rate_limit_map,
     _safe_upload_filename,
@@ -136,22 +134,6 @@ def test_admin_action_limit_blocks_repeated_emergency_actions():
 
     with pytest.raises(HTTPException) as exc_info:
         _check_and_record_admin_action_limit(mock_request, 1, "down")
-
-    assert exc_info.value.status_code == 429
-
-
-def test_live_token_limit_blocks_repeated_starts():
-    _live_token_attempts.clear()
-    mock_request = Mock(spec=Request)
-    mock_request.headers = {}
-    mock_request.client = Mock()
-    mock_request.client.host = "127.0.0.1"
-
-    for _ in range(6):
-        _check_and_record_live_token_limit(mock_request, 1)
-
-    with pytest.raises(HTTPException) as exc_info:
-        _check_and_record_live_token_limit(mock_request, 1)
 
     assert exc_info.value.status_code == 429
 
@@ -701,7 +683,7 @@ async def test_call_llm_gemini_error_masking(mock_post):
     assert "quota" not in exc_info.value.detail
     assert "Gemini API hiba" in exc_info.value.detail
 
-def test_verify_vercel_proxy_middleware():
+def test_verify_proxy_secret_middleware():
     from fastapi.testclient import TestClient
     import server
     
