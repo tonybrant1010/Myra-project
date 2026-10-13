@@ -1,6 +1,6 @@
 export const termsText = `FELHASZNÁLÁSI FELTÉTELEK
 
-Hatályos: 2026. október 4.
+Hatályos: 2026. október 13.
 
 1. A szolgáltatás jellege
 A Myra egy magánszemély által, nem kereskedelmi célból fejlesztett, mérésvezérelt, reflektív mentálhigiénés önismereti alkalmazás. A rendszer az ESV-modell (Érzelem-Stressz-Viselkedés) alapján működik: önkitöltős állapotfelmérést, belső állapotkódot és mesterséges intelligenciával támogatott beszélgetési keretet biztosít.

@@ -1,6 +1,6 @@
 export const gdprText = `ADATKEZELÉSI TÁJÉKOZTATÓ
 
-Hatályos: 2026. október 4.
+Hatályos: 2026. október 13.
 
 1. Az adatkezelő
 Név: Ódor Antal
@@ -57,11 +57,11 @@ Biztonsági, visszaélés-megelőzési és működésfenntartási célú technik
 6. Adattárolás helye és adatbiztonság
 A felhasználói adatbázis (Supabase) az Európai Unió területén (Írország, eu-west-1 régió) működő adatbázis-szolgáltatáson keresztül, titkosítva kerül tárolásra.
 
-Az alkalmazás szerveroldali része (backend) az adatkezelő által üzemeltetett, Magyarországon elhelyezett szerveren fut. A szerver kívülről közvetlenül nem érhető el: a forgalom a Cloudflare titkosított átjáróján (Cloudflare Tunnel) keresztül érkezik hozzá, és csak az alkalmazás saját, védett közvetítő rétegétől fogad kéréseket. Az adatbázishoz kizárólag ez a szerver kapcsolódhat.
+Az alkalmazás szerveroldali része (backend) az adatkezelő által üzemeltetett, Magyarországon elhelyezett szerveren fut. A szerver kívülről közvetlenül nem érhető el: a titkosított (HTTPS) forgalmat a szerveren futó saját fordított proxy fogadja, amely saját, automatikusan megújított tanúsítvánnyal dolgozik, és az alkalmazásszerver kizárólag ettől a proxytól fogad kéréseket. Az adatbázishoz kizárólag ez a szerver kapcsolódhat.
 
-A webes felület és a kéréseket továbbító közvetítő réteg a Vercel szolgáltatásán fut, amely az Egyesült Államokban is működhet; ezen semmilyen állandó adat (adatbázis) nem tárolódik, kizárólag a kérések átmeneti feldolgozása történik a memóriában (in-memory). A Cloudflare a forgalmat titkosított formában, átmenetileg kezeli, adatot tartósan nem tárol.
+A webes felület ugyanerről a szerverről, ugyanazon a domainen érhető el (azonos eredet), így a felület és a kéréseket kiszolgáló réteg között nincs külső szolgáltató. A rendszer külső tartalomkiszolgálót (CDN-t), harmadik féltől származó szkriptet, valamint hirdetési vagy analitikai követőkódot nem használ.
 
-Biztonsági mentések. Az adatkezelő a felhasználói adatbázisról óránként biztonsági mentést készít, amelyet a saját, Magyarországon elhelyezett szerverén, korlátozott hozzáféréssel tárol. Az óránkénti mentések 48 óráig, a napi mentések 30 napig maradnak meg, ezt követően automatikusan törlődnek.
+Biztonsági mentések. Az adatkezelő a felhasználói adatbázisról óránként biztonsági mentést készít, amelyet a saját, Magyarországon elhelyezett két szerverén, korlátozott hozzáféréssel tárol; a második példány a két gép közötti titkosított kapcsolaton keresztül jut el a másik gépre. A megőrzött mentések száma korlátozott: óránkénti hat és napi hét példány marad meg, a régebbiek automatikusan törlődnek.
 
 A rendszer kialakítása törekszik arra, hogy a backend és az adatbázis elkülönítetten működjön, és a kliensoldali felület ne tartalmazzon AI API-kulcsot vagy közvetlen adatbázis-hozzáférést. A jelszavak egyirányú hash formában kerülnek tárolásra. Az adatkezelő törekszik a hozzáférések korlátozására, az érzékeny adatok védelmére, a technikai naplók és admin funkciók ésszerű korlátozására, valamint arra, hogy az adatokhoz csak indokolt esetben legyen hozzáférés.
 
@@ -72,25 +72,28 @@ A beszélgetés TXT exportja a felhasználó kifejezett műveletére, a böngés
 7. Külső szolgáltatók és adattovábbítás
 A chatbot és az élő hangalapú asszisztens működéséhez a felhasználó üzeneteinek tartalma és bemeneti hanganyaga külső mesterséges intelligencia szolgáltatókhoz (különösen: Google Gemini, OpenAI, Anthropic) továbbítódik a válaszok és hanganyagok generálása céljából.
 
+A rendszer elsődlegesen az adatkezelő saját szerverén futó nyelvi modellt használja; a beszélgetés tartalma külső szolgáltatóhoz csak akkor kerül továbbításra, ha a helyi modell átmenetileg nem elérhető.
+
 A chatbot-válasz generálásakor az aktuális üzenet mellett a beszélgetés korábbi, az alkalmazás működéséhez szükséges részletei, a felhasználó aktuális állapotkódjához kapcsolódó információk, valamint a PDF alapú tudásanyagból visszakeresett releváns részletek is bekerülhetnek a mesterséges intelligencia szolgáltatónak küldött kontextusba. Ez a beszélgetés folytonosságát és a válasz szakmai illeszkedését szolgálja.
 
 Ez az adattovábbítás kizárólag a szolgáltatás működéséhez szükséges mértékben történik. A továbbítás az adott szolgáltatók hivatalos fejlesztői (Enterprise/API) felületein keresztül zajlik, amelyek szerződéses feltételei kifejezetten garantálják, hogy a Myra által beküldött adatokat és üzeneteket a szolgáltatók bizalmasan kezelik, és nem használják fel saját modelljeik tanítására vagy fejlesztésére.
 
-A szolgáltatás működéséhez igényve vett külső szolgáltatók lehetnek különösen:
-- tárhely- és frontend-szolgáltató (Vercel),
-- hálózati és biztonsági szolgáltató, titkosított átjáró (Cloudflare),
-- adatbázis-szolgáltató (Supabase),
-- mesterséges intelligencia szolgáltatók (Google, OpenAI, Anthropic),
+A szolgáltatás működéséhez igénybe vett külső szolgáltatók lehetnek különösen:
+- adatbázis-szolgáltató (Supabase, Európai Unió),
+- mesterséges intelligencia szolgáltatók (Google, OpenAI, Anthropic) – kizárólag akkor, ha a helyi modell nem elérhető,
+- e-mail-kézbesítési szolgáltató (a belépési kódok és a rendszerértesítések továbbításához),
+- domain- és névszerver-szolgáltató (magyar szolgáltató; a névfeloldás technikai adatai),
 - biztonsági, naplózási vagy üzemeltetési szolgáltatások.
+A tárhelyet és a webes felületet nem külső szolgáltató, hanem az adatkezelő saját, Magyarországon elhelyezett szervere biztosítja.
 
-Harmadik országba történő adattovábbítás. A felsorolt szolgáltatók egy része az Európai Gazdasági Térségen kívül, elsősorban az Amerikai Egyesült Államokban is végezhet adatfeldolgozást. Az ilyen továbbítás jogalapja az Európai Bizottság 2023. július 10-i, az EU–USA adatvédelmi keretre (Data Privacy Framework) vonatkozó megfelelőségi határozata azon szolgáltatók esetében, amelyek a keret tanúsított résztvevői, egyéb esetben az Európai Bizottság által elfogadott általános szerződési feltételek (GDPR 46. cikk (2) bekezdés c) pont). Az adatkezelő a szolgáltatóválasztásnál törekszik arra, hogy a tartós adattárolás (felhasználói adatbázis) az Európai Unión belül maradjon; a harmadik országba irányuló továbbítás a válaszgeneráláshoz szükséges átmeneti feldolgozásra korlátozódik.
+Harmadik országba történő adattovábbítás. A tárhely és a felhasználói adatbázis az Európai Unión belül, illetve az adatkezelő magyarországi szerverén marad. A felsorolt szolgáltatók egy része (különösen a mesterséges intelligencia szolgáltatók és az e-mail-kézbesítést végző szolgáltató) az Európai Gazdasági Térségen kívül, elsősorban az Amerikai Egyesült Államokban is végezhet adatfeldolgozást. Az ilyen továbbítás jogalapja az Európai Bizottság 2023. július 10-i, az EU–USA adatvédelmi keretre (Data Privacy Framework) vonatkozó megfelelőségi határozata azon szolgáltatók esetében, amelyek a keret tanúsított résztvevői, egyéb esetben az Európai Bizottság által elfogadott általános szerződési feltételek (GDPR 46. cikk (2) bekezdés c) pont). Az adatkezelő a szolgáltatóválasztásnál törekszik arra, hogy a tartós adattárolás (felhasználói adatbázis) az Európai Unión belül maradjon; a harmadik országba irányuló továbbítás a válaszgeneráláshoz szükséges átmeneti feldolgozásra korlátozódik.
 
 8. Adatmegőrzési idő
 Az adatok a felhasználói fiók aktív fennállásáig kerülnek megőrzésre. Mivel a Myra egy nonprofit kutatási és önismereti projekt, jogszabály nem írja elő az adatok kötelező megőrzési idejét.
 
 A "Myra memóriája" kivonat a funkció kikapcsolásakor azonnal és véglegesen törlődik, a fiók megszüntetése nélkül is. A kivonat mindig teljes egészében újraképződik a forrásadatokból, nem őrzi meg a korábbi változatait.
 
-A felhasználó bármikor kezdeményezheti fiókja és kapcsolódó adatainak azonnali és végleges törlését a Beállítások menüben a "Fiók törlése" gombbal, vagy e-mailben: odor-antal@research.hu. A törlés során a felhasználói profil, a mérési eredmények (kérdőívek), a vállalt mikro-célok, a "Myra memóriája" kivonat, a megbízható eszközök és az összes chat beszélgetés előzménye véglegesen törlődik a futó adatbázisból. A törölt adatok a biztonsági mentésekből a mentések megőrzési idejének lejártával, legkésőbb 30 napon belül kerülnek ki; addig a mentésekhez kizárólag adatvesztés esetén, a rendszer helyreállítása céljából nyúl az adatkezelő. A hozzájárulás visszavonása a fiók és az adatok törlésének kérésével történhet. A hozzájárulás visszavonása nem érinti a visszavonás előtti adatkezelés jogszerűségét.
+A felhasználó bármikor kezdeményezheti fiókja és kapcsolódó adatainak azonnali és végleges törlését a Beállítások menüben a "Fiók törlése" gombbal, vagy e-mailben: odor-antal@research.hu. A törlés során a felhasználói profil, a mérési eredmények (kérdőívek), a vállalt mikro-célok, a "Myra memóriája" kivonat, a megbízható eszközök és az összes chat beszélgetés előzménye véglegesen törlődik a futó adatbázisból. A törölt adatok a biztonsági mentésekből a mentések megőrzési idejének lejártával (napi hét, óránkénti hat példány marad meg, így legfeljebb néhány napon belül) kerülnek ki; addig a mentésekhez kizárólag adatvesztés esetén, a rendszer helyreállítása céljából nyúl az adatkezelő. A hozzájárulás visszavonása a fiók és az adatok törlésének kérésével történhet. A hozzájárulás visszavonása nem érinti a visszavonás előtti adatkezelés jogszerűségét.
 
 9. A felhasználó jogai
 A felhasználó a GDPR alapján jogosult:

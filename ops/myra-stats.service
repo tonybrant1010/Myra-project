@@ -1,0 +1,9 @@
+[Unit]
+Description=Myra forgalmi statisztika osszesito
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=myra-admin
+Nice=10
+ExecStart=/home/myra-admin/myra/ops/myra-stats.py

@@ -1,17 +1,19 @@
 [Unit]
-Description=Myra futasideju figyelo (docker events + backend log -> email)
+Description=Myra futasideju figyelo es karanten (docker events + backend log + integritas)
 After=docker.service
 Requires=docker.service
 
 [Service]
 Type=simple
-User=antalodor
-ExecStart=/usr/bin/python3 /home/antalodor/myra/myra-watch.py
+User=myra-admin
+ExecStart=/usr/bin/python3 /home/myra-admin/myra/ops/myra-watch.py
 Restart=always
 RestartSec=15
 
 # Eroforras-korlat: ha barmi elszallna, ne vigye magaval a backendet.
-MemoryMax=64M
+# 64M helyett 192M: a figyelo `docker exec`-et is inditt (Go binaris, ~40 MB),
+# es az is ebben a cgroupban szamit.
+MemoryMax=192M
 CPUQuota=10%
 
 StandardOutput=journal

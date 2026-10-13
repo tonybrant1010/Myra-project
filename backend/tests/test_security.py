@@ -751,3 +751,48 @@ def test_verify_vercel_proxy_middleware():
         else:
             os.environ.pop("ENVIRONMENT", None)
         server.MYRA_PROXY_SECRET = orig_secret
+
+
+@pytest.mark.asyncio
+async def test_require_admin_logs_structured_signal_only_for_authenticated_user(caplog):
+    """A karanten kuszob-alapu jele (ops/myra-watch.py) ezen a strukturált log
+    soron alapul. A sornak tartalmaznia kell a felhasznalo azonositojat es a
+    forras-IP-t, mert a figyelo a KULONBOZO IP-ek szama alapjan dont: enelkul
+    egyetlen anonim forras is kivalthatna a platform-szintu zarat."""
+    import logging as _logging
+    import server
+
+    class _FakeClient:
+        host = "203.0.113.7"
+
+    class _FakeRequest:
+        url = type("_U", (), {"path": "/api/admin/settings"})()
+        headers = {}
+        client = _FakeClient()
+        state = type("_S", (), {"via_trusted_proxy": False})()
+
+    class _NonAdmin:
+        id = 42
+        is_admin = False
+
+    class _Admin:
+        id = 43
+        is_admin = True
+
+    with caplog.at_level(_logging.WARNING, logger="myra"):
+        with pytest.raises(server.HTTPException) as exc:
+            await server.require_admin(_FakeRequest(), _NonAdmin())
+
+    assert exc.value.status_code == 403
+    # A valasz uzenete valtozatlan (a frontend/tesztek erre epitenek).
+    assert exc.value.detail == "Csak adminok férnek hozzá"
+    assert "MYRA_SECURITY_SIGNAL kind=admin_forbidden" in caplog.text
+    assert "user_id=42" in caplog.text
+    assert "ip=203.0.113.7" in caplog.text
+
+    # Adminnal nincs jelzes (nincs elutasitas).
+    caplog.clear()
+    with caplog.at_level(_logging.WARNING, logger="myra"):
+        returned = await server.require_admin(_FakeRequest(), _Admin())
+    assert returned is not None
+    assert "MYRA_SECURITY_SIGNAL" not in caplog.text

@@ -27,16 +27,18 @@ services:
       dockerfile: Dockerfile
     container_name: myra-backend
     ports:
-      # Csak a szerverről érhető el (teszteléshez). A külvilág felé csak a tunnel.
+      # Csak a gazdagépről érhető el. A külvilág felé a helyi Caddy proxyzik rá
+      # (ugyanezen a gépen, 127.0.0.1:8001), a Caddy-t pedig a router 80/443-as
+      # porttovábbítása éri el.
       - "127.0.0.1:8001:8001"
     restart: unless-stopped
     depends_on:
       - docker-socket-proxy
-    # FONTOS: itt szándékosan NINCS "ports:" szekció. 2026-08-13 óta a backend
-    # kizárólag a cloudflared konténeren (Cloudflare Tunnel) keresztül érhető el,
-    # a VM-en nincs publikált port. A healthcheck a konténeren BELÜLRŐL hívja a
-    # localhost:8001-et, azt ez nem érinti. Ha ide visszakerül a port, azzal
-    # újranyitod a gépet az internet felé — ne tedd vissza.
+    # FONTOS: a backend a gazdagépen KÍVÜL nem érhető el. Csak a loopbacken figyel,
+    # és kizárólag a helyi Caddy proxyzik rá (az fűzi be a X-Myra-Proxy-Secret
+    # fejlécet, tehát a titok a szerveren marad, a böngészőbe nem kerül). A healthcheck
+    # a konténeren BELÜLRŐL hívja a localhost:8001-et, azt ez nem érinti. Ha ide
+    # 0.0.0.0-s port kerül, azzal újranyitod a gépet az internet felé — ne tedd.
     environment:
       - JWT_SECRET=${JWT_SECRET:?set in .env}
       - JWT_ALG=HS256
@@ -99,23 +101,10 @@ services:
       # a keretnek a lassú esetet kell elbírnia, nem az átlagot.
       start_period: 900s
 
-  # Cloudflare Tunnel: kifelé épített kapcsolat, nincs bejövő port a VM-en.
-  # A publikus hosztnév (api.myra-project.hu) és az útvonalszűrő (^/api/.*$) NEM itt,
-  # hanem a Cloudflare Zero Trust felületén, a tunnel konfigurációjában van tárolva —
-  # ez a konténer csak lehúzza magának induláskor.
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: myra-cloudflared
-    # Elso inditas kifejezett keresre: docker compose --profile tunnel up -d cloudflared
-    # Utana a gep ujrainditasakor magatol visszaall (unless-stopped). Ha kezzel allitod le
-    # (docker stop), leallva marad. A karanten nem ezt allitja le, hanem a backend
-    # karbantartasi modjat kapcsolja be, ezert ez nem gyengiti a vedelmet.
-    profiles: ["tunnel"]
-    restart: unless-stopped
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?set in .env}
-    depends_on:
-      - backend
-    # Szándékosan nincs "ports:" - kifelé kapcsolódik, befelé nem fogad.
+  # 2026-10-13: a Cloudflare Tunnel (cloudflared) szolgáltatás megszűnt. A publikus
+  # bejövő forgalmat azóta a helyi Caddy szolgálja ki (Let's Encrypt tanúsítvánnyal),
+  # amit a router 80/443-as porttovábbítása ér el; a DNS zóna a Rackhost/dns24-nél van.
+  # A backend továbbra is csak loopbacken figyel, tehát a Caddy az egyetlen bejárat.
 
 networks:
   default:
