@@ -687,18 +687,14 @@ export default function ChatScreen() {
         data = await r.json();
       }
       const assistantMessage = data.assistant_message as Msg;
-      finishReveal();
-      // Meg ugyanebben a renderelesben uritjuk ki, kulonben a kesz szoveg egy
-      // pillanatra felvillanna, mielott az animacio ujra kiirja.
-      setRevealedTexts((prev) => ({ ...prev, [assistantMessage.id]: "" }));
+      // Amit már íródás közben látott, azt nem gépeljük ki még egyszer.
+      if (streamStarted) animatedMessageIdsRef.current.add(assistantMessage.id);
       setMessages((m) => [
         ...m.filter((x) => x.id !== optimistic.id && x.id !== streamId),
         data.user_message,
         assistantMessage,
       ]);
-      // A streamelt valaszt is vegiggepeljuk: kulonben a teljes szoveg egyben beesik.
-      animatedMessageIdsRef.current.delete(assistantMessage.id);
-      animateAssistantMessage(assistantMessage);
+      if (!streamStarted) animateAssistantMessage(assistantMessage);
       scrollToBottom(true);
     } catch {
       // Megszakadt kapcsolat: a kérés ettől még elérhette a backendet, ezért itt is
@@ -709,7 +705,7 @@ export default function ChatScreen() {
         setMessages(recovered);
         const lastAssistant = [...recovered].reverse().find((m) => m.role === "assistant");
         if (lastAssistant) {
-          animatedMessageIdsRef.current.delete(lastAssistant.id);
+          if (streamStarted) animatedMessageIdsRef.current.add(lastAssistant.id);
           animateAssistantMessage(lastAssistant);
         }
         scrollToBottom(true);
