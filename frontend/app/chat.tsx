@@ -688,6 +688,9 @@ export default function ChatScreen() {
       }
       const assistantMessage = data.assistant_message as Msg;
       finishReveal();
+      // Meg ugyanebben a renderelesben uritjuk ki, kulonben a kesz szoveg egy
+      // pillanatra felvillanna, mielott az animacio ujra kiirja.
+      setRevealedTexts((prev) => ({ ...prev, [assistantMessage.id]: "" }));
       setMessages((m) => [
         ...m.filter((x) => x.id !== optimistic.id && x.id !== streamId),
         data.user_message,
