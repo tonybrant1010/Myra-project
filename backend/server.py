@@ -5741,15 +5741,15 @@ _local_warm_serial = asyncio.Lock()
 LOCAL_WARM_WAIT_MAX_S = _env_int("LOCAL_WARM_WAIT_MAX_S", 120, 0, 3600)
 
 
-async def _warm_local_for_user_soon(user_id: int, delay_s: float = 2.0, session_id: Optional[str] = None) -> None:
+async def _warm_local_for_user_soon(user_id: int, delay_s: float = 2.0) -> None:
     try:
         await asyncio.sleep(max(0.0, delay_s))
     except Exception:  # noqa: BLE001
         pass
-    await _warm_local_for_user(user_id, session_id)
+    await _warm_local_for_user(user_id)
 
 
-async def _warm_local_for_user(user_id: int, session_id: Optional[str] = None) -> None:
+async def _warm_local_for_user(user_id: int) -> None:
     if _local_chat_inflight > 0:
         waited = 0.0
         while _local_chat_inflight > 0 and waited < LOCAL_WARM_WAIT_MAX_S:
@@ -5762,10 +5762,10 @@ async def _warm_local_for_user(user_id: int, session_id: Optional[str] = None) -
         logger.info("helyi elotoltes kihagyva: mar fut egy elotoltes (user=%s)", user_id)
         return
     async with _local_warm_serial:
-        await _warm_local_for_user_locked(user_id, session_id)
+        await _warm_local_for_user_locked(user_id)
 
 
-async def _warm_local_for_user_locked(user_id: int, session_id: Optional[str] = None) -> None:
+async def _warm_local_for_user_locked(user_id: int) -> None:
     try:
         if not await _local_llm_config():
             return
@@ -5780,7 +5780,7 @@ async def _warm_local_for_user_locked(user_id: int, session_id: Optional[str] = 
                 select(QuizSubmission).where(QuizSubmission.user_id == user.id)
                 .order_by(QuizSubmission.created_at.desc()).limit(1)
             )).scalar_one_or_none()
-            sid = session_id or (latest.id if latest else None)
+            sid = latest.id if latest else None
             res = await db.execute(
                 select(ChatMessage)
                 .where(ChatMessage.user_id == user.id, ChatMessage.session_id == sid)
@@ -6003,10 +6003,6 @@ async def chat_history(
         q = q.where(ChatMessage.session_id == session_id)
     res = await db.execute(q.order_by(ChatMessage.created_at.asc(), ChatMessage.role.desc()))
     msgs = res.scalars().all()
-    # A megnyitott beszelgetes elotoltese: az elso uzenet ne a teljes elozmeny
-    # prefilljevel kezdjen, hanem talaljon a helyi modell gyorsitotaraban.
-    if session_id:
-        _spawn_background_task(_warm_local_for_user_soon(user.id, session_id=session_id))
     return {"messages": [
         {"id": m.id, "role": m.role, "text": m.text,
          "created_at": m.created_at.isoformat(), "state_code": m.state_code,
