@@ -16,6 +16,7 @@ kapnak, így a levél teljes tartalma vizsgálható.
 import os
 import sys
 from email import message_from_string
+from email.header import decode_header, make_header
 
 import pytest
 
@@ -69,6 +70,8 @@ def postafiok(monkeypatch):
     monkeypatch.setattr(server, "MYRA_MAIL_FROM_NAME", "Myra-project")
     monkeypatch.setattr(server, "MYRA_CONTACT_EMAIL", "info@myra-project.hu")
     monkeypatch.setattr(server, "MYRA_ALERT_EMAIL", "admin@myra-project.hu")
+    # A krízisriasztás címe IMPORT időben rögzül a modulban, ezért külön kell.
+    monkeypatch.setattr(server, "CRISIS_ALERT_EMAIL", "admin@myra-project.hu")
     return _FakeSMTP
 
 
@@ -82,6 +85,19 @@ def _sent_message():
 
 def _body(msg) -> str:
     return msg.get_payload(decode=True).decode("utf-8")
+
+
+def _fejlec(msg, nev: str) -> str:
+    """A fejléc értéke dekódolva.
+
+    A nem-ASCII fejléceket (Subject) az e-mail csomag RFC2047 szerint kódolja
+    (pl. ``=?utf-8?b?...?=``), ezért a nyers `msg[nev]` nem hasonlítható össze
+    sima szöveggel.
+    """
+    nyers = msg[nev]
+    if nyers is None:
+        return ""
+    return str(make_header(decode_header(nyers)))
 
 
 def test_gmail_valtozok_nem_tertek_vissza():
@@ -157,7 +173,7 @@ def test_a_visszajelzes_valaszcime_a_felhasznalo(postafiok):
 def test_a_jelszo_visszaallito_level_tartalma(postafiok):
     server._send_password_reset_email("felhasznalo@example.com", "654321")
     _kapcsolat, _recipients, msg = _sent_message()
-    assert msg["Subject"] == "Jelszó visszaállítás - Myra-project"
+    assert _fejlec(msg, "Subject") == "Jelszó visszaállítás - Myra-project"
     torzs = _body(msg)
     assert "654321" in torzs
     assert str(server.RESET_TOKEN_TTL_MINUTES) in torzs
@@ -167,14 +183,14 @@ def test_a_jelszo_visszaallito_level_tartalma(postafiok):
 def test_a_belepesi_kod_level_tartalma(postafiok):
     server._send_security_code_email("felhasznalo@example.com", "112233", "login")
     _kapcsolat, _recipients, msg = _sent_message()
-    assert msg["Subject"] == "Belépési kód - Myra-project"
+    assert _fejlec(msg, "Subject") == "Belépési kód - Myra-project"
     assert "112233" in _body(msg)
 
 
 def test_az_admin_muvelet_kod_annak_jeloli_magat(postafiok):
     server._send_security_code_email("admin@myra-project.hu", "998877", "admin_action")
     _kapcsolat, _recipients, msg = _sent_message()
-    assert msg["Subject"] == "Admin biztonsági megerősítés"
+    assert _fejlec(msg, "Subject") == "Admin biztonsági megerősítés"
     assert "998877" in _body(msg)
 
 
@@ -182,7 +198,7 @@ def test_a_visszajelzes_a_riasztasi_cimre_megy(postafiok):
     server._send_feedback_email("Teszt Elek", "felhasznalo@example.com", 42, "chat", "Valami nem működik.")
     _kapcsolat, recipients, msg = _sent_message()
     assert recipients == ["admin@myra-project.hu"]
-    assert "Myra visszajelzes" in msg["Subject"]
+    assert "Myra visszajelzes" in _fejlec(msg, "Subject")
     torzs = _body(msg)
     assert "Valami nem működik." in torzs
     assert "felhasznalo@example.com" in torzs
@@ -192,7 +208,7 @@ def test_a_belepesi_riasztas_a_riasztasi_cimre_megy(postafiok):
     server._send_login_alert_email("Teszt Elek", "felhasznalo@example.com", False, "1.2.3.4", "Teszt böngésző", "új eszköz")
     _kapcsolat, recipients, msg = _sent_message()
     assert recipients == ["admin@myra-project.hu"]
-    assert "Biztonsági riasztás" in msg["Subject"]
+    assert "Biztonsági riasztás" in _fejlec(msg, "Subject")
     torzs = _body(msg)
     assert "1.2.3.4" in torzs
     assert "új eszköz" in torzs
@@ -202,7 +218,7 @@ def test_a_krizisjelzes_a_riasztasi_cimre_megy(postafiok):
     server._send_crisis_alert_email("Teszt Elek", "felhasznalo@example.com", 7, "nem akarok tovább élni", "2026.10.14 10:00")
     _kapcsolat, recipients, msg = _sent_message()
     assert recipients == ["admin@myra-project.hu"]
-    assert "KRIZISJELZES" in msg["Subject"]
+    assert "KRIZISJELZES" in _fejlec(msg, "Subject")
     assert "nem akarok tovább élni" in _body(msg)
 
 
@@ -221,7 +237,7 @@ def test_fejlec_injekcio_nem_megy_at(postafiok):
     )
     _kapcsolat, _recipients, msg = _sent_message()
     assert msg["Bcc"] is None, "fejléc-injekció: Bcc került a levélbe"
-    assert "\n" not in (msg["Subject"] or "")
+    assert "\n" not in _fejlec(msg, "Subject")
     assert set(msg.keys()) <= {
         "Content-Type", "MIME-Version", "Content-Transfer-Encoding",
         "Subject", "From", "To", "Date", "Message-ID",
