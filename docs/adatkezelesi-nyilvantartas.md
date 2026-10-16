@@ -4,9 +4,10 @@
 
 | | |
 |---|---|
-| **Verzió** | 1.1 |
+| **Verzió** | 1.2 |
 | **Készült** | 2026. augusztus 17. |
-| **Módosítva** | 2026. október 4. — a backend saját szerverre költözött (Google Cloud megszűnt), biztonsági mentések, „Myra memóriája” (2.9), Supabase-régió pontosítva |
+| **Módosítva** | 2026. október 14. — **e-mail: Gmail helyett Proton Mail** (saját domain, `info@myra-project.hu`, Mail Plus; a küldés a Proton SMTP-beküldőjén, tartalék útként Bridge-en), új adatfeldolgozó (Proton AG, Svájc), tranzakciós levelek mint önálló tevékenység (2.12); **2.6 Felolvasás pontosítva**: a hangfelolvasás helyben (Piper) történik, külső szolgáltatóhoz nem kerül — a Gemini TTS megszűnt |
+| **Korábbi módosítás** | 2026. október 4. — a backend saját szerverre költözött (Google Cloud megszűnt), biztonsági mentések, „Myra memóriája” (2.9), Supabase-régió pontosítva |
 | **Következő felülvizsgálat** | 2027. augusztus 17., vagy bármely lényeges változás esetén |
 
 ---
@@ -31,7 +32,7 @@ teljesül. A nyilvántartás vezetése kötelező, és kérésre a NAIH rendelke
 |---|---|
 | Név | Ódor Antal |
 | Jogállás | magánszemély, nem kereskedelmi célú kutatási és fejlesztési projekt |
-| E-mail | odor-antal@research.hu |
+| E-mail | info@myra-project.hu |
 | Adatvédelmi tisztviselő | nincs kijelölve — lásd az indokolást a 8. pontban |
 | Képviselő (GDPR 27. cikk) | nem releváns, az adatkezelő az EU-ban letelepedett |
 
@@ -103,7 +104,7 @@ teljesül. A nyilvántartás vezetése kötelező, és kérésre a NAIH rendelke
 | **Cél** | az AI-válasz hangos felolvasása a felhasználó kérésére |
 | **Jogalap** | 6. cikk (1) a) |
 | **Adatkategóriák** | a felolvasandó válasz szövege |
-| **Címzettek** | **Google (Gemini TTS API)** |
+| **Címzettek** | nincs — a felolvasás az adatkezelő saját szerverén, helyi beszédszintézissel (Piper) készül, hanganyag harmadik félhez nem kerül |
 | **Törlési határidő** | a hangfájl átmeneti, a kiszolgálás után törlődik; tartósan nem tárolódik |
 
 ### 2.7 Biztonság, naplózás, visszaélés-megelőzés
@@ -113,7 +114,7 @@ teljesül. A nyilvántartás vezetése kötelező, és kérésre a NAIH rendelke
 | **Cél** | jogosulatlan hozzáférés és túlterhelés megelőzése, hibakeresés, üzemeltetés |
 | **Jogalap** | GDPR 6. cikk (1) f) — az adatkezelő jogos érdeke a szolgáltatás biztonságos működtetéséhez |
 | **Adatkategóriák** | IP-cím, eszköz- és böngészőinformáció, hozzáférési kísérletek, hibanaplók, sebességkorlát-események |
-| **Címzettek** | az adatkezelő saját szervere (nem kerül harmadik félhez), riasztási e-mail (Gmail) |
+| **Címzettek** | az adatkezelő saját szervere (nem kerül harmadik félhez), riasztási e-mail (Proton Mail, saját domain) |
 | **Törlési határidő** | a konténer naplója a konténer élettartamáig; a biztonsági események az admin felületen törölhetők; riasztási e-mailek a postafiók szabályai szerint |
 | **Megjegyzés** | **Nem terjed ki a szükséges mértéken túlmutató tartalomelemzésre.** |
 
@@ -156,9 +157,22 @@ teljesül. A nyilvántartás vezetése kötelező, és kérésre a NAIH rendelke
 | **Cél** | súlyos krízisjelzés (öngyilkossági vagy önsértési szándék) esetén az adatkezelő értesítése, hogy szükség esetén megtehesse az ÁSZF 8. pontja szerinti lépéseket |
 | **Jogalap** | GDPR 6. cikk (1) d) és 9. cikk (2) c) — az érintett létfontosságú érdeke; emellett a 9. cikk (2) a) szerinti hozzájárulás |
 | **Adatkategóriák** | név, e-mail-cím, időpont, a jelzést kiváltó üzenet szövege (legfeljebb 500 karakter) — **különleges adat** |
-| **Címzettek** | az adatkezelő saját postafiókja (Gmail SMTP-n keresztül) |
+| **Címzettek** | az adatkezelő saját postafiókja (Proton Mail, a Proton Mail Bridge-en és a saját domainen keresztül) |
 | **Törlési határidő** | az értesítő e-mail az ügy lezárása után, legkésőbb 30 napon belül törlendő; a biztonsági eseménynaplóban csak a felhasználó azonosítója és az időpont marad, üzenetszöveg nélkül |
 | **Megjegyzés** | csak kulcsszavas, súlyos jelzésre indul; felhasználónként legfeljebb 6 óránként egy értesítés; nem folyamatos felügyelet és nem sürgősségi szolgáltatás |
+
+### 2.12 Tranzakciós rendszerlevelek
+
+| | |
+|---|---|
+| **Cél** | a bejelentkezéshez, az adminművelet megerősítéséhez és a jelszó-visszaállításhoz szükséges biztonsági kód eljuttatása a felhasználóhoz |
+| **Jogalap** | GDPR 6. cikk (1) b) — a felhasználó kérésére tett lépés a szerződés teljesítéséhez; a fiók biztonságára nézve emellett 6. cikk (1) f) — jogos érdek |
+| **Érintettek** | regisztrált felhasználók |
+| **Adatkategóriák** | e-mail-cím, a levél tartalma (egyszer használatos biztonsági kód), a küldés időpontja |
+| **Címzettek** | **Proton AG (Proton Mail Plus)** — a levél kézbesítése. A rendszer a saját domainjéről küld: a feladó a `noreply@myra-project.hu`, a válaszcím a `info@myra-project.hu`, a belső riasztások címzettje az `admin@myra-project.hu`. A küldés a Proton SMTP-beküldőjén (tartalék útként a Bridge-en) keresztül történik |
+| **Harmadik ország** | nem — Svájc, az Európai Bizottság megfelelőségi határozata alapján |
+| **Törlési határidő** | a belépési kód 10 percig, a jelszó-visszaállítási kód 30 percig érvényes, utána a rendszerben érvénytelen; maguk a levelek a felhasználó, illetve az adatkezelő postafiókjában maradnak |
+| **Megjegyzés** | kizárólag a működéshez szükséges tranzakciós levél; az alkalmazás hírlevelet, marketing- vagy reklámcélú e-mailt nem küld |
 
 ---
 
@@ -172,8 +186,8 @@ teljesül. A nyilvántartás vezetése kötelező, és kérésre a NAIH rendelke
 
 Az alkalmazásszerver (backend) 2026. október 4. óta az adatkezelő saját, Magyarországon
 elhelyezett szerverén fut; ez nem adatfeldolgozó, hanem az adatkezelő saját eszköze.
-| Google (Gemini API) | AI-válasz és felolvasás generálása | lásd 4. pont |
-| Google (Gmail SMTP) | rendszerriasztások küldése | — |
+| Google (Gemini API) | AI-válasz generálása (a felolvasás nem: az helyben, Piperrel fut) | lásd 4. pont |
+| Proton AG (Proton Mail Plus) | a rendszerlevelek küldése és fogadása: belépési és jelszó-visszaállítási kód, krízisjelzés, visszajelzés, üzemeltetési riasztás | **Svájc** — az Európai Bizottság megfelelőségi határozata alapján megfelelő szintű védelem |
 
 Az AI-szolgáltatók fejlesztői (API) felületein keresztül történik a továbbítás, amelyek
 szerződéses feltételei kizárják a beküldött adatok modelltanításra való felhasználását.
@@ -190,6 +204,13 @@ szerződéses feltételei kizárják a beküldött adatok modelltanításra val�
 | **Kockázati megjegyzés** | a megfelelőségi határozat 2026 augusztusában érvényes, de a Törvényszék *Latombe* (T-553/23) ítélete ellen fellebbezés van folyamatban a Bíróság előtt. **Felülvizsgálandó, ha az ügyben döntés születik.** |
 
 A tartós felhasználói adatbázis szándékosan az EU-ban (Írország) marad, a biztonsági mentések Magyarországon.
+
+Az **e-mail-forgalomért felelős Proton AG Svájcban** működik. Svájc az Európai Bizottság
+megfelelőségi határozata (2000/518/EK, felülvizsgálva) alapján megfelelő szintű adatvédelmet
+biztosít, ezért ez **nem** minősül a 4. pont szerinti, kiegészítő garanciát igénylő
+harmadik országba történő továbbításnak. Az e-mail-útvonal 2026. október 14-én a Gmailről
+(amerikai adatfeldolgozó) a Proton Mailre került át, ami ezen a ponton **csökkenti** a
+harmadik országba irányuló továbbítás kitettségét.
 
 ---
 

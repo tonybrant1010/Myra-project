@@ -1,6 +1,6 @@
 export const termsText = `FELHASZNÁLÁSI FELTÉTELEK
 
-Hatályos: 2026. október 13.
+Hatályos: 2026. október 14.
 
 1. A szolgáltatás jellege
 A Myra egy magánszemély által, nem kereskedelmi célból fejlesztett, mérésvezérelt, reflektív mentálhigiénés önismereti alkalmazás. A rendszer az ESV-modell (Érzelem-Stressz-Viselkedés) alapján működik: önkitöltős állapotfelmérést, belső állapotkódot és mesterséges intelligenciával támogatott beszélgetési keretet biztosít.
@@ -54,13 +54,13 @@ Az alkalmazás fórum funkciót tartalmaz, amelyen a felhasználók saját tarta
 
 Moderálási elvek. Az adatkezelő eltávolíthatja vagy korlátozhatja azt a tartalmat, amely jogszabályba ütközik, más személy jogát sérti, gyűlöletkeltő, zaklató vagy fenyegető, mást önsértésre vagy öngyilkosságra buzdít, önsértési vagy öngyilkossági módszert ismertet, más felhasználó személyes adatát a hozzájárulása nélkül teszi közzé, kéretlen reklámot vagy csalást tartalmaz, illetve amely a jelen feltételek 6. pontjába ütközik. A moderálás emberi döntés alapján történik; automatizált tartalomszűrő rendszert az adatkezelő nem alkalmaz.
 
-Bejelentés. Bárki jelezheti, ha jogellenesnek vagy a jelen feltételekbe ütközőnek tart egy tartalmat. A bejelentést az alkalmazásban erre szolgáló felületen vagy a odor-antal@research.hu címen lehet megtenni. A bejelentésben kérjük megjelölni a kifogásolt tartalmat, a bejelentés indokát, és – ha a bejelentő értesítést kér – egy elérhetőséget. Az adatkezelő a bejelentéseket időszerűen, gondosan, önkényességtől mentesen és tárgyilagosan kezeli.
+Bejelentés. Bárki jelezheti, ha jogellenesnek vagy a jelen feltételekbe ütközőnek tart egy tartalmat. A bejelentést az alkalmazásban erre szolgáló felületen vagy a info@myra-project.hu címen lehet megtenni. A bejelentésben kérjük megjelölni a kifogásolt tartalmat, a bejelentés indokát, és – ha a bejelentő értesítést kér – egy elérhetőséget. Az adatkezelő a bejelentéseket időszerűen, gondosan, önkényességtől mentesen és tárgyilagosan kezeli.
 
-Indokolás. Ha az adatkezelő eltávolít, korlátoz vagy láthatatlanná tesz egy tartalmat, illetve felfüggeszt egy fiókot, erről az érintett felhasználót – ha az elérhetősége ismert – tájékoztatja, megjelölve az intézkedés okát, a hivatkozott szabályt vagy jogszabályi rendelkezést, és azt, hogy a döntés ellen a odor-antal@research.hu címen kifogással lehet élni.
+Indokolás. Ha az adatkezelő eltávolít, korlátoz vagy láthatatlanná tesz egy tartalmat, illetve felfüggeszt egy fiókot, erről az érintett felhasználót – ha az elérhetősége ismert – tájékoztatja, megjelölve az intézkedés okát, a hivatkozott szabályt vagy jogszabályi rendelkezést, és azt, hogy a döntés ellen a info@myra-project.hu címen kifogással lehet élni.
 
 Hatósági értesítés. Ha az adatkezelő tudomására olyan információ jut, amely alapján felmerül a gyanú, hogy valakinek az élete vagy testi épsége közvetlen veszélyben van, vagy bűncselekmény elkövetésére került vagy kerül sor, az adatkezelő haladéktalanul értesíti az illetékes hatóságot. Ez nem sürgősségi szolgáltatás: közvetlen veszély esetén a felhasználó hívja a 112-t.
 
-Kapcsolattartás. Felhasználói kérdésekben, moderálási ügyekben és bejelentésekben egyaránt az odor-antal@research.hu cím áll rendelkezésre. Ez egyben a hatóságok részére szolgáló elektronikus kapcsolattartási pont is. A kapcsolattartás nyelve a magyar és az angol.
+Kapcsolattartás. Felhasználói kérdésekben, moderálási ügyekben és bejelentésekben egyaránt a info@myra-project.hu cím áll rendelkezésre. Ez egyben a hatóságok részére szolgáló elektronikus kapcsolattartási pont is. A kapcsolattartás nyelve a magyar és az angol. Az adatkezelő a felhasználóval elsősorban az alkalmazáson keresztül, illetve a felhasználó által megadott e-mail-címen tart kapcsolatot; a rendszer a felhasználónak kizárólag a működéshez szükséges levelet küldi (biztonsági belépési kód, jelszó-visszaállítási kód) az info@myra-project.hu címről. Hírlevelet vagy marketing-, illetve reklámcélú e-mailt az alkalmazás nem küld.
 
 Jogszabályi háttér: az Európai Parlament és a Tanács (EU) 2022/2065 rendelete (a digitális szolgáltatásokról szóló rendelet) 11., 12., 14., 16., 17. és 18. cikke. A digitális szolgáltatási koordinátor Magyarországon a Nemzeti Média- és Hírközlési Hatóság elnöke.
 
@@ -83,7 +83,7 @@ A szolgáltatás használata személyes és mentálhigiénés jellegű adatok ke
 13. Irányadó jog és kapcsolat
 Jelen feltételekre a magyar jog és az alkalmazandó európai uniós adatvédelmi szabályok irányadók. A felek az esetleges vitákat elsősorban békés úton kísérlik meg rendezni.
 
-Kapcsolat: odor-antal@research.hu
+Kapcsolat: info@myra-project.hu
 
 14. Elfogadás
 A regisztrációval és a szolgáltatás használatával a felhasználó kijelenti, hogy jelen Felhasználási feltételeket, az Adatkezelési tájékoztatót és a Myra Kisokost elolvasta, megértette és elfogadja.`;

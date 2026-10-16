@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+﻿#!/usr/bin/env node
 /**
  * Helyi frontend-telepites a sajat szerverre (a Vercel kivaltasa).
  *
@@ -15,7 +15,7 @@ const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const HOST = process.env.MYRA_DEPLOY_HOST || "myra-admin@192.168.1.103";
+const HOST = process.env.MYRA_DEPLOY_HOST || "<user>@<backend-ip>";
 const CEL = process.env.MYRA_DEPLOY_DIR || "/srv/myra";
 const GYOKER = path.join(__dirname, "..");
 const DIST = path.join(GYOKER, "dist");

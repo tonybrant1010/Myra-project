@@ -24,5 +24,4 @@ Időnként rövid karbantartás miatt az app egy tájékoztató oldalt mutat. Il
 FONTOS TUDNIVALÓ
 A Myra nem orvos, nem pszichológus, nem orvostechnikai eszköz és nem diagnosztikai rendszer. Ha úgy érzed, hogy szakemberre van szükséged, kérlek, keress fel egyet. Az app ezt nem tudja és nem is akarja helyettesíteni.
 
-Kapcsolat: odor-antal@research.hu
-Technikai segítség: myra-project@research.hu`;
+Kapcsolat és technikai segítség: info@myra-project.hu`;

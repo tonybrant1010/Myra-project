@@ -1,11 +1,11 @@
-[Unit]
+﻿[Unit]
 Description=llama.cpp server - router mod (Myra)
 After=network-online.target
 
 [Service]
-User=antalodor
+User=<user>
 EnvironmentFile=/etc/llama-server.env
-ExecStart=/home/antalodor/llama.cpp/build/bin/llama-server --models-preset /home/antalodor/llm/models.ini --models-max 3 --host 0.0.0.0 --port 8080 --api-key ${LLAMA_API_KEY}
+ExecStart=/home/<user>/llama.cpp/build/bin/llama-server --models-preset /home/<user>/llm/models.ini --models-max 3 --host 0.0.0.0 --port 8080 --api-key ${LLAMA_API_KEY}
 Restart=always
 RestartSec=5
 

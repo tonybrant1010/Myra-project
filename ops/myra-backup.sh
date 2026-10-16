@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 # Myra mentes (2026-10-13).
 # Amit ment:
 #   - orankent: a Supabase public sema teljes dumpja + egy kisebb felhasznaloi dump
@@ -10,11 +10,11 @@
 # Kell hozza: postgresql-client (>=17), rsync, es jelszo nelkuli SSH a myrallm fele.
 set -uo pipefail
 
-SRC=/home/myra-admin/myra
-LOCAL=/home/myra-admin/myra-backups
+SRC=/home/<user>/myra
+LOCAL=/home/<user>/myra-backups
 FRONTEND=/srv/myra
 MIRROR=/mnt/win/MyraBackup
-REMOTE="antalodor@10.10.0.2:/home/antalodor/myra-backups/"
+REMOTE="<user>@<llm-wg-ip>:/home/<user>/myra-backups/"
 SSH_KEY="$HOME/.ssh/id_ed25519"
 
 # --- Megorzes darabszammal (a "ne legyen vegtelen" elv) ---
@@ -132,9 +132,9 @@ else
 fi
 
 # --- Atmasolas a modellszerverre a WireGuard-tunnelen (off-host mentes) ---
-if ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=8 antalodor@10.10.0.2 true 2>/dev/null; then
+if ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=8 <user>@<llm-wg-ip> true 2>/dev/null; then
   if rsync -a --delete -e "ssh -i $SSH_KEY -o BatchMode=yes" "$LOCAL/" "$REMOTE" 2>/dev/null; then
-    echo "off-host mentes: myrallm (10.10.0.2) frissitve"
+    echo "off-host mentes: myrallm (<llm-wg-ip>) frissitve"
   else
     echo "FIGYELEM: az rsync a myrallm fele nem sikerult"
   fi

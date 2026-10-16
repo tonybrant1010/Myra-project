@@ -4,10 +4,11 @@
 
 | | |
 |---|---|
-| **Verzió** | 1.1 |
+| **Verzió** | 1.2 |
 | **Készült** | 2026. augusztus 17. |
-| **Módosítva** | 2026. október 4. — backend saját szerveren (Google Cloud megszűnt), biztonsági mentések, K8: „Myra memóriája” |
-| **Adatkezelő** | Ódor Antal, magánszemély — odor-antal@research.hu |
+| **Módosítva** | 2026. október 14. — **új adatfeldolgozó: Proton AG** (e-mail: Gmail helyett Proton Mail, saját domain), új kockázat **K9** (riasztási és rendszerlevelek útvonala) |
+| **Korábbi módosítás** | 2026. október 4. — backend saját szerveren (Google Cloud megszűnt), biztonsági mentések, K8: „Myra memóriája” |
+| **Adatkezelő** | Ódor Antal, magánszemély — info@myra-project.hu |
 | **Következő felülvizsgálat** | 2027. augusztus 17., illetve a 7. pontban felsorolt események bármelyikekor |
 
 ---
@@ -64,6 +65,8 @@ felhasználó böngészője
             -> Supabase PostgreSQL (EU/Írország) — tartós tárolás
             -> óránkénti biztonsági mentés a saját szerveren (48 óra / 30 nap)
             -> Google Gemini API — átmeneti feldolgozás a válaszhoz
+            -> Proton Mail (Proton AG, Svájc) — rendszerlevelek küldése és fogadása
+               (belépési és jelszó-visszaállítási kód, krízisjelzés, üzemeltetési riasztás)
 ```
 
 ### 2.3 Az érintettek
@@ -164,6 +167,16 @@ A besorolás: **valószínűség × súlyosság**, három fokozatban (alacsony /
 | **Intézkedések** | külön, önálló hozzájárulás, alapból kikapcsolva; kikapcsoláskor a kivonat és az üzenet-keresővektorok azonnali törlése; a keresővektorok a saját szerveren készülnek, külső szolgáltatóhoz nem kerülnek; Myra magától csak magas relevanciájú korábbi részletet hozhat elő; leíró jelleg, nem diagnózis, nem automatizált döntés; Myra nem idézheti fel nyíltan; a felhasználó a JSON-exportban látja a pontos szövegét; az admin általi újraképzés és törlés naplózott |
 | **Maradék kockázat** | **alacsony–közepes** |
 
+### K9 — A riasztási és rendszerlevelek e-mail-útvonala
+
+| | |
+|---|---|
+| **Hatás** | a krízisjelzés (különleges adat) és a biztonsági kódok egy külső e-mail-szolgáltatón keresztül haladnak |
+| **Kezelés nélküli kockázat** | **közepes** |
+| **Intézkedések** | 2026. október 14. óta a levelek a **Proton Mailen** (Proton AG, Svájc — EU-megfelelőségi határozat) mennek ki és érkeznek, a saját domainről (`noreply@` feladó, `info@` válaszcím, `admin@` riasztási cím), a Proton SMTP-beküldőjén, titkosított csatornán; a postafiókban a levelek az adatkezelő kulcsával titkosítva tárolódnak; a krízisértesítés legfeljebb 500 karakter, felhasználónként legfeljebb 6 óránként egy levél, és az adatkezelő legkésőbb 30 napon belül törli; az alkalmazás hírlevelet vagy marketingcélú levelet nem küld |
+| **Maradék kockázat** | **alacsony–közepes** — kézbesítés után a levél a felhasználó saját postafiókjában az ő szolgáltatójának szabályai szerint tárolódik, erre az adatkezelőnek nincs befolyása |
+| **Megjegyzés** | a váltás a Gmailről (amerikai adatfeldolgozó) a Proton Mailre ezen a ponton csökkenti a harmadik országba irányuló továbbítás kitettségét |
+
 ---
 
 ## 5. Az érintettek véleménye (35. cikk (9))
@@ -184,6 +197,10 @@ kockázat marad tartósan közepes szinten, és ezek nem szüntethetők meg, csa
 - **K2** — az AI-szolgáltatóhoz továbbítás ténye,
 - **K4** — a nyelvi modell viselkedése krízishelyzetben.
 
+A 2026. október 14-i e-mail-váltás (Gmail → Proton Mail, új adatfeldolgozó: Proton AG)
+a **K9** pontban került értékelésre. A maradék kockázata **alacsony–közepes**, és
+önmagában nem tenné szükségessé a NAIH szerinti előzetes konzultációt.
+
 Ezek a szolgáltatás természetéből következnek. A kezelésük folyamatos figyelmet igényel.
 
 **Egy azonosított, kijavítandó ellentmondás:** a krízisprotokoll a „soha ne idézd"
@@ -198,7 +215,7 @@ fejléc alatt kerül a promptba (lásd K4).
 - ha a szolgáltatás 18 éven aluliak felé nyílik;
 - ha a szolgáltatás kereskedelmi jelleget ölt;
 - ha az EU–USA adatvédelmi keret megfelelőségi határozata megszűnik vagy módosul;
-- ha új adatkategória vagy új adatfeldolgozó kerül a rendszerbe;
+- ha új adatkategória vagy új adatfeldolgozó kerül a rendszerbe (a 2026. október 14-i e-mail-váltás ilyen volt; a felülvizsgálat eredménye a K9 pont);
 - egyébként évente.
 
 ---

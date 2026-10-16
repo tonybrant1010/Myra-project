@@ -400,7 +400,7 @@ export default function WelcomeScreen() {
           <View style={styles.supportBlock}>
             <T variant="small" color="rgba(247,251,255,0.66)">Kérdés vagy probléma esetén:</T>
             <T variant="small" color={theme.accentSoft} style={{ marginTop: 2 }}>
-              myra-project@research.hu
+              info@myra-project.hu
             </T>
           </View>
         </ScrollView>

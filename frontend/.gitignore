@@ -40,3 +40,8 @@ app-example
 
 .vercel
 .env*
+
+# Helyi git-azonossag es szerver-uzemeltetesi artefaktumok
+.gitconfig
+*.jnlp
+*.rom

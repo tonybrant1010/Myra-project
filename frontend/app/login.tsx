@@ -330,7 +330,7 @@ export default function LoginScreen() {
 
                   <View style={styles.supportRow}>
                     <Ionicons name="mail-outline" size={15} color="rgba(247,251,255,0.58)" />
-                    <T variant="small" color="rgba(247,251,255,0.62)">myra-project@research.hu</T>
+                    <T variant="small" color="rgba(247,251,255,0.62)">info@myra-project.hu</T>
                   </View>
                 </View>
               </View>

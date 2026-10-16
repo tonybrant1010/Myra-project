@@ -89,7 +89,7 @@ async def _issue_reset_token(client, email: str) -> tuple[str, str]:
         captured["code"] = token
         return True
 
-    with patch.object(server, "_send_gmail_reset", _capture):
+    with patch.object(server, "_send_password_reset_email", _capture):
         resp = await client.post("/api/auth/forgot-password", json={"email": email})
     assert resp.status_code == 200
 

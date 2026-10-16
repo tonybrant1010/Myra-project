@@ -1,5 +1,13 @@
 # Myra Project
 
+**Élő platform:** <https://myra-project.hu>
+
+<p align="center">
+  <img src="docs/img/kepernyokep-1.png" alt="Myra — bejelentkezés" width="430">
+  &nbsp;
+  <img src="docs/img/kepernyokep-2.png" alt="Myra — chatfelület" width="430">
+</p>
+
 Magyar nyelvű mentálhigiénés önismereti webapp. A rendszer ESV-modell alapú mérést végez, állapotkódot számol, majd a mérés eredményére építve indít beszélgetést a Myra chatfelületen.
 
 Fontos: a Myra nem hivatalos diagnosztikai vagy terápiás eszköz, és nem helyettesít szakembert.
@@ -21,7 +29,7 @@ Caddy (a backend szerveren, ugyanazon a domainen)
   - hozzáférési napló: /var/log/caddy/myra-access.log (fail2ban figyeli)
   |
   v
-Saját szerver (Ubuntu, hostnév: backend, 192.168.1.103, Magyarország)
+Saját szerver (Ubuntu, hostnév: backend, <backend-ip>, Magyarország)
   - Docker Compose, projekt: myra (myra-backend, myra-docker-socket-proxy)
   - FastAPI / Uvicorn, csak 127.0.0.1:8001-en figyel
   - helyi RAG: multilingual-e5-large (1024 dim) + bge-reranker-base
@@ -38,10 +46,10 @@ Supabase EU Postgres (Írország, eu-west-1)
 A helyi nyelvi modell **külön gépen** fut, a backend szerverrel WireGuard-alagúton összekötve:
 
 ```text
-backend szerver (192.168.1.103)  ←→  modellszerver (myrallm, 192.168.1.184)
-  - WireGuard: 10.10.0.1 ↔ 10.10.0.2
-  - a llama-server KIZÁRÓLAG a 10.10.0.2-n figyel, a LAN-ról nem érhető el
-  - a backend OLLAMA_BASE_URL értéke: http://10.10.0.2:8080
+backend szerver (<backend-ip>)  ←→  modellszerver (myrallm, <llm-ip>)
+  - WireGuard: <backend-wg-ip> ↔ <llm-wg-ip>
+  - a llama-server KIZÁRÓLAG a <llm-wg-ip>-n figyel, a LAN-ról nem érhető el
+  - a backend OLLAMA_BASE_URL értéke: http://<llm-wg-ip>:8080
 ```
 
 **2026-10-04 óta** a backend nem a Google Cloud VM-en, hanem a saját, otthoni Ubuntu
@@ -71,7 +79,7 @@ tehát egy címváltás a DNS-t és az adatbázis-elérést is érinti.
 - bővített chat kontextus ugyanazon mérési szálon belül;
 - TXT beszélgetés-export a chat felületről;
 - asztali gépen Enterrel küldés a chatben (Shift+Enter új sor);
-- visszajelzés gomb a chat felületen, közvetlen e-mail-küldéssel a fejlesztőnek;
+- visszajelzés gomb a chat felületen, közvetlen e-mail-küldéssel a fejlesztőnek (Proton Mail);
 - fórum-értesítés: jelzés a menüben és a menügombon, ha új poszt érkezett;
 - felhasználói adathordozhatóság (GDPR Art. 20) adatexporttal JSON formátumban;
 - felhasználói fiók és adatok végleges önkiszolgáló törlése (GDPR Art. 17);
@@ -102,11 +110,13 @@ tehát egy címváltás a DNS-t és az adatbázis-elérést is érinti.
 - FastEmbed 0.8.0 (rögzítve): `intfloat/multilingual-e5-large`, 1024 dimenziós lokális embedding, `BAAI/bge-reranker-base` újrarangsoroló, in-memory caching
 - pypdf PDF szövegkinyerés
 - JWT auth
-- Gmail SMTP MFA kódokhoz
+- Proton Mail (Mail Plus) a rendszerlevelekhez: saját domain (`info@myra-project.hu`),
+  a Proton SMTP-beküldőjén keresztül — lásd *E-mail (Proton Mail)* és
+  `docs/email-proton-atallas.md`
 - Docker / Docker Compose
 - LLM provider admin felületről konfigurálva: OpenAI, Anthropic, Gemini, Groq, Cerebras, Mistral,
   valamint **Ollama-kompatibilis helyi modellszerver** (`llama.cpp` `llama-server` a `myrallm`
-  gépen, WireGuard-alagúton elérve: `http://10.10.0.2:8080`, API kulccsal)
+  gépen, WireGuard-alagúton elérve: `http://<llm-wg-ip>:8080`, API kulccsal)
 - Statikus kód- és függőség-sérülékenység ellenőrzés (bandit, pip-audit)
 - Automatizált pytest tesztcsomag (biztonsági és megfelelőségi tesztek: OWASP szűrések, JWT token érvényesség, MFA ellenőrzés, biztonsági HTTP fejlécek validálása és GDPR megfelelőségi folyamatok)
 
@@ -232,7 +242,7 @@ kérés pedig `403`-at kap.
 | szabály | forrás | port | állapot |
 |---|---|---|---|
 | HTTP / HTTPS | `0.0.0.0/0` | tcp:80, tcp:443 | aktív — a publikus webes forgalom (ide érkezik a router port-forwardja) |
-| SSH | `192.168.1.0/24` | tcp:22 | aktív — csak a helyi hálózatról |
+| SSH | `<lan>/24` | tcp:22 | aktív — csak a helyi hálózatról |
 | minden más bejövő | — | — | tiltva (UFW alapértelmezés) |
 
 A backend a compose-ban `127.0.0.1:8001:8001`-re van kötve, tehát a helyi hálózatról sem
@@ -796,8 +806,10 @@ Tervezési döntések, amiket ne írj felül gondolkodás nélkül:
   Enélkül naponta százszor csörögne, és két nap múlva kikapcsolnád.
 - **A systemd egységben `MemoryMax=64M` és `CPUQuota=10%`.** Ha a figyelő valaha elszállna,
   a systemd őt állítja meg, nem a backendet.
-- A Gmail-adatokat a `~/myra/.env`-ből olvassa, ugyanazokat, amikkel az MFA-kódok mennek —
-  nincs külön titok és nincs duplikáció.
+- A Proton SMTP-adatokat a `~/myra/.env`-ből olvassa, ugyanazokat, amikkel az MFA-kódok
+  mennek — nincs külön titok és nincs duplikáció. Ha a Bridge utat használod, a figyelő a
+  **hoszton** fut (nem a compose hálózatában), ezért a Bridge-et a `MYRA_SMTP_HOST_LOCAL`
+  (alapból `127.0.0.1`) címen éri el; közvetlen Proton SMTP-nél erre nincs szükség.
 
 Miért nem Falco: a Falco eBPF-fel a kernelt figyelné, ami többet lát, de reálisan 150-300 MB
 RAM-ot kér. Ezen a gépen (969 MB, ebből ~600 MB swapben) az OOM-killer a backendet lőné ki.
@@ -898,13 +910,16 @@ DATABASE_URL=postgresql://...
 DATABASE_SSL=true
 DATABASE_SSL_MODE=require
 MYRA_PROXY_SECRET=...
-GMAIL_USER=...
-GMAIL_APP_PASSWORD=...
+MYRA_SMTP_HOST=smtp.protonmail.ch
+MYRA_SMTP_PORT=587
+MYRA_SMTP_SECURITY=starttls
+MYRA_SMTP_USER=noreply@myra-project.hu
+MYRA_SMTP_PASSWORD=...
+MYRA_MAIL_FROM=noreply@myra-project.hu
+MYRA_CONTACT_EMAIL=info@myra-project.hu
+MYRA_ALERT_EMAIL=admin@myra-project.hu
 TRUST_PROXY=true
-TTS_ENGINE=gemini
-GEMINI_TTS_VOICE=Kore
-GEMINI_TTS_MODEL=gemini-3.1-flash-tts-preview
-MYRA_ALERT_EMAIL=...
+TTS_ENGINE=piper
 RAG_CHAT_CHUNKS=5
 RAG_VECTOR_MAX_DISTANCE=0.62
 CHAT_HISTORY_MAX_MESSAGES=120
@@ -917,7 +932,8 @@ gépen is reprodukálható. A `.gitignore` `.env.*` sora ezt is kizárná, ezér
 egy `!.env.example` kivétel.
 
 A `MYRA_ALERT_EMAIL` a futásidejű figyelő (`ops/myra-watch.py`) címzettje. Ha nincs
-megadva, a `GMAIL_USER` értékére küld.
+megadva, a `MYRA_CONTACT_EMAIL` értékére küld. Ugyanez a cím kapja a krízisjelzést, a
+chat-visszajelzést és a belépés-riasztásokat is.
 
 A `CHAT_HISTORY_MAX_MESSAGES` és `CHAT_HISTORY_MAX_CHARS` szabja meg, mennyit lát a modell
 a beszélgetésből. A kód felső határa 300 üzenet és 120 000 karakter; ennél többhöz a
@@ -927,6 +943,28 @@ a beszélgetésből. A kód felső határa 300 üzenet és 120 000 karakter; enn
 A `MYRA_PROXY_SECRET` értékét a backend a `.env`-ből olvassa; ugyanezt az értéket kapja meg a
 Caddy is (`/etc/caddy/myra.env`, amit a `caddy.service` systemd drop-in tölt be), és ő fűzi be
 a `/api/*` kérésekhez. A titok így a szerveren marad, a böngészőbe nem kerül.
+
+## E-mail (Proton Mail)
+
+Minden kimenő levél a **Proton Mailon** keresztül megy ki, a saját domainról. A Gmail
+2026. október 14-én kikerült a rendszerből: a `GMAIL_USER` / `GMAIL_APP_PASSWORD`
+változók megszűntek, és sem a kódban, sem a compose-ban, sem a szkriptekben, sem a
+dokumentumokban nem maradt Gmail-hivatkozás.
+
+Három cím, három szerep:
+
+| cím | szerep | változó |
+|---|---|---|
+| `noreply@myra-project.hu` | a rendszerlevelek feladója | `MYRA_MAIL_FROM` |
+| `admin@myra-project.hu` | a belső riasztások helye | `MYRA_ALERT_EMAIL` |
+| `info@myra-project.hu` | nyilvános kapcsolattartó: a levelek alján, a `Reply-To`-ban, a jogi szövegekben | `MYRA_CONTACT_EMAIL` |
+
+A rendszer **kizárólag tranzakciós levelet** küld (biztonsági kód, jelszó-visszaállítás,
+riasztás) — hírlevelet, marketing- vagy reklámcélú e-mailt nem.
+
+A teljes telepítés — Proton-oldali címek, DNS (MX, SPF, DKIM, DMARC), az SMTP token,
+a Bridge első bejelentkezése, ellenőrzés és hibakeresés — külön dokumentumban:
+`docs/email-proton-atallas.md`.
 
 Frontend env (`frontend/.env`, csak lokális fejlesztéshez):
 
@@ -968,7 +1006,7 @@ backend/rag/
 ## Biztonsági Megjegyzések
 
 - A backend nem érhető el közvetlenül az internetről: csak `127.0.0.1:8001`-en figyel, kívülről a Caddy proxyzik rá (a router csak a 80/443-at továbbítja). A `/api/*` kérésekhez a Caddy fűzi be a proxy-titkot — a lépcsőket lásd a *Backend origin védelem* szakaszban.
-- A szerveren kifelé **csak a 80/443** nyitott (a webes forgalom számára), minden más bejövő tiltott. Az SSH kizárólag a helyi hálózatról (`192.168.1.0/24`) érhető el (UFW). A router port-forwardja (80/443) a backend szerverre mutat.
+- A szerveren kifelé **csak a 80/443** nyitott (a webes forgalom számára), minden más bejövő tiltott. Az SSH kizárólag a helyi hálózatról (`<lan>/24`) érhető el (UFW). A router port-forwardja (80/443) a backend szerverre mutat.
 - Futásidejű felügyelet: az `ops/myra-watch.py` systemd szolgáltatás emailben riaszt, és védett fájl módosulásakor vagy nem engedélyezett konténeren belüli parancsindításkor karanténba zárja a platformot. Karbantartási sorrend: *Backend Üzemeltetés*.
 - A `~/myra` mappák „other” írási joga 2026-10-04-én megszűnt (`chmod -R o-w`); a `.env` `600`-as.
 - A tanúsítványt a Caddy szerzi be (Let's Encrypt, HTTP-01 igazolás) és automatikusan megújítja; a `myra-project.hu` és a `www` is ugyanarra a szerverre mutat. A Caddy konfigja `/etc/caddy/Caddyfile`, a proxy-titok `/etc/caddy/myra.env` (600).
@@ -1000,5 +1038,5 @@ backend/rag/
 - Az admin log nézet maszkolja az URL-ben vagy headerben megjelenő API kulcsokat és bearer tokeneket.
 - Az admin audit log `detail` és `user_agent` mezői mentés előtt is maszkolva vannak, és felhasználótörlésnél csak a belső `user_id` kerül naplózásra, email cím nem.
 - A személyes vagy admin jellegű API válaszok `Cache-Control: no-store` fejléccel mennek ki.
-- Mentés: az `ops/myra-backup.sh` óránként fut (`myra-backup.timer`), és két dumpot készít a `~/myra-backups/orankent` alá: teljes (`db-*.sql.gz`) és a `knowledge_chunks` tartalma nélküli felhasználói mentést (`userdata-*.sql.gz`). Naponta egyszer emellé kerül a konfig-tarball (Caddy, fail2ban, systemd unitok), a projekt-fájlok és a frontend build. **Megőrzés darabszám alapján**: óránkénti DB 6, napi 7, frontend 3, konfig 7 példány — a régebbiek automatikusan törlődnek. A mentés tükröződik a `/mnt/win`-re (ha csatolva) **és átmásolódik a modellszerverre** (`myrallm`, 10.10.0.2) a WireGuard-alagúton, tehát a backend host kiesése nem viszi el. A napi `tar.gz` az `.env`-et is tartalmazza, ezért azt az alkalmazás nem szolgálja ki.
+- Mentés: az `ops/myra-backup.sh` óránként fut (`myra-backup.timer`), és két dumpot készít a `~/myra-backups/orankent` alá: teljes (`db-*.sql.gz`) és a `knowledge_chunks` tartalma nélküli felhasználói mentést (`userdata-*.sql.gz`). Naponta egyszer emellé kerül a konfig-tarball (Caddy, fail2ban, systemd unitok), a projekt-fájlok és a frontend build. **Megőrzés darabszám alapján**: óránkénti DB 6, napi 7, frontend 3, konfig 7 példány — a régebbiek automatikusan törlődnek. A mentés tükröződik a `/mnt/win`-re (ha csatolva) **és átmásolódik a modellszerverre** (`myrallm`, <llm-wg-ip>) a WireGuard-alagúton, tehát a backend host kiesése nem viszi el. A napi `tar.gz` az `.env`-et is tartalmazza, ezért azt az alkalmazás nem szolgálja ki.
 - Az admin „Adatbázis mentés letöltése” gomb a legfrissebb `userdata-*.sql.gz`-t adja ki (a mappa csak olvasható volume-ként van a konténerben: `/app/backups`). A külső proxy megszűnésével a korábbi 4,5 MB-os válaszkorlát is eltűnt, de a teljes, tudásanyag-indexet is tartalmazó mentést továbbra is a szerverről érdemes levenni. A letöltés admin audit logba kerül.

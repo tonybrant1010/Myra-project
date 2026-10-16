@@ -1,0 +1,11 @@
+# A Bridge headless módban `pass`-t használ a hitelesítés tárolására, a `pass`
+# pedig GPG-t. Ez a kulcs jelszó nélkül készül: a titkot a Docker-kötet őrzi,
+# ezért a kötetet ugyanúgy kell védeni, mint a .env fájlt.
+%no-protection
+Key-Type: eddsa
+Key-Curve: ed25519
+Key-Usage: sign
+Name-Real: Myra Bridge
+Name-Email: bridge@myra-project.hu
+Expire-Date: 0
+%commit

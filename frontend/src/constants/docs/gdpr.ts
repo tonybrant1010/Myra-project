@@ -1,10 +1,10 @@
 export const gdprText = `ADATKEZELÉSI TÁJÉKOZTATÓ
 
-Hatályos: 2026. október 13.
+Hatályos: 2026. október 14.
 
 1. Az adatkezelő
 Név: Ódor Antal
-Email: odor-antal@research.hu
+Email: info@myra-project.hu
 Tevékenység jellege: magánszemélyként végzett, nem kereskedelmi célú kutatási és fejlesztési projekt
 
 2. A szolgáltatás és az adatkezelés célja
@@ -45,7 +45,7 @@ Az ilyen adatok kezelése a felhasználó kifejezett, önkéntes hozzájárulás
 
 A "Myra memóriája" funkció külön, önálló hozzájáruláson alapul. Alapértelmezés szerint ki van kapcsolva; a felhasználó a Beállítások menüben maga kapcsolja be, és ugyanott bármikor kikapcsolja. A kivonat a felhasználó saját méréseiből és beszélgetéseiből készül, és ugyanolyan különleges kategóriájú adatot tartalmazhat, mint a forrás, amelyből származik. A kivonat a bekapcsoláskor a felhasználó addigi méréseiből és beszélgetéseiből azonnal elkészül, majd új mérés vagy újabb beszélgetések után automatikusan frissül. Bekapcsolt memória mellett Myra a korábbi beszélgetésekből is visszakereshet néhány, a mostanihoz hasonló rövid részletet – akkor is, ha a felhasználó más szavakkal írt róla –, és ha illik a beszélgetésbe, maga is visszautalhat rájuk. Ehhez az adatkezelő saját szerverén futó nyelvi modell a felhasználó üzeneteiből technikai keresővektort képez, amelyet az adatbázis tárol; ebből az üzenet szövege nem állítható vissza, és harmadik félhez nem kerül. Az adatkezelő a kivonatot az üzemeltetés és a minőségbiztosítás körében megtekintheti, újraképezheti vagy törölheti. A hozzájárulás visszavonása (kikapcsolás) esetén a már elkészült kivonat azonnal törlődik, a korábbi beszélgetésekből történő visszakeresés megszűnik, és a keresővektorok is törlődnek.
 
-Krízisjelzés. Ha a felhasználó üzenete súlyos krízisre – öngyilkossági vagy önsértési szándékra – utal, a rendszer az adatkezelőnek e-mail-értesítést küld, amely tartalmazza a felhasználó nevét, e-mail-címét, az időpontot és a jelzést kiváltó üzenet szövegét. Az értesítés célja, hogy az adatkezelő tudomást szerezzen a helyzetről, és szükség esetén – élet vagy testi épség közvetlen veszélye esetén – megtehesse a Felhasználási feltételekben leírt lépéseket. Ez nem folyamatos felügyelet és nem sürgősségi szolgáltatás: az értesítés nem garantál azonnali beavatkozást. Az értesítő e-maileket az adatkezelő az ügy lezárása után, legkésőbb 30 napon belül törli. Ennek jogalapja a kifejezett hozzájárulás mellett az érintett létfontosságú érdeke (GDPR 6. cikk (1) bekezdés d) pont, 9. cikk (2) bekezdés c) pont).
+Krízisjelzés. Ha a felhasználó üzenete súlyos krízisre – öngyilkossági vagy önsértési szándékra – utal, a rendszer az adatkezelőnek e-mail-értesítést küld, amely tartalmazza a felhasználó nevét, e-mail-címét, az időpontot és a jelzést kiváltó üzenet szövegét. Az értesítés célja, hogy az adatkezelő tudomást szerezzen a helyzetről, és szükség esetén – élet vagy testi épség közvetlen veszélye esetén – megtehesse a Felhasználási feltételekben leírt lépéseket. Ez nem folyamatos felügyelet és nem sürgősségi szolgáltatás: az értesítés nem garantál azonnali beavatkozást. Az értesítés az adatkezelő Proton Mail-postaládájába érkezik (Proton AG, Svájc), ahol a levelek titkosítva tárolódnak. Az értesítő e-maileket az adatkezelő az ügy lezárása után, legkésőbb 30 napon belül törli. Ennek jogalapja a kifejezett hozzájárulás mellett az érintett létfontosságú érdeke (GDPR 6. cikk (1) bekezdés d) pont, 9. cikk (2) bekezdés c) pont).
 
 5. Az adatkezelés jogalapja
 Az adatkezelés fő jogalapja a felhasználó önkéntes hozzájárulása:
@@ -81,19 +81,21 @@ Ez az adattovábbítás kizárólag a szolgáltatás működéséhez szükséges
 A szolgáltatás működéséhez igénybe vett külső szolgáltatók lehetnek különösen:
 - adatbázis-szolgáltató (Supabase, Európai Unió),
 - mesterséges intelligencia szolgáltatók (Google, OpenAI, Anthropic) – kizárólag akkor, ha a helyi modell nem elérhető,
-- e-mail-kézbesítési szolgáltató (a belépési kódok és a rendszerértesítések továbbításához),
+- e-mail-szolgáltató (Proton AG, Svájc): a belépési kódok, a jelszó-visszaállítási kódok és a rendszerértesítések továbbítása és fogadása,
 - domain- és névszerver-szolgáltató (magyar szolgáltató; a névfeloldás technikai adatai),
 - biztonsági, naplózási vagy üzemeltetési szolgáltatások.
 A tárhelyet és a webes felületet nem külső szolgáltató, hanem az adatkezelő saját, Magyarországon elhelyezett szervere biztosítja.
 
-Harmadik országba történő adattovábbítás. A tárhely és a felhasználói adatbázis az Európai Unión belül, illetve az adatkezelő magyarországi szerverén marad. A felsorolt szolgáltatók egy része (különösen a mesterséges intelligencia szolgáltatók és az e-mail-kézbesítést végző szolgáltató) az Európai Gazdasági Térségen kívül, elsősorban az Amerikai Egyesült Államokban is végezhet adatfeldolgozást. Az ilyen továbbítás jogalapja az Európai Bizottság 2023. július 10-i, az EU–USA adatvédelmi keretre (Data Privacy Framework) vonatkozó megfelelőségi határozata azon szolgáltatók esetében, amelyek a keret tanúsított résztvevői, egyéb esetben az Európai Bizottság által elfogadott általános szerződési feltételek (GDPR 46. cikk (2) bekezdés c) pont). Az adatkezelő a szolgáltatóválasztásnál törekszik arra, hogy a tartós adattárolás (felhasználói adatbázis) az Európai Unión belül maradjon; a harmadik országba irányuló továbbítás a válaszgeneráláshoz szükséges átmeneti feldolgozásra korlátozódik.
+Rendszerüzenetek. Az alkalmazás a felhasználónak kizárólag a működéshez szükséges tranzakciós levelet küld: a regisztrációhoz és a bejelentkezéshez szükséges biztonsági kódot, valamint a jelszó-visszaállítási kódot. Ezek a levelek a saját domainről (info@myra-project.hu) mennek ki, a Proton Mail szolgáltatásán keresztül. Az alkalmazás hírlevelet, marketing- vagy reklámcélú e-mailt nem küld.
+
+Harmadik országba történő adattovábbítás. A tárhely és a felhasználói adatbázis az Európai Unión belül, illetve az adatkezelő magyarországi szerverén marad. Az e-mail-forgalmat a Proton AG svájci szolgáltató kezeli; Svájc az Európai Bizottság megfelelőségi határozata alapján megfelelő szintű adatvédelmet biztosít, ezért ez nem minősül olyan harmadik országba történő továbbításnak, amely kiegészítő garanciát igényelne. A felsorolt szolgáltatók egy része (különösen a mesterséges intelligencia szolgáltatók) az Európai Gazdasági Térségen kívül, elsősorban az Amerikai Egyesült Államokban is végezhet adatfeldolgozást. Az ilyen továbbítás jogalapja az Európai Bizottság 2023. július 10-i, az EU–USA adatvédelmi keretre (Data Privacy Framework) vonatkozó megfelelőségi határozata azon szolgáltatók esetében, amelyek a keret tanúsított résztvevői, egyéb esetben az Európai Bizottság által elfogadott általános szerződési feltételek (GDPR 46. cikk (2) bekezdés c) pont). Az adatkezelő a szolgáltatóválasztásnál törekszik arra, hogy a tartós adattárolás (felhasználói adatbázis) az Európai Unión belül maradjon; a harmadik országba irányuló továbbítás a válaszgeneráláshoz szükséges átmeneti feldolgozásra korlátozódik.
 
 8. Adatmegőrzési idő
 Az adatok a felhasználói fiók aktív fennállásáig kerülnek megőrzésre. Mivel a Myra egy nonprofit kutatási és önismereti projekt, jogszabály nem írja elő az adatok kötelező megőrzési idejét.
 
 A "Myra memóriája" kivonat a funkció kikapcsolásakor azonnal és véglegesen törlődik, a fiók megszüntetése nélkül is. A kivonat mindig teljes egészében újraképződik a forrásadatokból, nem őrzi meg a korábbi változatait.
 
-A felhasználó bármikor kezdeményezheti fiókja és kapcsolódó adatainak azonnali és végleges törlését a Beállítások menüben a "Fiók törlése" gombbal, vagy e-mailben: odor-antal@research.hu. A törlés során a felhasználói profil, a mérési eredmények (kérdőívek), a vállalt mikro-célok, a "Myra memóriája" kivonat, a megbízható eszközök és az összes chat beszélgetés előzménye véglegesen törlődik a futó adatbázisból. A törölt adatok a biztonsági mentésekből a mentések megőrzési idejének lejártával (napi hét, óránkénti hat példány marad meg, így legfeljebb néhány napon belül) kerülnek ki; addig a mentésekhez kizárólag adatvesztés esetén, a rendszer helyreállítása céljából nyúl az adatkezelő. A hozzájárulás visszavonása a fiók és az adatok törlésének kérésével történhet. A hozzájárulás visszavonása nem érinti a visszavonás előtti adatkezelés jogszerűségét.
+A felhasználó bármikor kezdeményezheti fiókja és kapcsolódó adatainak azonnali és végleges törlését a Beállítások menüben a "Fiók törlése" gombbal, vagy e-mailben: info@myra-project.hu. A törlés során a felhasználói profil, a mérési eredmények (kérdőívek), a vállalt mikro-célok, a "Myra memóriája" kivonat, a megbízható eszközök és az összes chat beszélgetés előzménye véglegesen törlődik a futó adatbázisból. A törölt adatok a biztonsági mentésekből a mentések megőrzési idejének lejártával (napi hét, óránkénti hat példány marad meg, így legfeljebb néhány napon belül) kerülnek ki; addig a mentésekhez kizárólag adatvesztés esetén, a rendszer helyreállítása céljából nyúl az adatkezelő. A hozzájárulás visszavonása a fiók és az adatok törlésének kérésével történhet. A hozzájárulás visszavonása nem érinti a visszavonás előtti adatkezelés jogszerűségét.
 
 9. A felhasználó jogai
 A felhasználó a GDPR alapján jogosult:

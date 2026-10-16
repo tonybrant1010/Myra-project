@@ -9,16 +9,25 @@ services:
       TRUST_PROXY: "true"
       PROFILE_ENABLED: "true"
       # Helyi modellszerver (llama.cpp llama-server) a nagy gepen, a WireGuard-alagut
-      # tunnel-cimen. A llama-server KIZAROLAG a 10.10.0.2-n figyel, a LAN-rol nem
+      # tunnel-cimen. A llama-server KIZAROLAG a <llm-wg-ip>-n figyel, a LAN-rol nem
       # erheto el. Ha nem erheto el, a chat az admin feluleten beallitott
       # API-szolgaltatora esik vissza. A kulcs a ~/myra/.env fajlban van.
-      OLLAMA_BASE_URL: "http://10.10.0.2:8080"
+      OLLAMA_BASE_URL: "http://<llm-wg-ip>:8080"
       OLLAMA_TIMEOUT_S: "360"
       LOCAL_LLM_API_KEY: "${LOCAL_LLM_API_KEY:-}"
       TTS_ENGINE: "piper"
       PIPER_BINARY: "/app/data/piper/piper"
       PIPER_MODEL: "/app/data/tts/hu_HU-anna-medium.onnx"
-      ADMIN_EMAIL_ALLOWLIST: "antalodor@gmail.com,antalodor@protonmail.com"
+      # Admin bejelentkezesi identitasok, NEM ertesitesi cimek. A Gmail-cim
+      # 2026-10-14-en kikerult: a levelek is a Protonon mennek, es a Gmail-cim
+      # admin bejelentkezesre sincs hasznalatban.
+      #
+      # FIGYELEM: ezt a listat a backend KIZAROLAG regisztraciokor olvassa
+      # (server.py: auth_register). Egy mar regisztralt fiok admin jogat
+      # onmagaban nem veszi el! A meglevo jog visszavonasa az adatbazisban:
+      #   UPDATE users SET is_admin = false, token_version = token_version + 1
+      #   WHERE lower(email) LIKE '%@gmail.com';
+      ADMIN_EMAIL_ALLOWLIST: "<admin-email>,info@myra-project.hu"
       FASTEMBED_CACHE_PATH: "/app/data/fastembed"
       FASTEMBED_MODEL_NAME: "intfloat/multilingual-e5-large"
       EMBED_DIM: "1024"
@@ -38,4 +47,4 @@ services:
       BACKUP_DIR: "/app/backups"
     volumes:
       - ./backend/server.py:/app/server.py:ro
-      - /home/myra-admin/myra-backups/orankent:/app/backups:ro
+      - /home/<user>/myra-backups/orankent:/app/backups:ro

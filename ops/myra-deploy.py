@@ -2,13 +2,14 @@
 
 import os
 import smtplib
+import ssl
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 
-MYRA_DIR = os.environ.get("MYRA_DIR", "/home/antalodor/myra")
+MYRA_DIR = os.environ.get("MYRA_DIR", "/home/<user>/myra")
 ENV_FAJL = os.path.join(MYRA_DIR, ".env")
 KONTENER = "myra-backend"
 IMAGE = "myra-backend"
@@ -92,21 +93,41 @@ def env_beolvas(utvonal):
 ENV = env_beolvas(ENV_FAJL)
 
 
+SMTP_HOST = ENV.get("MYRA_SMTP_HOST_LOCAL") or ENV.get("MYRA_SMTP_HOST") or "smtp.protonmail.ch"
+try:
+    SMTP_PORT = int(ENV.get("MYRA_SMTP_PORT_LOCAL") or ENV.get("MYRA_SMTP_PORT") or 587)
+except ValueError:
+    SMTP_PORT = 587
+SMTP_USER = ENV.get("MYRA_SMTP_USER", "")
+SMTP_PASSWORD = ENV.get("MYRA_SMTP_PASSWORD", "")
+MAIL_FROM = ENV.get("MYRA_MAIL_FROM") or "noreply@myra-project.hu"
+# A riasztas a rendszer feladojatol megy, de emberhez kell erkeznie.
+CONTACT = ENV.get("MYRA_CONTACT_EMAIL") or "info@myra-project.hu"
+SMTP_TLS_VERIFY = (ENV.get("MYRA_SMTP_TLS_VERIFY") or "true").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _tls_context():
+    """TLS-kontextus. A Bridge onnalairt tanusitvanyanal az ellenorzes kikapcsol."""
+    ctx = ssl.create_default_context()
+    if not SMTP_TLS_VERIFY:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
 def email_kuld(targy, torzs):
-    user = ENV.get("GMAIL_USER", "")
-    jelszo = ENV.get("GMAIL_APP_PASSWORD", "")
-    cimzett = ENV.get("MYRA_ALERT_EMAIL") or user
-    if not user or not jelszo:
-        print("[deploy] Nincs Gmail hitelesites, email nem megy.")
+    cimzett = ENV.get("MYRA_ALERT_EMAIL") or CONTACT
+    if not SMTP_USER or not SMTP_PASSWORD:
+        print("[deploy] Nincs Proton SMTP hitelesites, email nem megy.")
         return
     msg = MIMEText(torzs, "plain", "utf-8")
     msg["Subject"] = targy
-    msg["From"] = user
+    msg["From"] = f"Myra-project <{MAIL_FROM}>"
     msg["To"] = cimzett
     try:
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as s:
-            s.starttls()
-            s.login(user, jelszo)
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as s:
+            s.starttls(context=_tls_context())
+            s.login(SMTP_USER, SMTP_PASSWORD)
             s.send_message(msg)
         print("[deploy] Email elkuldve: %s" % cimzett)
     except Exception as e:  # noqa: BLE001

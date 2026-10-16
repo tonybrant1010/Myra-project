@@ -26,6 +26,12 @@ from pathlib import Path
 from typing import Any, Callable, List, Literal, Optional
 from contextvars import ContextVar
 from email.mime.text import MIMEText
+# FONTOS: alias nélkül ütközik a FastAPI `Header`-jével, amit a lenti
+# `from fastapi import ... Header ...` ír felül (a későbbi import nyer).
+# A `Header(...)` hívás így a FastAPI verziójára futna, ami csak egyetlen
+# pozicionális argumentumot fogad — ez 2026-10-14-én éles hibát okozott.
+from email.header import Header as _MailHeader
+from email.utils import formataddr, formatdate, make_msgid
 
 import httpx
 import jwt
@@ -63,8 +69,69 @@ ADMIN_EMAIL_ALLOWLIST = {
     e.strip().lower() for e in os.environ.get("ADMIN_EMAIL_ALLOWLIST", "").split(",") if e.strip()
 }
 
-GMAIL_USER = os.environ.get("GMAIL_USER", "")
-GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
+def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(min_value, min(max_value, value))
+
+
+# ------------------------------------------------------------------- E-MAIL
+# 2026-10-14: a kimenő leveleket már nem a Gmail, hanem a Proton Mail kezeli,
+# a saját domainről. Három cím, három szerep:
+#
+#   noreply@myra-project.hu  -> MYRA_MAIL_FROM: a rendszerlevelek feladója
+#   admin@myra-project.hu    -> MYRA_ALERT_EMAIL: a belső riasztások helye
+#   info@myra-project.hu     -> MYRA_CONTACT_EMAIL: nyilvános kapcsolattartó,
+#                               a levelek alján és a Reply-To fejlécben
+#
+# Kétféle küldési útvonal támogatott, közöttük kizárólag a környezeti
+# változók döntenek:
+#
+#  1. Proton SMTP-beküldés (alapértelmezés) — smtp.protonmail.ch:587, STARTTLS.
+#     Minden fizetős Proton-csomaghoz elérhető, ha a domain hitelesítve van.
+#     Felhasználó: a saját domaines cím; jelszó: generált SMTP token.
+#  2. Proton Mail Bridge — a szerveren futó konténer, amely a Proton felhője
+#     felé hitelesít. Ekkor: host=proton-bridge, port=25 (a Bridge a konténeren
+#     belül 127.0.0.1:1025-ön figyel, a 25-ös port a socat forwardja),
+#     és a TLS-ellenőrzést ki kell kapcsolni.
+#
+# MYRA_SMTP_USER
+#     Az 1. útnál a saját domaines cím; a Bridge-nél a Bridge `info` parancsa
+#     által adott felhasználónév.
+# MYRA_SMTP_PASSWORD
+#     Az 1. útnál SMTP token (Proton: Settings -> IMAP/SMTP -> SMTP tokens).
+#     A Proton-fiók bejelentkezési jelszava NEM működik. A Bridge-nél a
+#     Bridge-jelszó. Enélkül egyetlen levél sem megy ki.
+# MYRA_SMTP_SECURITY
+#     "starttls" (a Proton és a Bridge is így figyel), "ssl" (implicit TLS),
+#     "none" (titkosítás nélkül — csak helyi teszthez).
+# MYRA_SMTP_TLS_VERIFY
+#     Alapból true, mert a Proton végpontja valódi tanúsítvánnyal jön. A Bridge
+#     önaláírt tanúsítványt használ a helyi porton, ezért ott false kell.
+# MYRA_MAIL_FROM
+#     A kimenő levelek feladója. A Proton-fiókban léteznie kell, ÉS az SMTP
+#     token is ehhez a címhez szól: a Proton csak a tokenhez kötött címről
+#     enged küldeni (MYRA_SMTP_USER == MYRA_MAIL_FROM).
+# MYRA_CONTACT_EMAIL
+#     A nyilvános kapcsolattartó cím. Ez áll a levelek alján, és ide megy a
+#     felhasználó válasza (Reply-To).
+# MYRA_ALERT_EMAIL
+#     Ide mennek a belső riasztások: krízisjelzés, visszajelzés, belépés-
+#     riasztás, valamint a myra-watch és a deploy szkript üzenetei.
+#     Üresen a kapcsolattartó címre küld.
+MYRA_SMTP_HOST = os.environ.get("MYRA_SMTP_HOST", "smtp.protonmail.ch").strip()
+MYRA_SMTP_PORT = _env_int("MYRA_SMTP_PORT", 587, 1, 65535)
+MYRA_SMTP_USER = os.environ.get("MYRA_SMTP_USER", "").strip()
+MYRA_SMTP_PASSWORD = os.environ.get("MYRA_SMTP_PASSWORD", "")
+MYRA_SMTP_SECURITY = os.environ.get("MYRA_SMTP_SECURITY", "starttls").strip().lower()
+MYRA_SMTP_TLS_VERIFY = os.environ.get("MYRA_SMTP_TLS_VERIFY", "true").strip().lower() in {"1", "true", "yes", "on"}
+MYRA_SMTP_TIMEOUT_S = _env_int("MYRA_SMTP_TIMEOUT_S", 30, 5, 300)
+MYRA_MAIL_FROM = os.environ.get("MYRA_MAIL_FROM", "noreply@myra-project.hu").strip()
+MYRA_MAIL_FROM_NAME = os.environ.get("MYRA_MAIL_FROM_NAME", "Myra-project").strip() or "Myra-project"
+MYRA_CONTACT_EMAIL = os.environ.get("MYRA_CONTACT_EMAIL", "info@myra-project.hu").strip()
+MYRA_ALERT_EMAIL = os.environ.get("MYRA_ALERT_EMAIL", "").strip() or MYRA_CONTACT_EMAIL
 
 DOCKER_SOCKET_PROXY_URL = os.environ.get("DOCKER_SOCKET_PROXY_URL", "http://docker-socket-proxy:2375").rstrip("/")
 
@@ -91,6 +158,26 @@ logger = logging.getLogger("myra")
 logging.getLogger("fontTools").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+def _warn_mail_address_mismatch() -> None:
+    """Indulaskor jelzi, ha a bejelentkezesi nev es a felado elter.
+
+    A Proton SMTP token EGYETLEN cimhez szol, ezert a MYRA_SMTP_USER-nek es a
+    MYRA_MAIL_FROM-nak ugyanaznak kell lennie. Elteres eseten a küldés a
+    semmibol nem ertheto `535 authentication failed` hibaval hal el — ez a
+    figyelmeztetes 2026-10-14-en epp egy ilyen nyomozas miatt kerult be.
+    """
+    if MYRA_SMTP_USER and MYRA_MAIL_FROM and MYRA_SMTP_USER.strip().lower() != MYRA_MAIL_FROM.strip().lower():
+        logger.warning(
+            "E-mail: a MYRA_SMTP_USER (%s) es a MYRA_MAIL_FROM (%s) ELTER! A Proton SMTP token "
+            "egyetlen cimhez szol, ezert a kettonek ugyanaznak kell lennie — kulonben a küldés "
+            "535 authentication failed hibaval elhal.",
+            MYRA_SMTP_USER, MYRA_MAIL_FROM,
+        )
+
+
+_warn_mail_address_mismatch()
 
 
 def _sanitize_log_line(line: str) -> str:
@@ -228,13 +315,6 @@ engine = create_async_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
 
 from sqlalchemy.types import UserDefinedType  # noqa: E402
-
-def _env_int(name: str, default: int, min_value: int, max_value: int) -> int:
-    try:
-        value = int(os.environ.get(name, str(default)))
-    except (TypeError, ValueError):
-        value = default
-    return max(min_value, min(max_value, value))
 
 
 CHAT_HISTORY_MAX_MESSAGES = _env_int("CHAT_HISTORY_MAX_MESSAGES", 120, 20, 300)
@@ -1668,10 +1748,82 @@ def _is_crisis_message(text: str) -> bool:
     )
 
 
+# ------------------------------------------------------------- E-MAIL KÜLDÉS
+# Egyetlen belépési pont minden kimenő levélhez (Proton Mail Bridge).
+# A hívók csak a törzset és a címzetteket adják; a feladót, a dátumot és a
+# Message-ID-t innen kapja a levél, így az egész rendszerben egységesek.
+
+
+def _mail_configured() -> bool:
+    """Akkor tudunk levelet küldeni, ha a Proton SMTP és a feladó is be van állítva."""
+    return bool(MYRA_SMTP_HOST and MYRA_SMTP_USER and MYRA_SMTP_PASSWORD and MYRA_MAIL_FROM)
+
+
+def _mail_header(value: str) -> str:
+    """Fejléc-érték: a sorvégeket kivágja, így nem lehet fejlécet injektálni."""
+    return re.sub(r"[\r\n]+", " ", str(value or "")).strip()
+
+
+def _mail_from_header() -> str:
+    return formataddr((str(_MailHeader(MYRA_MAIL_FROM_NAME, "utf-8")), MYRA_MAIL_FROM))
+
+
+def _send_mail(msg: MIMEText, recipients: list[str], kind: str = "ertesites", reply_to: str = "") -> bool:
+    """Egy kimenő levél elküldése a beállított SMTP-n. Soha nem dob kivételt."""
+    if not _mail_configured():
+        logger.error(f"E-mail ({kind}): a Proton SMTP nincs beallitva (MYRA_SMTP_* / MYRA_MAIL_FROM)")
+        return False
+    recipients = [r for r in (recipients or []) if r]
+    if not recipients:
+        logger.error(f"E-mail ({kind}): nincs cimzett")
+        return False
+
+    msg["From"] = _mail_from_header()
+    msg["To"] = ", ".join(_mail_header(r) for r in recipients)
+    if reply_to:
+        msg["Reply-To"] = _mail_header(reply_to)
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain=MYRA_MAIL_FROM.partition("@")[2] or None)
+
+    try:
+        context = ssl.create_default_context()
+        if not MYRA_SMTP_TLS_VERIFY:
+            # Kizárólag a Proton Mail Bridge esetében kell: az önaláírt
+            # tanúsítványt használ a helyi porton, a kapcsolat pedig a compose
+            # hálózatán belül marad. A Proton saját SMTP-végpontjánál
+            # (smtp.protonmail.ch) ez legyen bekapcsolva.
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+        if MYRA_SMTP_SECURITY == "ssl":
+            with smtplib.SMTP_SSL(MYRA_SMTP_HOST, MYRA_SMTP_PORT, timeout=MYRA_SMTP_TIMEOUT_S, context=context) as server:
+                server.login(MYRA_SMTP_USER, MYRA_SMTP_PASSWORD)
+                server.sendmail(MYRA_MAIL_FROM, recipients, msg.as_string())
+        else:
+            with smtplib.SMTP(MYRA_SMTP_HOST, MYRA_SMTP_PORT, timeout=MYRA_SMTP_TIMEOUT_S) as server:
+                if MYRA_SMTP_SECURITY == "starttls":
+                    server.starttls(context=context)
+                server.login(MYRA_SMTP_USER, MYRA_SMTP_PASSWORD)
+                server.sendmail(MYRA_MAIL_FROM, recipients, msg.as_string())
+        return True
+    except smtplib.SMTPAuthenticationError as e:
+        logger.error(f"E-mail ({kind}) HITELESITESI hiba ({MYRA_SMTP_HOST}:{MYRA_SMTP_PORT}): {e}")
+        if MYRA_SMTP_USER.strip().lower() != MYRA_MAIL_FROM.strip().lower():
+            logger.error(
+                "E-mail: a MYRA_SMTP_USER (%s) es a MYRA_MAIL_FROM (%s) nem egyezik. A Proton SMTP "
+                "token egyetlen cimhez szol, ezert a kettonek ugyanaznak kell lennie — a tokent "
+                "ahhoz a cimhez kell generalni, amilyen feladot hasznalsz.",
+                MYRA_SMTP_USER, MYRA_MAIL_FROM,
+            )
+        return False
+    except Exception as e:
+        logger.error(f"E-mail ({kind}) küldési hiba ({MYRA_SMTP_HOST}:{MYRA_SMTP_PORT}): {e}")
+        return False
+
+
 CRISIS_ALERT_ENABLED = os.environ.get("CRISIS_ALERT_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 CRISIS_ALERT_COOLDOWN_MIN = _env_int("CRISIS_ALERT_COOLDOWN_MIN", 360, 0, 10080)
 CRISIS_ALERT_EXCERPT_CHARS = _env_int("CRISIS_ALERT_EXCERPT_CHARS", 500, 50, 4000)
-CRISIS_ALERT_EMAIL = os.environ.get("MYRA_ALERT_EMAIL", "") or GMAIL_USER
+CRISIS_ALERT_EMAIL = MYRA_ALERT_EMAIL
 _crisis_alert_last: dict[int, float] = {}
 _SEVERE_CRISIS_TERMS = [
     "öngyilkos", "ongyilkos", "szuicid", "megölöm magam", "megolom magam",
@@ -1690,9 +1842,6 @@ def _is_severe_crisis_message(text: str) -> bool:
 
 
 def _send_crisis_alert_email(user_name: str, user_email: str, user_id: int, excerpt: str, when_str: str) -> bool:
-    if not GMAIL_USER or not GMAIL_APP_PASSWORD or not CRISIS_ALERT_EMAIL:
-        logger.error("Krizisertesites: Gmail SMTP nincs beallitva")
-        return False
     body = MIMEText(f"""Myra krizisjelzes - sulyos jelzes egy felhasznalonal.
 
 - Felhasznalo: {user_name} ({user_email}), id={user_id}
@@ -1708,17 +1857,7 @@ Myra ebben a fordulóban a krizisprotokoll szerint valaszolt (112, 116-123, kozv
 biztonsag). A teljes beszelgetes az adatbazisban erheto el. Ez az ertesites
 felhasznalonkent legfeljebb {CRISIS_ALERT_COOLDOWN_MIN} percenkent egyszer jon.""", "plain", "utf-8")
     body["Subject"] = f"[Myra] KRIZISJELZES - felhasznalo {user_id}"
-    body["From"] = GMAIL_USER
-    body["To"] = CRISIS_ALERT_EMAIL
-    try:
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-            server.starttls()
-            server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-            server.sendmail(GMAIL_USER, [CRISIS_ALERT_EMAIL], body.as_string())
-        return True
-    except Exception as e:
-        logger.error(f"Krizisertesites kuldesi hiba: {e}")
-        return False
+    return _send_mail(body, [CRISIS_ALERT_EMAIL], kind="krizisjelzes")
 
 
 async def _maybe_crisis_alert(db: AsyncSession, user: "User", text: str) -> None:
@@ -2661,11 +2800,7 @@ def _synthesize_piper_wav(text_value: str) -> Path:
     return out_path
 
 
-def _send_gmail_reset(to_email: str, token: str):
-    if not GMAIL_USER or not GMAIL_APP_PASSWORD:
-        logger.error("Gmail SMTP credentials are not configured in .env")
-        return False
-
+def _send_password_reset_email(to_email: str, token: str) -> bool:
     msg = MIMEText(f"""Kedves Felhasználó!
 
 A Myra-project alkalmazásban jelszó-visszaállítást kértél.
@@ -2680,28 +2815,14 @@ A Myra-project bejelentkezési oldala: https://www.myra-project.hu/login
 Ha nem te kérted a visszaállítást, kérjük, hagyd figyelmen kívül ezt a levelet!
 
 Üdvözlettel,
-Myra-project csapat""", "plain", "utf-8")
-    
+Myra-project csapat
+{MYRA_CONTACT_EMAIL}""", "plain", "utf-8")
+
     msg["Subject"] = "Jelszó visszaállítás - Myra-project"
-    msg["From"] = GMAIL_USER
-    msg["To"] = to_email
-
-    try:
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-            server.starttls()
-            server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-            server.sendmail(GMAIL_USER, [to_email], msg.as_string())
-        return True
-    except Exception as e:
-        logger.error(f"Gmail küldési hiba: {e}")
-        return False
+    return _send_mail(msg, [to_email], kind="jelszo-visszaallitas", reply_to=MYRA_CONTACT_EMAIL)
 
 
-def _send_gmail_security_code(to_email: str, code: str, purpose: str = "login"):
-    if not GMAIL_USER or not GMAIL_APP_PASSWORD:
-        logger.error("Gmail SMTP credentials are not configured in .env")
-        return False
-
+def _send_security_code_email(to_email: str, code: str, purpose: str = "login") -> bool:
     if purpose == "admin_action":
         title = "Admin biztonsági megerősítés"
         lead = "Admin művelet megerősítését kérted a Myra-project alkalmazásban."
@@ -2722,28 +2843,14 @@ Ez a kód {valid} érvényes, és csak egyszer használható.
 Ha nem te kérted ezt a kódot, változtasd meg a jelszavadat, és jelezd az adminisztrátornak.
 
 Üdvözlettel,
-Myra-project csapat""", "plain", "utf-8")
+Myra-project csapat
+{MYRA_CONTACT_EMAIL}""", "plain", "utf-8")
 
     msg["Subject"] = title
-    msg["From"] = GMAIL_USER
-    msg["To"] = to_email
-
-    try:
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-            server.starttls()
-            server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-            server.sendmail(GMAIL_USER, [to_email], msg.as_string())
-        return True
-    except Exception as e:
-        logger.error(f"Gmail biztonsági kód küldési hiba: {e}")
-        return False
+    return _send_mail(msg, [to_email], kind="biztonsagi-kod", reply_to=MYRA_CONTACT_EMAIL)
 
 
 def _send_feedback_email(user_name: str, user_email: str, user_id: int, context: str, message: str) -> bool:
-    if not GMAIL_USER or not GMAIL_APP_PASSWORD:
-        logger.error("Gmail SMTP credentials are not configured in .env")
-        return False
-
     where = {"chat": "Chat felület"}.get(context, context or "ismeretlen")
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     body = MIMEText(f"""Uj felhasznaloi visszajelzes erkezett a Myra-project alkalmazasbol.
@@ -2760,27 +2867,14 @@ def _send_feedback_email(user_name: str, user_email: str, user_id: int, context:
 
 Ezt a levelet a Myra-project visszajelzes gombja kuldte.""", "plain", "utf-8")
 
-    body["Subject"] = f"Myra visszajelzes - {where}"
-    body["From"] = GMAIL_USER
-    body["To"] = GMAIL_USER
-    body["Reply-To"] = GMAIL_USER
-
-    try:
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-            server.starttls()
-            server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-            server.sendmail(GMAIL_USER, [GMAIL_USER], body.as_string())
-        return True
-    except Exception as e:
-        logger.error(f"Gmail visszajelzes kuldesi hiba: {e}")
-        return False
+    body["Subject"] = _mail_header(f"Myra visszajelzes - {where}")
+    # A riasztás a rendszer feladójától jön (noreply@), de a válasz a
+    # visszajelzést küldő felhasználóhoz menjen, hogy egy kattintással
+    # lehessen neki visszaírni.
+    return _send_mail(body, [MYRA_ALERT_EMAIL], kind="visszajelzes", reply_to=user_email)
 
 
-def _send_login_alert_email(user_name: str, user_email: str, is_admin: bool, ip: str, user_agent: str, reason: str):
-    if not GMAIL_USER or not GMAIL_APP_PASSWORD:
-        logger.error("Gmail SMTP credentials are not configured in .env")
-        return False
-
+def _send_login_alert_email(user_name: str, user_email: str, is_admin: bool, ip: str, user_agent: str, reason: str) -> bool:
     role_str = "Adminisztrátor" if is_admin else "Felhasználó"
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
@@ -2798,19 +2892,8 @@ Riasztás: Új vagy kritikus bejelentkezés történt a Myra-project alkalmazás
 Üdvözlettel,
 Myra-project biztonsági rendszer""", "plain", "utf-8")
 
-    msg["Subject"] = f"Biztonsági riasztás: Belépés - {role_str} ({user_email})"
-    msg["From"] = GMAIL_USER
-    msg["To"] = GMAIL_USER
-
-    try:
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-            server.starttls()
-            server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-            server.sendmail(GMAIL_USER, [GMAIL_USER], msg.as_string())
-        return True
-    except Exception as e:
-        logger.error(f"Gmail biztonsági riasztás küldési hiba: {e}")
-        return False
+    msg["Subject"] = _mail_header(f"Biztonsági riasztás: Belépés - {role_str} ({user_email})")
+    return _send_mail(msg, [MYRA_ALERT_EMAIL], kind="belepes-riasztas")
 
 
 def _client_label(request: Request) -> str:
@@ -2884,7 +2967,7 @@ async def _create_mfa_challenge(
     )
     db.add(challenge)
     await db.flush()
-    background_tasks.add_task(_send_gmail_security_code, user.email, code, purpose)
+    background_tasks.add_task(_send_security_code_email, user.email, code, purpose)
     return challenge
 
 
@@ -3117,7 +3200,7 @@ async def auth_forgot_password(body: ForgotPasswordBody, request: Request, backg
         user.token_expires_at = datetime.now(timezone.utc) + timedelta(minutes=RESET_TOKEN_TTL_MINUTES)
         user.reset_attempts = 0
         await db.flush()
-        background_tasks.add_task(_send_gmail_reset, user.email, token)
+        background_tasks.add_task(_send_password_reset_email, user.email, token)
 
     return {"ok": True, "detail": "Ha a cím létezik, elküldtük a biztonsági kódot."}
 
@@ -3450,17 +3533,17 @@ async def auth_totp_login(body: TotpLoginBody, request: Request, db: AsyncSessio
     }
 
 
-LEGAL_PRIVACY_VERSION = "2026-10-13"
-LEGAL_TERMS_VERSION = "2026-10-13"
+LEGAL_PRIVACY_VERSION = "2026-10-14"
+LEGAL_TERMS_VERSION = "2026-10-14"
 
 @api.get("/legal/privacy")
 async def get_legal_privacy():
-    return {"version": LEGAL_PRIVACY_VERSION, "last_updated": "2026-10-13", "url": "/privacy.html"}
+    return {"version": LEGAL_PRIVACY_VERSION, "last_updated": "2026-10-14", "url": "/privacy.html"}
 
 
 @api.get("/legal/terms")
 async def get_legal_terms():
-    return {"version": LEGAL_TERMS_VERSION, "last_updated": "2026-10-13", "url": "/terms.html"}
+    return {"version": LEGAL_TERMS_VERSION, "last_updated": "2026-10-14", "url": "/terms.html"}
 
 
 @api.post("/user/consent")
@@ -7672,7 +7755,7 @@ async def post_feedback(
     message = (body.message or "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="A visszajelzés nem lehet üres.")
-    if not GMAIL_USER or not GMAIL_APP_PASSWORD:
+    if not _mail_configured():
         raise HTTPException(status_code=503, detail="A visszajelzés küldése jelenleg nem érhető el.")
     background_tasks.add_task(
         _send_feedback_email, user.name, user.email, user.id,

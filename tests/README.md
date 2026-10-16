@@ -5,7 +5,7 @@ Ez a mappa a Myra Project tesztelési keretrendszerét és tesztdokumentációit
 ## Fájlok és Tesztek Leírása
 
 - **Root `tests/` mappa**: A teljes projekt szintű tesztelési modulok és gyűjtőhelyük.
-- **[backend/tests/test_expiration.py](file:///c:/Users/TonyBrant/Desktop/Myra-Project-App/Myra-project-main/backend/tests/test_expiration.py)**: A backend 30 napos mérési érvényességi ciklusának és a munkamenet-lezárásoknak (chat blokkolás, figyelmeztető bannerek) az egység- és integrációs tesztjei.
+- **[backend/tests/test_expiration.py](test_expiration.py)**: A backend 30 napos mérési érvényességi ciklusának és a munkamenet-lezárásoknak (chat blokkolás, figyelmeztető bannerek) az egység- és integrációs tesztjei.
 
 ## Tesztek Futtatása
 

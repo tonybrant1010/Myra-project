@@ -1,4 +1,4 @@
-[Unit]
+﻿[Unit]
 Description=Myra futasideju figyelo es karanten (docker events + backend log + integritas)
 After=docker.service
 Requires=docker.service
@@ -6,7 +6,7 @@ Requires=docker.service
 [Service]
 Type=simple
 User=myra-admin
-ExecStart=/usr/bin/python3 /home/myra-admin/myra/ops/myra-watch.py
+ExecStart=/usr/bin/python3 /home/<user>/myra/ops/myra-watch.py
 Restart=always
 RestartSec=15
 

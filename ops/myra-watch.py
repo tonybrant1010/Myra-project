@@ -8,6 +8,7 @@ import queue
 import re
 import secrets
 import smtplib
+import ssl
 import subprocess
 import sys
 import threading
@@ -136,9 +137,24 @@ def _env_beolvas(utvonal):
 
 
 ENV = _env_beolvas(ENV_FAJL)
-GMAIL_USER = ENV.get("GMAIL_USER", "")
-GMAIL_APP_PASSWORD = ENV.get("GMAIL_APP_PASSWORD", "")
-CIMZETT = ENV.get("MYRA_ALERT_EMAIL") or GMAIL_USER
+# 2026-10-14: a riasztasok a Proton Mailen mennek ki.
+#  - Kozvetlen Proton SMTP: a MYRA_SMTP_HOST / MYRA_SMTP_PORT erteket hasznaljuk.
+#  - Proton Mail Bridge: a Bridge a konténeren belul 127.0.0.1-re kot, ezert a
+#    hoszton a loopbackre publikalt portot kell hasznalni (MYRA_SMTP_HOST_LOCAL /
+#    MYRA_SMTP_PORT_LOCAL). A figyelo ugyanis a HOSZTON fut, nem a compose haloban.
+SMTP_HOST = ENV.get("MYRA_SMTP_HOST_LOCAL") or ENV.get("MYRA_SMTP_HOST") or "smtp.protonmail.ch"
+try:
+    SMTP_PORT = int(ENV.get("MYRA_SMTP_PORT_LOCAL") or ENV.get("MYRA_SMTP_PORT") or 587)
+except ValueError:
+    SMTP_PORT = 587
+SMTP_USER = ENV.get("MYRA_SMTP_USER", "")
+SMTP_PASSWORD = ENV.get("MYRA_SMTP_PASSWORD", "")
+MAIL_FROM = ENV.get("MYRA_MAIL_FROM") or "noreply@myra-project.hu"
+# A riasztas a rendszer feladójától megy, de a rendszer lényege, hogy emberhez
+# érkezzen: a riasztási cím, ennek híján a nyilvános kapcsolattartó.
+CIMZETT = ENV.get("MYRA_ALERT_EMAIL") or ENV.get("MYRA_CONTACT_EMAIL") or "info@myra-project.hu"
+# A Bridge onalairt tanusitvanya miatt a hoszti szkripteknel is kikapcsolhato.
+SMTP_TLS_VERIFY = (ENV.get("MYRA_SMTP_TLS_VERIFY") or "true").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _pg_adatok():
@@ -204,18 +220,27 @@ def most():
     return datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _tls_context():
+    """TLS-kontextus. A Bridge önaláírt tanúsítványánál az ellenőrzés kikapcsol."""
+    ctx = ssl.create_default_context()
+    if not SMTP_TLS_VERIFY:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
 def email_kuld(targy, torzs):
-    if not GMAIL_USER or not GMAIL_APP_PASSWORD:
-        print("[watch] Nincs Gmail hitelesites az .env-ben, nem kuldok emailt.", file=sys.stderr)
+    if not SMTP_USER or not SMTP_PASSWORD:
+        print("[watch] Nincs Proton SMTP hitelesites az .env-ben, nem kuldok emailt.", file=sys.stderr)
         return False
     msg = MIMEText(torzs, "plain", "utf-8")
     msg["Subject"] = targy
-    msg["From"] = GMAIL_USER
+    msg["From"] = f"Myra-project <{MAIL_FROM}>"
     msg["To"] = CIMZETT
     try:
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as server:
-            server.starttls()
-            server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
+            server.starttls(context=_tls_context())
+            server.login(SMTP_USER, SMTP_PASSWORD)
             server.send_message(msg)
         return True
     except Exception as e:  # noqa: BLE001 - a figyelo sosem allhat le email hiba miatt
@@ -760,8 +785,8 @@ def fociklus():
 def main():
     print(f"[watch] Indul. Cimzett: {CIMZETT or '(nincs)'}, koteg: {KOTEG_MASODPERC}s, "
           f"karanten: {'be' if KARANTEN_BE else 'ki'}, db: {DB_KONTENER}/{PG_DB}")
-    if not GMAIL_USER:
-        print("[watch] FIGYELEM: nincs GMAIL_USER az .env-ben.", file=sys.stderr)
+    if not SMTP_USER:
+        print("[watch] FIGYELEM: nincs MYRA_SMTP_USER az .env-ben.", file=sys.stderr)
 
     if not psql(DDL):
         print("[watch] FIGYELEM: az adatbazis nem elerheto, csak emailben riasztok.", file=sys.stderr)
