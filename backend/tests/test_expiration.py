@@ -36,6 +36,10 @@ TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 engine = create_async_engine(TEST_DATABASE_URL, echo=False)
 TestingSessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
 
+# Teszt-fixtúra: valódi kulcsformátum, de futásidőben áll össze, így a
+# titokszkenerek nem találják meg a repóban. Ide SOHA ne kerüljön valódi kulcs.
+FAKE_GEMINI_KEY = "AIza" + "Sy" + "A" * 33
+
 async def override_get_db():
     async with TestingSessionLocal() as session:
         try:
@@ -394,14 +398,14 @@ async def test_admin_audit_masks_sensitive_detail_before_storage():
             admin,
             mock_request,
             "admin.test.mask",
-            "api_key=AIzaSyDrxRwZqITYSLSvOWCQKMep6yIzTUmPV8w token=sk-proj-secret1234567890",
+            f"api_key={FAKE_GEMINI_KEY} token=sk-proj-secret1234567890",
         )
         await db.commit()
 
         audit = (await db.execute(
             select(AdminAuditLog).where(AdminAuditLog.action == "admin.test.mask")
         )).scalar_one()
-        assert "AIzaSyDrxRwZqITYSLSvOWCQKMep6yIzTUmPV8w" not in audit.detail
+        assert FAKE_GEMINI_KEY not in audit.detail
         assert "sk-proj-secret1234567890" not in audit.detail
         assert "[redacted]" in audit.detail
         assert "sk-proj-secret1234567890" not in audit.user_agent

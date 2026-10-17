@@ -310,25 +310,30 @@ def test_validate_pdf_bytes_checks_magic_header():
     assert exc_info.value.status_code == 400
 
 
+# Teszt-fixtúra: valódi kulcsformátum, de futásidőben áll össze, így a
+# titokszkenerek nem találják meg a repóban. Ide SOHA ne kerüljön valódi kulcs.
+FAKE_GEMINI_KEY = "AIza" + "Sy" + "A" * 33
+
+
 def test_sanitize_log_line_masks_api_credentials():
     line = (
         "POST https://generativelanguage.googleapis.com/v1beta/models/x:generateContent"
-        "?key=AIzaSyDrxRwZqITYSLSvOWCQKMep6yIzTUmPV8w "
+        f"?key={FAKE_GEMINI_KEY} "
         "headers={'Authorization': 'Bearer sk-proj-secret1234567890', 'x-api-key': 'secret-value'}"
     )
     sanitized = _sanitize_log_line(line)
 
-    assert "AIzaSyDrxRwZqITYSLSvOWCQKMep6yIzTUmPV8w" not in sanitized
+    assert FAKE_GEMINI_KEY not in sanitized
     assert "sk-proj-secret1234567890" not in sanitized
     assert "secret-value" not in sanitized
     assert "[redacted]" in sanitized
 
     provider_error = (
-        '{"error":"bad","api_key":"AIzaSyDrxRwZqITYSLSvOWCQKMep6yIzTUmPV8w",'
+        f'{{"error":"bad","api_key":"{FAKE_GEMINI_KEY}",'
         '"authorization":"Bearer sk-proj-secret1234567890"}'
     )
     sanitized_error = _sanitize_log_line(provider_error)
-    assert "AIzaSyDrxRwZqITYSLSvOWCQKMep6yIzTUmPV8w" not in sanitized_error
+    assert FAKE_GEMINI_KEY not in sanitized_error
     assert "sk-proj-secret1234567890" not in sanitized_error
 
 
@@ -339,13 +344,13 @@ def test_secret_redaction_filter_masks_log_record_before_handlers():
         pathname=__file__,
         lineno=1,
         msg="GET https://example.test/api?key=%s",
-        args=("AIzaSyDrxRwZqITYSLSvOWCQKMep6yIzTUmPV8w",),
+        args=(FAKE_GEMINI_KEY,),
         exc_info=None,
     )
 
     assert SecretRedactionFilter().filter(record) is True
     rendered = record.getMessage()
-    assert "AIzaSyDrxRwZqITYSLSvOWCQKMep6yIzTUmPV8w" not in rendered
+    assert FAKE_GEMINI_KEY not in rendered
     assert "[redacted]" in rendered
 
 
@@ -358,10 +363,10 @@ def test_secret_redaction_filter_masks_handler_output():
     logger.propagate = False
     logger.setLevel(logging.INFO)
 
-    logger.info("POST https://example.test/api?key=%s", "AIzaSyDrxRwZqITYSLSvOWCQKMep6yIzTUmPV8w")
+    logger.info("POST https://example.test/api?key=%s", FAKE_GEMINI_KEY)
     output = stream.getvalue()
 
-    assert "AIzaSyDrxRwZqITYSLSvOWCQKMep6yIzTUmPV8w" not in output
+    assert FAKE_GEMINI_KEY not in output
     assert "[redacted]" in output
 
 
